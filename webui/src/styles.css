@@ -176,6 +176,9 @@ small { font-size: 12px; }
 .desktop-request fieldset { margin: 0 0 10px; padding: 8px; border: 1px solid var(--hairline); border-radius: 6px; }
 .desktop-request legend { font-weight: 600; font-size: 13px; }
 .desktop-request p { margin: 4px 0 8px; }
+.desktop-approval-review summary { padding: 5px 0; overflow-wrap: anywhere; cursor: pointer; }
+.desktop-approval-review code { overflow-wrap: anywhere; }
+.desktop-collaboration-status { display: flex; align-items: center; gap: 4px; min-height: 24px; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
 .desktop-answer-choice { display: flex; align-items: start; gap: 8px; margin: 7px 0; }
 .desktop-answer-choice input { width: auto; margin: 4px 0 0; }
 .desktop-answer-choice small, .desktop-free-answer small { display: block; color: var(--muted); font-size: 12px; }

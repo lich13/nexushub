@@ -1,3 +1,4 @@
+use super::review::{self, Params, BODY_LIMIT, PARAMS_LIMIT};
 use super::state::{NativeState, RuntimeState};
 use crate::services::codex_desktop::{
     DesktopMode, DesktopPendingRequest, DesktopQuestion, DesktopQuestionOption,
@@ -5,17 +6,40 @@ use crate::services::codex_desktop::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::io::{self, Write};
+
+struct HashWriter(Sha256);
+impl Write for HashWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn hash_request(request: &impl serde::Serialize) -> String {
+    let mut writer = HashWriter(Sha256::new());
+    // Values and borrowed fields serialize infallibly to this writer. Preserve
+    // the original canonical JSON hash without allocating a second full copy.
+    let _ = serde_json::to_writer(&mut writer, request);
+    hex::encode(writer.0.finalize())
+}
 
 pub fn request_key(request: &Value) -> String {
     // Include the entire request, not just a reusable numeric JSON-RPC id.
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(request).unwrap_or_default(),
-    ))
+    hash_request(request)
 }
 
 pub fn state_request_key(state: &NativeState, request: &Value) -> String {
     if let Some(changes) = file_changes(state, request) {
-        return request_key(&serde_json::json!({"request":request,"changes":changes}));
+        #[derive(serde::Serialize)]
+        struct BoundRequest<'a> {
+            changes: &'a Value,
+            request: &'a Value,
+        }
+        return hash_request(&BoundRequest { changes, request });
     }
     request_key(request)
 }
@@ -79,24 +103,36 @@ pub fn view(
 }
 
 fn project_request(state: &NativeState, request: &Value) -> DesktopPendingRequest {
-    let mut params = request["params"].clone();
-    if let Some(changes) = file_changes(state, request) {
-        params["changes"] = changes.clone();
-    }
-    let params = &params;
+    let params = &request["params"];
+    let merged = Params {
+        original: params,
+        changes: file_changes(state, request),
+        omit: &[],
+    };
     let method = request["method"].as_str().unwrap_or("");
+    let approval = matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+    );
+    let (details, details_cut) = if approval {
+        review::json(&merged, BODY_LIMIT, true)
+    } else {
+        (String::new(), false)
+    };
     let (kind, title, body, mut can_accept) = match method {
         "item/commandExecution/requestApproval" => (
             "command",
             "允许运行命令",
-            approval_details(params),
+            details,
             params["command"].is_string(),
         ),
         "item/fileChange/requestApproval" => (
             "file",
             "允许修改文件",
-            approval_details(params),
-            params["changes"].as_array().is_some_and(|changes| {
+            details,
+            merged.get("changes").as_array().is_some_and(|changes| {
                 !changes.is_empty()
                     && changes.iter().all(|change| {
                         change["path"].is_string()
@@ -108,7 +144,7 @@ fn project_request(state: &NativeState, request: &Value) -> DesktopPendingReques
         "item/permissions/requestApproval" => (
             "permissions",
             "允许本回合使用权限",
-            approval_details(params),
+            details,
             params["permissions"].is_object(),
         ),
         "item/tool/requestUserInput" => ("question", "需要你的回答", String::new(), true),
@@ -126,8 +162,10 @@ fn project_request(state: &NativeState, request: &Value) -> DesktopPendingReques
     };
     // A truncated permission request is not a reviewable approval. Keep the
     // original pending request untouched and let the desktop display it fully.
-    if body.len() > 16 * 1024
-        || serde_json::to_vec(params).is_ok_and(|bytes| bytes.len() > 64 * 1024)
+    let review = approval.then(|| review::project(&merged, kind));
+    if details_cut
+        || review::json(&merged, PARAMS_LIMIT, false).1
+        || review.as_ref().is_some_and(|review| review.truncated)
     {
         can_accept = false;
     }
@@ -191,6 +229,7 @@ fn project_request(state: &NativeState, request: &Value) -> DesktopPendingReques
         kind: kind.into(),
         title: title.into(),
         body: bounded(&body, 16 * 1024),
+        review,
         questions,
         form_schema: (kind == "elicitation" && can_accept)
             .then(|| params["requestedSchema"].clone()),
@@ -203,10 +242,6 @@ fn project_request(state: &NativeState, request: &Value) -> DesktopPendingReques
             Vec::new()
         },
     }
-}
-
-fn approval_details(params: &Value) -> String {
-    serde_json::to_string_pretty(params).unwrap_or_default()
 }
 
 pub(super) fn supported_form(schema: &Value) -> bool {

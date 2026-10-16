@@ -5,6 +5,7 @@ import { emptyReferenceDraft, editReferenceDraft, inlineReferenceQuery, insertDe
 import { useDesktopReferenceCatalog } from "../../hooks/useDesktopReferenceCatalog";
 import { useCodexDesktop } from "../../hooks/useCodexDesktop";
 import { DesktopRequests } from "./DesktopRequests";
+import { DesktopStatus } from "./DesktopStatus";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 
 export function NewDesktopThread({ onCreated }: { onCreated: (id: string) => void | Promise<void> }) {
@@ -81,7 +82,8 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   };
   const locked = busy || choosing;
   return <section className="desktop-composer" aria-label="与 Codex 协作">
-    {!writable ? <div className="desktop-connect-row"><span>{busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程"}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
+    {!writable ? <div className="desktop-connect-row"><span role={desktop.error ? "alert" : undefined}>{desktop.error || (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
+      <DesktopStatus view={view} />
       <DesktopRequests requests={view!.requests} busy={locked} act={desktop.act} open={desktop.open} />
       {view!.queue.length > 0 && <details className="desktop-outbox" open={view!.queue.some(item => item.status !== "queued")}>
         <summary>待发送 · {view!.queue.length}</summary>
@@ -123,7 +125,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
         <ReferenceOptions catalog={catalog} option={option} onSelect={selectReference} onMore={() => { setSelectedOption(0); catalog.more(); }} />
       </div>}
     </>}
-    {(localError || desktop.error) && <p className="form-error" role="alert">{localError || desktop.error}</p>}
+    {(localError || writable && desktop.error) && <p className="form-error" role="alert">{localError || desktop.error}</p>}
     {discard && <ConfirmDialog labelledBy="desktop-discard-title" busy={busy} onCancel={() => setDiscard(null)} returnFocus={discardTrigger}>
       <h3 id="desktop-discard-title">已在 Codex 中核对发送结果？</h3><p>移除此记录后，NexusHub 不会重新发送它。请先确认 Codex 中是否已有这条消息。</p>
       <div className="dialog-actions"><button disabled={busy} onClick={() => setDiscard(null)}>返回</button><button disabled={busy} onClick={() => { void desktop.act({ type: "dismissUnknown", messageId: discard }).then(() => setDiscard(null)).catch(() => {}); }}>已核对，移除记录</button></div>

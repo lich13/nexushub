@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DesktopAction, DesktopPendingRequest, DesktopQuestion } from "../../lib/query/desktop";
+import type { DesktopAction, DesktopPendingRequest, DesktopQuestion, DesktopReview } from "../../lib/query/desktop";
 
 type Action = (action: DesktopAction) => Promise<void>;
 // Native question/property IDs are data, including names such as __proto__.
@@ -19,7 +19,7 @@ export function DesktopRequests({ requests, busy, act, open }: { requests: Deskt
 function RequestBody({ request, busy, act, open }: { request: DesktopPendingRequest; busy: boolean; act: Action; open: () => Promise<void> }) {
   const run = (action: DesktopAction) => { void act(action).catch(() => {}); };
   return <div className="desktop-request-body">
-    {request.body && <pre>{request.body}</pre>}
+    {request.review ? <ApprovalReview review={request.review} /> : request.body && <pre>{request.body}</pre>}
     {request.canAccept && request.kind === "question" ? <Questions request={request} busy={busy} act={act} />
       : request.canAccept && request.kind === "elicitation" ? <Elicitation request={request} busy={busy} act={act} />
         : <div className="desktop-request-actions">
@@ -32,6 +32,26 @@ function RequestBody({ request, busy, act, open }: { request: DesktopPendingRequ
           {!request.canAccept && <span className="muted-text">请在 Codex 中查看完整请求并处理。</span>}
           <button disabled={busy} onClick={() => { void open(); }}>在 Codex 中打开</button>
         </div>}
+  </div>;
+}
+
+function ReviewDisclosure({ title, text }: { title: string; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return <details onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary>{title}</summary>{expanded && <pre>{text}</pre>}
+  </details>;
+}
+
+function ApprovalReview({ review }: { review: DesktopReview }) {
+  return <div className="desktop-approval-review">
+    {review.command !== null && <pre aria-label="待审批命令">{review.command}</pre>}
+    {review.cwd !== null && <p>工作目录：<code>{review.cwd}</code></p>}
+    {review.reason !== null && <p>{review.reason}</p>}
+    {review.changes.map((file, index) => <ReviewDisclosure key={index} title={`${file.path} · ${file.kind}${file.truncated ? " · 已截断" : ""}`} text={file.diff} />)}
+    {review.permissions?.network !== null && review.permissions?.network !== undefined && <><p>网络权限</p><pre>{review.permissions.network}</pre></>}
+    {review.permissions?.fileSystem !== null && review.permissions?.fileSystem !== undefined && <><p>文件系统权限</p><pre>{review.permissions.fileSystem}</pre></>}
+    {review.extra && <ReviewDisclosure title="其他请求信息" text={review.extra} />}
+    {review.truncated && <p className="form-error">内容超出显示上限，请在 Codex 中查看完整请求并处理。</p>}
   </div>;
 }
 

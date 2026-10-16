@@ -10,6 +10,7 @@ pub mod helper;
 pub mod projection;
 mod protocol;
 pub mod references;
+mod review;
 mod session;
 mod socket;
 pub mod state;
@@ -74,7 +75,7 @@ impl DesktopError {
     /// updates. Display remains a fixed English classification for diagnostics.
     pub const fn user_message(self) -> &'static str {
         match self {
-            Self::OwnerUnavailable => "请先在 Codex 中打开此线程，再重新连接",
+            Self::OwnerUnavailable => "无法连接此线程的桌面 owner。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接",
             Self::Unavailable => "Codex 桌面当前不可用，请打开 Codex 后连接",
             Self::ReadOnly => "此线程仅支持阅读",
             Self::Busy => "线程正在处理其他请求，请稍后重试",
@@ -86,9 +87,9 @@ impl DesktopError {
             Self::OutcomeUnknown => "发送结果未确认，请先在 Codex 中核对，勿重复发送",
             Self::Disconnected => "Codex 桌面连接已断开，请重新连接",
             Self::UnsupportedProtocol => {
-                "当前 Codex 桌面协议不受支持，可继续阅读，请在 Codex 中操作"
+                "当前 Codex 桌面协议不受支持，可继续阅读。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接"
             }
-            Self::OutOfSync => "Codex 桌面状态已失步，请重新连接；当前仍可阅读",
+            Self::OutOfSync => "Codex 桌面状态已失步，当前仍可阅读。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接",
             Self::InvalidFrame | Self::FrameTooLarge => {
                 "当前 Codex 桌面状态无法安全处理，请重新连接或在 Codex 中继续"
             }

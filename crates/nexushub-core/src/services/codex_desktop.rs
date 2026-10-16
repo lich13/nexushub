@@ -143,6 +143,37 @@ pub struct DesktopPendingRequest {
     pub can_accept: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_decisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<DesktopReview>,
+}
+
+/// Read-only approval presentation. Paths here are never accepted as inputs.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopReview {
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub reason: Option<String>,
+    pub changes: Vec<DesktopFileReview>,
+    pub permissions: Option<DesktopPermissionsReview>,
+    pub extra: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopFileReview {
+    pub path: String,
+    pub kind: String,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPermissionsReview {
+    pub network: Option<String>,
+    pub file_system: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

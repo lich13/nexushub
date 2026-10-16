@@ -106,7 +106,7 @@ fn user_messages_are_fixed_safe_and_keep_desktop_failures_distinct() {
     let messages = [
         (
             DesktopError::OwnerUnavailable,
-            "请先在 Codex 中打开此线程，再重新连接",
+            "无法连接此线程的桌面 owner。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接",
         ),
         (DesktopError::RequestExpired, "该请求已失效，请查看最新状态"),
         (
@@ -115,11 +115,11 @@ fn user_messages_are_fixed_safe_and_keep_desktop_failures_distinct() {
         ),
         (
             DesktopError::UnsupportedProtocol,
-            "当前 Codex 桌面协议不受支持，可继续阅读，请在 Codex 中操作",
+            "当前 Codex 桌面协议不受支持，可继续阅读。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接",
         ),
         (
             DesktopError::OutOfSync,
-            "Codex 桌面状态已失步，请重新连接；当前仍可阅读",
+            "Codex 桌面状态已失步，当前仍可阅读。当前实现对照桌面 build 20586；请在 Codex 桌面打开同一线程后重试连接",
         ),
         (DesktopError::UnsafeSocket, "无法确认 Codex 桌面或线程身份"),
     ];
