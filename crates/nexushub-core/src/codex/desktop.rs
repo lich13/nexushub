@@ -4,8 +4,16 @@
 //!
 //! Wire versions were checked against desktop build 20586. New mutations must
 //! pass the dedicated native protocol checks before being exposed by Tauri.
+pub mod commands;
 mod framing;
+pub mod helper;
+pub mod projection;
+pub mod references;
+mod session;
 mod socket;
+pub mod state;
+pub mod worker;
+pub use session::DesktopSession;
 
 use crate::resource_limits::CODEX_DESKTOP_CONNECT_WAIT;
 use framing::{FrameReader, FrameWriter};
@@ -29,6 +37,12 @@ pub enum DesktopError {
     UnsupportedProtocol,
     OwnerUnavailable,
     OutOfSync,
+    ReadOnly,
+    Busy,
+    InvalidInput,
+    RequestExpired,
+    Rejected,
+    OutcomeUnknown,
 }
 
 impl fmt::Display for DesktopError {
@@ -44,6 +58,12 @@ impl fmt::Display for DesktopError {
             Self::UnsupportedProtocol => "Codex desktop protocol is not supported",
             Self::OwnerUnavailable => "Codex desktop thread owner is unavailable",
             Self::OutOfSync => "Codex desktop thread state needs to be refreshed",
+            Self::ReadOnly => "Codex desktop thread is read-only",
+            Self::Busy => "Codex desktop thread is busy",
+            Self::InvalidInput => "Codex desktop input is invalid",
+            Self::RequestExpired => "Codex desktop request is no longer pending",
+            Self::Rejected => "Codex desktop rejected the request",
+            Self::OutcomeUnknown => "Codex desktop submission outcome is unknown",
         })
     }
 }
@@ -144,74 +164,80 @@ impl DesktopReadSession {
 
     async fn next_verified_event(&mut self) -> Result<DesktopEvent> {
         loop {
-            let mut message = self.receive().await?;
-            if message["type"] != "broadcast" {
-                continue;
-            }
-            if message["method"] == "ipc-connection-reset" {
-                return Err(DesktopError::Disconnected);
-            }
-            let params = &message["params"];
-            if message["sourceClientId"].as_str() != Some(&self.owner_id)
-                || params["conversationId"].as_str() != Some(&self.conversation_id)
-                || params
-                    .get("hostId")
-                    .is_some_and(|host| host.as_str() != Some("local"))
-            {
-                continue;
-            }
-            match message["method"].as_str() {
-                Some("thread-stream-state-changed") => {
-                    if message["version"].as_u64() != Some(STREAM_VERSION) {
-                        return Err(DesktopError::UnsupportedProtocol);
-                    }
-                    let change = &mut message["params"]["change"];
-                    let revision = revision(&change["revision"])?;
-                    match change["type"].as_str() {
-                        Some("snapshot") => {
-                            if change["conversationState"]["id"].as_str()
-                                != Some(&self.conversation_id)
-                            {
-                                return Err(DesktopError::InvalidIdentity);
-                            }
-                            if self.revision.is_some_and(|previous| revision < previous) {
-                                return Err(DesktopError::OutOfSync);
-                            }
-                            self.revision = Some(revision);
-                            return Ok(DesktopEvent::Snapshot {
-                                revision,
-                                state: change["conversationState"].take(),
-                            });
-                        }
-                        Some("patches") => {
-                            let base = revision_value(change.get("baseRevision"))?;
-                            if self.revision != Some(base) || revision <= base {
-                                return Err(DesktopError::OutOfSync);
-                            }
-                            if !change["patches"].is_array() {
-                                return Err(DesktopError::InvalidFrame);
-                            }
-                            self.revision = Some(revision);
-                            return Ok(DesktopEvent::Patches {
-                                revision,
-                                change: change.take(),
-                            });
-                        }
-                        _ => return Err(DesktopError::UnsupportedProtocol),
-                    }
-                }
-                Some("thread-queued-followups-changed") => {
-                    if message["version"].as_u64() != Some(QUEUE_VERSION) {
-                        return Err(DesktopError::UnsupportedProtocol);
-                    }
-                    let Value::Array(messages) = message["params"]["messages"].take() else {
-                        return Err(DesktopError::InvalidFrame);
-                    };
-                    return Ok(DesktopEvent::Queue { messages });
-                }
-                _ => {}
+            let message = self.receive().await?;
+            if let Some(event) = self.event_from_message(message)? {
+                return Ok(event);
             }
         }
+    }
+
+    fn event_from_message(&mut self, mut message: Value) -> Result<Option<DesktopEvent>> {
+        if message["type"] != "broadcast" {
+            return Ok(None);
+        }
+        if message["method"] == "ipc-connection-reset" {
+            return Err(DesktopError::Disconnected);
+        }
+        let params = &message["params"];
+        if message["sourceClientId"].as_str() != Some(&self.owner_id)
+            || params["conversationId"].as_str() != Some(&self.conversation_id)
+            || params
+                .get("hostId")
+                .is_some_and(|host| host.as_str() != Some("local"))
+        {
+            return Ok(None);
+        }
+        match message["method"].as_str() {
+            Some("thread-stream-state-changed") => {
+                if message["version"].as_u64() != Some(STREAM_VERSION) {
+                    return Err(DesktopError::UnsupportedProtocol);
+                }
+                let change = &mut message["params"]["change"];
+                let revision = revision(&change["revision"])?;
+                match change["type"].as_str() {
+                    Some("snapshot") => {
+                        if change["conversationState"]["id"].as_str() != Some(&self.conversation_id)
+                        {
+                            return Err(DesktopError::InvalidIdentity);
+                        }
+                        if self.revision.is_some_and(|previous| revision < previous) {
+                            return Err(DesktopError::OutOfSync);
+                        }
+                        self.revision = Some(revision);
+                        return Ok(Some(DesktopEvent::Snapshot {
+                            revision,
+                            state: change["conversationState"].take(),
+                        }));
+                    }
+                    Some("patches") => {
+                        let base = revision_value(change.get("baseRevision"))?;
+                        if self.revision != Some(base) || revision <= base {
+                            return Err(DesktopError::OutOfSync);
+                        }
+                        if !change["patches"].is_array() {
+                            return Err(DesktopError::InvalidFrame);
+                        }
+                        self.revision = Some(revision);
+                        return Ok(Some(DesktopEvent::Patches {
+                            revision,
+                            change: change.take(),
+                        }));
+                    }
+                    _ => return Err(DesktopError::UnsupportedProtocol),
+                }
+            }
+            Some("thread-queued-followups-changed") => {
+                if message["version"].as_u64() != Some(QUEUE_VERSION) {
+                    return Err(DesktopError::UnsupportedProtocol);
+                }
+                let Value::Array(messages) = message["params"]["messages"].take() else {
+                    return Err(DesktopError::InvalidFrame);
+                };
+                return Ok(Some(DesktopEvent::Queue { messages }));
+            }
+            _ => {}
+        }
+        Ok(None)
     }
 
     async fn request(&mut self, method: &str, version: u64, params: Value) -> Result<Value> {
