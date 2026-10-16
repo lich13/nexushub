@@ -183,9 +183,10 @@ small { font-size: 12px; }
 .desktop-free-answer input, .desktop-free-answer select { width: 100%; }
 .desktop-reference-picker { margin-top: 8px; padding: 8px; background: var(--surface); border-radius: 8px; }
 .desktop-reference-search input { flex: 1; min-width: 100px; }
-.desktop-reference-picker ul { list-style: none; margin: 6px 0; padding: 0; max-height: 180px; overflow-y: auto; }
-.desktop-reference-picker li button { width: 100%; display: grid; text-align: left; gap: 3px; border: 0; background: transparent; color: var(--text); }
-.desktop-reference-picker small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.desktop-reference-options ul { list-style: none; margin: 6px 0; padding: 0; max-height: 180px; overflow-y: auto; }
+.desktop-reference-options li button { width: 100%; display: grid; text-align: left; gap: 3px; border: 0; background: transparent; color: var(--text); }
+.desktop-reference-options small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.desktop-reference-options [aria-selected="true"] { background: var(--surface); border-radius: 6px; }
 .desktop-create-error { position: absolute; z-index: 6; top: 40px; left: 12px; right: 12px; padding: 8px; color: var(--danger); background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; font-size: 12px; }
 .conversation-header { min-height: 56px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--hairline); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .conversation-title-copy { min-width: 0; flex: 1; }

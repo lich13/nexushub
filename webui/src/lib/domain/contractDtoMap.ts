@@ -5,6 +5,7 @@ export const contractDtoNames = [
     "DesktopAction",
     "DesktopMode",
     "DesktopAnswer",
+    "DesktopReferenceSpan",
     "DesktopView",
     "DesktopQueuedMessage",
     "DesktopPendingRequest",

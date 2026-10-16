@@ -11,6 +11,7 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock("react", async original => ({
   ...await original<typeof import("react")>(),
+  useEffect: () => undefined,
   useState: (initial: unknown) => {
     const index = hooks.index++;
     if (!hooks.cells.has(index)) hooks.cells.set(index, typeof initial === "function" ? initial() : initial);
