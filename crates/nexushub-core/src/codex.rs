@@ -3,6 +3,8 @@ use std::{fs, path::Path};
 
 mod app_server_client;
 mod assistant_question;
+#[cfg(unix)]
+pub mod desktop;
 mod identity;
 mod mutations;
 mod name_client;

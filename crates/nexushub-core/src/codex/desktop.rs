@@ -1,0 +1,311 @@
+//! Private desktop protocol boundary, separate from the historical reader and
+//! short-lived app-server helper. This layer only follows an existing owner;
+//! it never starts a native execution process or writes a queue snapshot.
+//!
+//! Wire versions were checked against desktop build 20586. New mutations must
+//! pass the dedicated native protocol checks before being exposed by Tauri.
+mod framing;
+mod socket;
+
+use crate::resource_limits::CODEX_DESKTOP_CONNECT_WAIT;
+use framing::{FrameReader, FrameWriter};
+use serde_json::{json, Value};
+use std::{fmt, path::Path, time::Duration};
+use tokio::{io::AsyncWriteExt, net::UnixStream, time::timeout};
+
+const STREAM_VERSION: u64 = 11;
+const QUEUE_VERSION: u64 = 2;
+
+/// Fixed classifications only: never include native errors, paths or content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopError {
+    InvalidIdentity,
+    Unavailable,
+    UnsafeSocket,
+    Timeout,
+    Disconnected,
+    InvalidFrame,
+    FrameTooLarge,
+    UnsupportedProtocol,
+    OwnerUnavailable,
+    OutOfSync,
+}
+
+impl fmt::Display for DesktopError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidIdentity => "Codex desktop thread identity is invalid",
+            Self::Unavailable => "Codex desktop is unavailable",
+            Self::UnsafeSocket => "Codex desktop connection identity could not be verified",
+            Self::Timeout => "Codex desktop connection timed out",
+            Self::Disconnected => "Codex desktop connection closed",
+            Self::InvalidFrame => "Codex desktop returned an invalid frame",
+            Self::FrameTooLarge => "Codex desktop frame exceeded the size limit",
+            Self::UnsupportedProtocol => "Codex desktop protocol is not supported",
+            Self::OwnerUnavailable => "Codex desktop thread owner is unavailable",
+            Self::OutOfSync => "Codex desktop thread state needs to be refreshed",
+        })
+    }
+}
+
+impl std::error::Error for DesktopError {}
+
+type Result<T> = std::result::Result<T, DesktopError>;
+
+/// Native payloads stay inside the Rust integration. They are not public DTOs
+/// and intentionally do not implement Debug or Serialize.
+pub enum DesktopEvent {
+    Snapshot { revision: u64, state: Value },
+    Patches { revision: u64, change: Value },
+    Queue { messages: Vec<Value> },
+}
+
+/// One selected local thread and one verified owner per connection. Dropping
+/// the session closes the socket, so cancelled connection attempts cannot leave
+/// a background follower or an execution process behind.
+pub struct DesktopReadSession {
+    stream: Option<UnixStream>,
+    reader: FrameReader,
+    writer: FrameWriter,
+    conversation_id: String,
+    client_id: String,
+    owner_id: String,
+    revision: Option<u64>,
+}
+
+impl DesktopReadSession {
+    /// `codex_home` comes from native configuration, never a WebUI path input.
+    /// Attaching does not load a thread into a desktop window or change focus.
+    pub async fn attach(codex_home: &Path, conversation_id: &str) -> Result<Self> {
+        Self::attach_with_timeout(codex_home, conversation_id, CODEX_DESKTOP_CONNECT_WAIT).await
+    }
+
+    async fn attach_with_timeout(
+        codex_home: &Path,
+        conversation_id: &str,
+        wait: Duration,
+    ) -> Result<Self> {
+        uuid::Uuid::parse_str(conversation_id).map_err(|_| DesktopError::InvalidIdentity)?;
+        let connect = async {
+            let stream = socket::connect(codex_home).await?;
+            let mut session = Self {
+                stream: Some(stream),
+                reader: FrameReader::default(),
+                writer: FrameWriter::default(),
+                conversation_id: conversation_id.into(),
+                client_id: String::new(),
+                owner_id: String::new(),
+                revision: None,
+            };
+            let response = session
+                .request("initialize", 0, json!({"clientType":"nexushub"}))
+                .await?;
+            session.client_id = identity(&response["result"]["clientId"])?;
+            let response = session
+                .request(
+                    "thread-owner-discovery",
+                    1,
+                    json!({"hostId":"local","conversationId":conversation_id}),
+                )
+                .await?;
+            session.owner_id = identity(&response["handledByClientId"])?;
+            if session.owner_id == session.client_id {
+                return Err(DesktopError::OwnerUnavailable);
+            }
+            session.follow(true).await?;
+            Ok(session)
+        };
+        timeout(wait, connect)
+            .await
+            .map_err(|_| DesktopError::Timeout)?
+    }
+
+    /// Cancellation is safe: partially read headers and bodies remain owned
+    /// by FrameReader. There is no event backlog or unbounded channel here.
+    /// A revision gap fails closed; reconnect to obtain a fresh snapshot.
+    pub async fn next_event(&mut self) -> Result<DesktopEvent> {
+        let result = self.next_verified_event().await;
+        if result.is_err() {
+            self.stream.take();
+            self.reader = FrameReader::default();
+            self.writer = FrameWriter::default();
+            self.revision = None;
+        }
+        result
+    }
+
+    pub async fn close(mut self) {
+        // Explicit unsubscribe is best effort; EOF also removes this client.
+        let _ = timeout(Duration::from_secs(1), self.follow(false)).await;
+        if let Some(mut stream) = self.stream.take() {
+            let _ = stream.shutdown().await;
+        }
+    }
+
+    async fn next_verified_event(&mut self) -> Result<DesktopEvent> {
+        loop {
+            let mut message = self.receive().await?;
+            if message["type"] != "broadcast" {
+                continue;
+            }
+            if message["method"] == "ipc-connection-reset" {
+                return Err(DesktopError::Disconnected);
+            }
+            let params = &message["params"];
+            if message["sourceClientId"].as_str() != Some(&self.owner_id)
+                || params["conversationId"].as_str() != Some(&self.conversation_id)
+                || params
+                    .get("hostId")
+                    .is_some_and(|host| host.as_str() != Some("local"))
+            {
+                continue;
+            }
+            match message["method"].as_str() {
+                Some("thread-stream-state-changed") => {
+                    if message["version"].as_u64() != Some(STREAM_VERSION) {
+                        return Err(DesktopError::UnsupportedProtocol);
+                    }
+                    let change = &mut message["params"]["change"];
+                    let revision = revision(&change["revision"])?;
+                    match change["type"].as_str() {
+                        Some("snapshot") => {
+                            if change["conversationState"]["id"].as_str()
+                                != Some(&self.conversation_id)
+                            {
+                                return Err(DesktopError::InvalidIdentity);
+                            }
+                            if self.revision.is_some_and(|previous| revision < previous) {
+                                return Err(DesktopError::OutOfSync);
+                            }
+                            self.revision = Some(revision);
+                            return Ok(DesktopEvent::Snapshot {
+                                revision,
+                                state: change["conversationState"].take(),
+                            });
+                        }
+                        Some("patches") => {
+                            let base = revision_value(change.get("baseRevision"))?;
+                            if self.revision != Some(base) || revision <= base {
+                                return Err(DesktopError::OutOfSync);
+                            }
+                            if !change["patches"].is_array() {
+                                return Err(DesktopError::InvalidFrame);
+                            }
+                            self.revision = Some(revision);
+                            return Ok(DesktopEvent::Patches {
+                                revision,
+                                change: change.take(),
+                            });
+                        }
+                        _ => return Err(DesktopError::UnsupportedProtocol),
+                    }
+                }
+                Some("thread-queued-followups-changed") => {
+                    if message["version"].as_u64() != Some(QUEUE_VERSION) {
+                        return Err(DesktopError::UnsupportedProtocol);
+                    }
+                    let Value::Array(messages) = message["params"]["messages"].take() else {
+                        return Err(DesktopError::InvalidFrame);
+                    };
+                    return Ok(DesktopEvent::Queue { messages });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    async fn request(&mut self, method: &str, version: u64, params: Value) -> Result<Value> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let source = (!self.client_id.is_empty()).then_some(self.client_id.as_str());
+        self.send(&json!({
+            "type":"request", "requestId":request_id, "sourceClientId":source,
+            "method":method, "version":version, "params":params,
+            "timeoutMs":CODEX_DESKTOP_CONNECT_WAIT.as_millis() as u64,
+        }))
+        .await?;
+        loop {
+            let response = self.receive().await?;
+            if response["type"] != "response" || response["requestId"] != request_id {
+                continue;
+            }
+            return match response["resultType"].as_str() {
+                Some("success") => Ok(response),
+                Some("error") => Err(match response["error"].as_str() {
+                    Some("no-client-found") => DesktopError::OwnerUnavailable,
+                    Some("unsupported-version" | "method-not-found") => {
+                        DesktopError::UnsupportedProtocol
+                    }
+                    Some("timeout") => DesktopError::Timeout,
+                    _ => DesktopError::Unavailable,
+                }),
+                _ => Err(DesktopError::InvalidFrame),
+            };
+        }
+    }
+
+    async fn follow(&mut self, following: bool) -> Result<()> {
+        self.send(&json!({
+            "type":"broadcast", "sourceClientId":self.client_id,
+            "method":"thread-stream-following-changed", "version":1,
+            "targetClientIds":[self.owner_id],
+            "params":{"hostId":"local","conversationId":self.conversation_id,"following":following}
+        }))
+        .await
+    }
+
+    async fn send(&mut self, value: &Value) -> Result<()> {
+        self.writer
+            .send(
+                self.stream.as_mut().ok_or(DesktopError::Disconnected)?,
+                value,
+            )
+            .await
+    }
+
+    async fn receive(&mut self) -> Result<Value> {
+        loop {
+            // A cancelled receive may have been answering client discovery.
+            // Finish its frame before reading or writing another message.
+            self.writer
+                .flush(self.stream.as_mut().ok_or(DesktopError::Disconnected)?)
+                .await?;
+            let message = self
+                .reader
+                .read(self.stream.as_mut().ok_or(DesktopError::Disconnected)?)
+                .await?;
+            if message["type"] == "client-discovery-request" {
+                let request_id = identity(&message["requestId"])?;
+                self.send(&json!({
+                    "type":"client-discovery-response", "requestId":request_id,
+                    "response":{"canHandle":false}
+                }))
+                .await?;
+            } else {
+                return Ok(message);
+            }
+        }
+    }
+}
+
+fn identity(value: &Value) -> Result<String> {
+    let value = value.as_str().ok_or(DesktopError::InvalidIdentity)?;
+    if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+        return Err(DesktopError::InvalidIdentity);
+    }
+    Ok(value.into())
+}
+
+fn revision(value: &Value) -> Result<u64> {
+    revision_value(Some(value))
+}
+
+fn revision_value(value: Option<&Value>) -> Result<u64> {
+    value
+        .and_then(Value::as_u64)
+        .filter(|value| *value < 1_u64 << 53)
+        .ok_or(DesktopError::InvalidFrame)
+}
+
+#[cfg(test)]
+#[path = "desktop/tests.rs"]
+mod tests;

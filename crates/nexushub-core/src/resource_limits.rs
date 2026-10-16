@@ -35,3 +35,7 @@ pub(crate) const CREDENTIAL_WORKERS: usize = 1;
 // the 32 MiB response cap; neither bound limits all concurrent response memory.
 pub const REMOTE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 pub const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
+// Native desktop IPC uses one length-prefixed frame at a time. Consumers own
+// returned snapshots; this bound is not a cap on retained UI state or RSS.
+pub(crate) const CODEX_DESKTOP_FRAME_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const CODEX_DESKTOP_CONNECT_WAIT: Duration = Duration::from_secs(10);
