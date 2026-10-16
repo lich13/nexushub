@@ -46,6 +46,7 @@ def local_dependency_entries(versions):
 
 
 def make_fixture(root, desktop_versions=None, extra_desktop_packages=()):
+    write(root / "rust-toolchain.toml", '[toolchain]\nchannel = "1.99.0"\n')
     desktop_versions = desktop_versions or DESKTOP_VERSIONS
     names = sorted(SHARED_VERSIONS)
     requirements = {
@@ -70,7 +71,7 @@ def make_fixture(root, desktop_versions=None, extra_desktop_packages=()):
 members = ["crates/nexushub-core", "crates/nexushub-webd"]
 
 [workspace.package]
-rust-version = "1.86"
+rust-version = "1.88"
 
 [workspace.dependencies]
 {workspace_deps}
@@ -78,7 +79,7 @@ rust-version = "1.86"
     write(root / "src-tauri/Cargo.toml", f'''\
 [package]
 name = "nexushub-desktop"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [dependencies]
 {desktop_deps}
@@ -138,7 +139,7 @@ class WorkspaceCheckTests(unittest.TestCase):
 
     def test_msrv_must_match_between_workspace_and_tauri(self):
         manifest = self.root / "src-tauri/Cargo.toml"
-        manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.86"', 'rust-version = "1.85"'), encoding="utf-8")
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.88"', 'rust-version = "1.85"'), encoding="utf-8")
         with self.assertRaises(ValueError):
             check_workspaces.check(self.root)
 
