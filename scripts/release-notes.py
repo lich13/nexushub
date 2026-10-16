@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.2": [
+        "本机 Codex 协作支持拖入文件与粘贴图片，发送后保留图片供原生历史读取",
+        "审批卡按命令和文件整理，补齐协作状态与连接提示，保持原生桌面执行和协议 2。",
+    ],
     "1.3.1": [
         "本机 Codex 支持输入 $ / @ 选择技能、应用和插件，保留原生桌面执行与加密队列",
         "改进目录重试、协作进度刷新与协议错误提示，支持已核实的命令和文件会话审批。",
@@ -171,6 +175,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.2":
+        sections = {
+            "版本概览": ["本版完善本机 Codex 协作的附件输入、审批阅读和状态呈现；对话执行、进度、审批与问答仍由原生桌面持有。"],
+            "功能调整": [
+                "文件可拖入协作输入区，图片可直接粘贴；保留原生文件选择器及 $ / @ 技能、应用和插件引用。",
+                "审批命令使用等宽文本，文件 diff 按文件折叠并在展开后加载；协作区显示执行、待处理请求和队列状态。",
+            ],
+            "问题修复": [
+                "审批投影有界处理大内容，保留完整请求与文件变化身份；内容截断或无法完整审阅时仍需在 Codex 处理，不放宽批准条件。",
+                "附件只从原生拖放或明确粘贴进入，界面不接收文件路径或图片字节；切换、隐藏、发送和选择文件时隔离迟到结果。",
+                "协议不兼容、owner 不可用与状态失步在连接处显示固定提示，注明已核验 build 20586，保留历史阅读与草稿。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增附件命令仅供本机 macOS；只读审批字段保持可选，Linux、远程、归档与子线程不开放发送。",
+                "保留旧加密队列正文、会话审批门控及结果不明不重发。粘贴图片保存在私有文件中，归属索引加密；交给发送队列后保留，避免清理破坏原生历史。",
+                "普通文件继续使用已有兼容编码；本轮未取得原生文件完整输入快照，不扩展未核实的审批决策，也不增加缺少复现证据的 IPC 通知。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装 macOS App；保留配置、凭据、会话与私有附件。",
+                "在原生桌面打开同一线程并连接，使用 $ / @、拖放或粘贴发送，检查桌面进度、审批 diff 及任一侧处理后的状态同步。真实操作、视觉与日常体验待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.1":
         sections = {
