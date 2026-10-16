@@ -192,6 +192,9 @@ fn discover_codex_candidates() -> Vec<PathBuf> {
         PathBuf::from("/opt/homebrew/bin/codex"),
         PathBuf::from("/usr/local/bin/codex"),
         PathBuf::from("/usr/bin/codex"),
+        // Newer desktop bundles keep the CLI in its own package. Retain the
+        // previous layout for existing installations and probe both normally.
+        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
         PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
     ]);
     candidates
@@ -281,3 +284,7 @@ fn parse_codex_version(value: &str) -> Option<ParsedVersion> {
         })
     })
 }
+
+#[cfg(test)]
+#[path = "app_server_client_tests.rs"]
+mod tests;
