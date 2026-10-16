@@ -1,6 +1,8 @@
 import { ArrowUp, FolderPlus, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { chooseDesktopItem, createDesktopThread, desktopCatalog, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode } from "../../lib/query/desktop";
+import { emptyReferenceDraft, editReferenceDraft, inlineReferenceQuery, insertDesktopReference, removeDesktopReference, toDesktopReferenceSpans } from "../../lib/desktopReferences";
+import { useDesktopReferenceCatalog } from "../../hooks/useDesktopReferenceCatalog";
 import { useCodexDesktop } from "../../hooks/useCodexDesktop";
 import { DesktopRequests } from "./DesktopRequests";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -25,8 +27,13 @@ export function NewDesktopThread({ onCreated }: { onCreated: (id: string) => voi
 export function DesktopComposer({ threadId }: { threadId: string }) {
   const desktop = useCodexDesktop(threadId);
   const { view, busy } = desktop;
-  const [text, setText] = useState("");
-  const [references, setReferences] = useState<DesktopChosenItem[]>([]);
+  const [draft, setDraft] = useState(emptyReferenceDraft);
+  const { text, references } = draft;
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const [selection, setSelection] = useState({ start: 0, end: 0, focused: false });
+  const [dismissed, setDismissed] = useState("");
+  const [selectedOption, setSelectedOption] = useState(0);
+  const [catalogQuery, setCatalogQuery] = useState("");
   const [localError, setLocalError] = useState("");
   const [choosing, setChoosing] = useState(false);
   const [catalogKind, setCatalogKind] = useState("");
@@ -35,16 +42,32 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   const discardTrigger = useRef<HTMLButtonElement>(null);
   const writable = Boolean(view?.connected && view.writable);
   const active = Boolean(view?.activeTurnId);
+  const query = inlineReferenceQuery(text, selection.start, selection.end);
+  const queryKey = JSON.stringify(query);
+  const inline = writable && selection.focused && !catalogKind && query && dismissed !== queryKey
+    && !draft.spans.some(span => span.start <= selection.start && selection.start <= span.end) ? query : null;
+  const catalog = useDesktopReferenceCatalog(view?.sessionId, writable ? catalogKind || inline?.kind || "" : "", catalogKind ? catalogQuery : inline?.query || "");
+  const option = Math.min(selectedOption, Math.max(0, catalog.items.length - 1));
+  const selectReference = (item: DesktopChosenItem) => {
+    try {
+      const { draft: next, caret } = insertDesktopReference(draft, item, inline?.start ?? selection.start, inline?.end ?? selection.end);
+      setDraft(next); setSelection({ start: caret, end: caret, focused: true });
+      setCatalogKind(""); setLocalError(""); setDismissed("");
+      queueMicrotask(() => { textarea.current?.focus(); textarea.current?.setSelectionRange(caret, caret); });
+    } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法插入所选引用"); }
+  };
   const send = async (steer = false) => {
     if (!view) return;
     const handles = references.map(item => item.handle);
-    const payload = JSON.stringify({ text, handles, steer, turn: steer ? view.activeTurnId : null });
+    const spans = toDesktopReferenceSpans(draft);
+    const rangePayload = spans.length ? { referenceSpans: spans } : {};
+    const payload = JSON.stringify({ text, handles, ...rangePayload, steer, turn: steer ? view.activeTurnId : null });
     if (identity.current?.payload !== payload) identity.current = { payload, id: crypto.randomUUID() };
     setLocalError("");
     try {
-      if (steer && view.activeTurnId) await desktop.act({ type: "steer", messageId: identity.current.id, text, references: handles, turnId: view.activeTurnId });
-      else await desktop.act({ type: "send", messageId: identity.current.id, text, references: handles });
-      setText(""); setReferences([]); identity.current = undefined;
+      if (steer && view.activeTurnId) await desktop.act({ type: "steer", messageId: identity.current.id, text, references: handles, ...rangePayload, turnId: view.activeTurnId });
+      else await desktop.act({ type: "send", messageId: identity.current.id, text, references: handles, ...rangePayload });
+      setDraft(emptyReferenceDraft()); setSelection({ start: 0, end: 0, focused: true }); identity.current = undefined;
     } catch { /* The hook owns the fixed error; keep the same ID for a retry. */ }
   };
   const attachFile = async () => {
@@ -52,7 +75,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     setChoosing(true); setLocalError("");
     try {
       const { item } = await chooseDesktopItem("file", view.sessionId);
-      if (item) setReferences(items => items.some(value => value.handle === item.handle) ? items : [...items, item].slice(0, 32));
+      if (item) setDraft(value => ({ ...value, references: value.references.some(reference => reference.handle === item.handle) ? value.references : [...value.references, item].slice(0, 32) }));
     } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
     finally { setChoosing(false); }
   };
@@ -70,20 +93,35 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
         {view!.queue.some(item => item.status === "held" && item.kind === "queue") && <button disabled={locked} onClick={() => { void desktop.act({ type: "resumeQueue" }).catch(() => {}); }}>继续发送队列</button>}
       </details>}
       <form onSubmit={event => { event.preventDefault(); void send(); }}>
-        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.name}<button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => setReferences(values => values.filter(value => value.handle !== item.handle))}><X size={12} /></button></span>)}</div>}
-        <textarea aria-label="发送给 Codex" placeholder={active ? "添加下一条消息，或补充当前回合…" : "与 Codex 协作…"} rows={2} maxLength={131072} value={text} disabled={locked} onChange={event => setText(event.target.value)} onKeyDown={event => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (text.trim() || references.length) void send(); }
-        }} />
+        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.name}<button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => setDraft(value => removeDesktopReference(value, item.handle))}><X size={12} /></button></span>)}</div>}
+        <textarea ref={textarea} aria-label="发送给 Codex" aria-autocomplete="list" aria-controls={inline ? "desktop-reference-options" : undefined} aria-expanded={Boolean(inline)} aria-activedescendant={inline && catalog.items[option] ? `desktop-reference-option-${option}` : undefined}
+          placeholder={active ? "添加下一条消息，或补充当前回合…" : "与 Codex 协作…"} rows={2} maxLength={131072} value={text} disabled={locked}
+          onFocus={() => setSelection(value => ({ ...value, focused: true }))} onBlur={() => setSelection(value => ({ ...value, focused: false }))}
+          onSelect={event => setSelection({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd, focused: true })}
+          onChange={event => { setDraft(value => editReferenceDraft(value, event.target.value)); setSelection({ start: event.target.selectionStart ?? event.target.value.length, end: event.target.selectionEnd ?? event.target.value.length, focused: true }); setSelectedOption(0); }}
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing) return;
+            if (inline && !event.metaKey && !event.ctrlKey) {
+              if (event.key === "Escape") { event.preventDefault(); setDismissed(queryKey); return; }
+              if (["ArrowDown", "ArrowUp"].includes(event.key) && catalog.items.length) { event.preventDefault(); setSelectedOption((option + (event.key === "ArrowDown" ? 1 : -1) + catalog.items.length) % catalog.items.length); return; }
+              if (["Enter", "Tab"].includes(event.key) && !event.shiftKey && catalog.items[option]) { event.preventDefault(); selectReference(catalog.items[option]); return; }
+            }
+            if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (text.trim() || references.length) void send(); }
+          }} />
+        {inline && <ReferenceOptions catalog={catalog} option={option} onSelect={selectReference} onMore={() => { setSelectedOption(0); catalog.more(); }} />}
         <div className="desktop-composer-toolbar">
           <button type="button" className="icon-button compact" title="添加文件或图片" disabled={locked || references.length >= 32} onClick={() => { void attachFile(); }}><Paperclip size={16} /></button>
-          <button type="button" disabled={locked || references.length >= 32} onClick={() => setCatalogKind(catalogKind ? "" : "skills")}>引用</button>
+          <button type="button" disabled={locked || references.length >= 32} onClick={() => { setCatalogKind(catalogKind ? "" : "skills"); setCatalogQuery(""); setSelectedOption(0); }}>引用</button>
           <DesktopSettings sessionId={view!.sessionId} viewModel={view!.model} viewEffort={view!.reasoningEffort} viewMode={view!.mode} busy={locked} act={desktop.act} />
           <span className="desktop-composer-spacer" />
           {active && <><button type="button" disabled={locked || !text.trim() && !references.length} onClick={() => { void send(true); }}>补充</button><button type="button" className="icon-button compact" title="停止当前回合并暂停队列" disabled={locked} onClick={() => { void desktop.act({ type: "stop", turnId: view!.activeTurnId! }).catch(() => {}); }}><Square size={15} /></button></>}
           <button className="desktop-send" title={active ? "排队发送" : "发送（⌘ Enter）"} disabled={locked || !text.trim() && !references.length}><ArrowUp size={17} /><span>{active ? "排队" : "发送"}</span></button>
         </div>
       </form>
-      {catalogKind && <DesktopReferences sessionId={view!.sessionId} kind={catalogKind} setKind={setCatalogKind} onSelect={item => { setReferences(items => [...items.filter(value => value.handle !== item.handle), item].slice(0, 32)); setCatalogKind(""); }} />}
+      {catalogKind && <div className="desktop-reference-picker">
+        <div className="desktop-reference-search"><select aria-label="引用类型" value={catalogKind} onChange={event => { setCatalogKind(event.target.value); setCatalogQuery(""); setSelectedOption(0); }}><option value="skills">技能</option><option value="apps">应用</option><option value="plugins">插件</option></select><input aria-label="搜索引用" placeholder="搜索名称" value={catalogQuery} onChange={event => { setCatalogQuery(event.target.value); setSelectedOption(0); }} /><button className="icon-button compact" title="关闭引用" onClick={() => setCatalogKind("")}><X size={14} /></button></div>
+        <ReferenceOptions catalog={catalog} option={option} onSelect={selectReference} onMore={() => { setSelectedOption(0); catalog.more(); }} />
+      </div>}
     </>}
     {(localError || desktop.error) && <p className="form-error" role="alert">{localError || desktop.error}</p>}
     {discard && <ConfirmDialog labelledBy="desktop-discard-title" busy={busy} onCancel={() => setDiscard(null)} returnFocus={discardTrigger}>
@@ -96,52 +134,36 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
 function DesktopSettings({ sessionId, viewModel, viewEffort, viewMode, busy, act }: { sessionId: string; viewModel: string | null; viewEffort: string | null; viewMode: DesktopMode | null; busy: boolean; act: ReturnType<typeof useCodexDesktop>["act"] }) {
   const [items, setItems] = useState<DesktopCatalogItem[]>([]);
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
-    let current = true;
-    void desktopCatalog({ sessionId, projectHandle: null, kind: "models", query: "", cursor: null }).then(result => { if (current) { setItems(result.items); setError(""); } }).catch(() => { if (current) setError("模型列表暂不可用"); });
+    let current = true; setLoading(true); setError(""); setItems([]);
+    void desktopCatalog({ sessionId, projectHandle: null, kind: "models", query: "", cursor: null }).then(result => { if (current) { setItems(result.items); setError(""); } }).catch(reason => { if (current) setError(reason instanceof Error ? reason.message : "模型列表暂不可用"); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [sessionId, viewModel]);
+  }, [sessionId, viewModel, attempt]);
   const selected = items.find(item => item.handle === viewModel);
   const update = (model: string, reasoningEffort: string | null, mode: DesktopMode) => { void act({ type: "settings", model, reasoningEffort, mode }).catch(() => {}); };
-  return <div className="desktop-model-settings" title={error || undefined}>
-    <select aria-label="模型" disabled={busy || !items.length} value={selected?.handle ?? ""} onChange={event => {
+  return <div className="desktop-model-settings">
+    {error && <><span role="alert" className="form-error">{error}</span><button type="button" disabled={busy || loading} onClick={() => setAttempt(value => value + 1)}>重试模型目录</button></>}
+    <select aria-label="模型" disabled={busy || loading || !items.length} value={selected?.handle ?? ""} onChange={event => {
       const item = items.find(item => item.handle === event.target.value); if (item) update(item.handle, item.defaultReasoningEffort, viewMode ?? "default");
     }}><option value="" disabled>{viewModel || error || "读取模型…"}</option>{items.map(item => <option key={item.handle} value={item.handle}>{item.name}</option>)}</select>
-    {selected && <select aria-label="思考强度" disabled={busy || !selected.reasoningEfforts.length} value={viewEffort ?? selected.defaultReasoningEffort ?? ""} onChange={event => update(selected.handle, event.target.value || null, viewMode ?? "default")}>
+    {selected && <select aria-label="思考强度" disabled={busy || loading || !selected.reasoningEfforts.length} value={viewEffort ?? selected.defaultReasoningEffort ?? ""} onChange={event => update(selected.handle, event.target.value || null, viewMode ?? "default")}>
       {!selected.reasoningEfforts.length && <option value="">默认</option>}{selected.reasoningEfforts.map(effort => <option key={effort} value={effort}>{effort}</option>)}
     </select>}
-    <select aria-label="协作模式" disabled={busy || !selected} value={viewMode ?? "default"} onChange={event => selected && update(selected.handle, viewEffort, event.target.value as DesktopMode)}><option value="default">默认</option><option value="plan">Plan</option></select>
+    <select aria-label="协作模式" disabled={busy || loading || !selected} value={viewMode ?? "default"} onChange={event => selected && update(selected.handle, viewEffort, event.target.value as DesktopMode)}><option value="default">默认</option><option value="plan">Plan</option></select>
   </div>;
 }
 
-function DesktopReferences({ sessionId, kind, setKind, onSelect }: { sessionId: string; kind: string; setKind: (kind: string) => void; onSelect: (item: DesktopChosenItem) => void }) {
-  const [query, setQuery] = useState("");
-  const [items, setItems] = useState<DesktopCatalogItem[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const epoch = useRef(0);
-  useEffect(() => {
-    const generation = ++epoch.current;
-    setItems([]); setCursor(null); setError(""); setBusy(true);
-    const timer = setTimeout(() => {
-      void desktopCatalog({ sessionId, projectHandle: null, kind, query, cursor: null }).then(result => {
-        if (generation === epoch.current) { setItems(result.items); setCursor(result.nextCursor); }
-      }).catch(reason => { if (generation === epoch.current) setError(reason instanceof Error ? reason.message : "读取引用失败"); })
-        .finally(() => { if (generation === epoch.current) setBusy(false); });
-    }, 250);
-    return () => { clearTimeout(timer); ++epoch.current; };
-  }, [sessionId, kind, query]);
-  const more = async () => {
-    const generation = epoch.current; setBusy(true);
-    try { const result = await desktopCatalog({ sessionId, projectHandle: null, kind, query, cursor }); if (generation === epoch.current) { setItems(result.items); setCursor(result.nextCursor); } }
-    catch (reason) { if (generation === epoch.current) setError(reason instanceof Error ? reason.message : "读取引用失败"); }
-    finally { if (generation === epoch.current) setBusy(false); }
-  };
-  return <div className="desktop-reference-picker">
-    <div className="desktop-reference-search"><select aria-label="引用类型" value={kind} onChange={event => { setQuery(""); setKind(event.target.value); }}><option value="skills">技能</option><option value="apps">应用</option><option value="plugins">插件</option></select><input aria-label="搜索引用" placeholder="搜索名称" value={query} onChange={event => setQuery(event.target.value)} /><button className="icon-button compact" title="关闭引用" onClick={() => setKind("")}><X size={14} /></button></div>
-    {busy && <p className="muted-text">正在读取…</p>}{error && <p role="alert" className="form-error">{error}</p>}
-    <ul>{items.map(item => <li key={item.handle}><button disabled={busy} onClick={() => onSelect(item)}><strong>{item.name}</strong><small>{item.description}</small></button></li>)}</ul>
-    {!busy && !error && !items.length && <p className="muted-text">没有可用引用</p>}{cursor && <button disabled={busy} onClick={() => { void more(); }}>下一页</button>}
+function ReferenceOptions({ catalog, option, onSelect, onMore }: { catalog: ReturnType<typeof useDesktopReferenceCatalog>; option: number; onSelect: (item: DesktopChosenItem) => void; onMore: () => void }) {
+  return <div className="desktop-reference-options" onMouseDown={event => event.preventDefault()}>
+    {catalog.busy && <p className="muted-text" role="status">正在读取…</p>}
+    {catalog.errors.map(error => <p role="alert" className="form-error" key={error.kind}>{error.kind === "apps" ? "应用：" : error.kind === "plugins" ? "插件：" : ""}{error.message}</p>)}
+    {catalog.errors.length > 0 && <button type="button" onClick={catalog.retry}>重新读取目录</button>}
+    <ul id="desktop-reference-options" role="listbox" aria-label="可用引用">
+      {catalog.items.map((item, index) => <li id={`desktop-reference-option-${index}`} role="option" aria-selected={index === option} key={item.handle}><button type="button" onClick={() => onSelect(item)}><strong>{item.name}</strong><small>{item.kind === "plugin" ? "插件" : item.kind === "app" ? "应用" : "技能"}{item.description && ` · ${item.description}`}</small></button></li>)}
+    </ul>
+    {!catalog.busy && !catalog.errors.length && !catalog.items.length && <p className="muted-text">没有可用引用</p>}
+    {catalog.hasMore && <button type="button" disabled={catalog.busy} onClick={onMore}>下一页</button>}
   </div>;
 }
