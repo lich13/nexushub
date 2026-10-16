@@ -98,10 +98,10 @@ fi
 
 SAFETY="/usr/share/nexushub-webd/install-safety.py"
 PUBLIC_KEY="/usr/share/nexushub-webd/updater.pub"
-command -v minisign >/dev/null 2>&1 && [[ -f "${PUBLIC_KEY}" && -f "${SAFETY}" ]] || {
+if ! command -v minisign >/dev/null 2>&1 || [[ ! -f "${PUBLIC_KEY}" || ! -f "${SAFETY}" ]]; then
   echo "installed signature verifier and public key are required" >&2
   exit 1
-}
+fi
 curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"
 curl -fL "${BASE_URL}/${ASSET}.sha256" -o "${TMP_DIR}/${ASSET}.sha256"
 curl -fL "${BASE_URL}/${ASSET}.sig" -o "${TMP_DIR}/${ASSET}.sig"
