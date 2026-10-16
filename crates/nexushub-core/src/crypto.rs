@@ -13,6 +13,14 @@ pub struct SecretBox {
 }
 
 impl SecretBox {
+    /// For native credential stores. Never persist this value beside ciphertext
+    /// or expose it to a WebView, configuration DTO or diagnostic output.
+    pub fn random_key_material() -> String {
+        let mut key = [0_u8; 32];
+        OsRng.fill_bytes(&mut key);
+        general_purpose::STANDARD.encode(key)
+    }
+
     pub fn from_key_material(value: &str) -> Result<Self> {
         let raw = parse_key_material(value)?;
         if raw.len() != 32 {
