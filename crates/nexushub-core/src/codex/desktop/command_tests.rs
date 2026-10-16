@@ -112,6 +112,7 @@ fn start_and_steer_messages_include_empty_text_elements() {
         "text_elements": []
     }]);
     let start = DesktopCommand::Start(MessageInput {
+        reference_spans: Vec::new(),
         client_id: CLIENT_ID.into(),
         text: "fixture prompt".into(),
         references: vec![],
@@ -127,6 +128,7 @@ fn start_and_steer_messages_include_empty_text_elements() {
 
     let steer = DesktopCommand::Steer {
         message: MessageInput {
+            reference_spans: Vec::new(),
             client_id: CLIENT_ID.into(),
             text: "fixture prompt".into(),
             references: vec![],
@@ -145,6 +147,7 @@ fn start_and_steer_messages_include_empty_text_elements() {
 #[test]
 fn start_requires_an_idle_writable_thread() {
     let command = DesktopCommand::Start(MessageInput {
+        reference_spans: Vec::new(),
         client_id: CLIENT_ID.into(),
         text: "fixture prompt".into(),
         references: vec![],
@@ -166,6 +169,7 @@ fn stop_and_steer_are_bound_to_the_expected_turn_identity() {
     let active = replica_with(active_state(TURN_ID));
     let steer = DesktopCommand::Steer {
         message: MessageInput {
+            reference_spans: Vec::new(),
             client_id: CLIENT_ID.into(),
             text: "fixture follow-up".into(),
             references: vec![],
@@ -179,6 +183,7 @@ fn stop_and_steer_are_bound_to_the_expected_turn_identity() {
 
     let wrong_steer = DesktopCommand::Steer {
         message: MessageInput {
+            reference_spans: Vec::new(),
             client_id: CLIENT_ID.into(),
             text: "fixture follow-up".into(),
             references: vec![],
@@ -278,6 +283,7 @@ fn start_projects_references_into_native_input_and_attachment_wrappers() {
         image_path.display()
     );
     let command = DesktopCommand::Start(MessageInput {
+        reference_spans: Vec::new(),
         client_id: CLIENT_ID.into(),
         text: "Describe these fixture files.".into(),
         references: vec![plain, image, skill, app, plugin],

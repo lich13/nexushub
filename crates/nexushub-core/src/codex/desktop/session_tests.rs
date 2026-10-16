@@ -118,6 +118,7 @@ async fn send_owner_response(stream: &mut UnixStream, request: &Value, owner_id:
 
 fn start_command() -> DesktopCommand {
     DesktopCommand::Start(MessageInput {
+        reference_spans: Vec::new(),
         client_id: "88888888-8888-4888-8888-888888888888".into(),
         text: "fixture start".into(),
         references: vec![],
@@ -135,6 +136,7 @@ fn settings_command() -> DesktopCommand {
 fn steer_command() -> DesktopCommand {
     DesktopCommand::Steer {
         message: MessageInput {
+            reference_spans: Vec::new(),
             client_id: "88888888-8888-4888-8888-888888888888".into(),
             text: "fixture steer".into(),
             references: vec![],
@@ -221,6 +223,7 @@ async fn each_dispatch_revalidates_references_before_owner_recheck() {
         "99999999-9999-4999-8999-999999999999",
     ] {
         let command = DesktopCommand::Start(MessageInput {
+            reference_spans: Vec::new(),
             client_id: client_id.into(),
             text: "fixture reference validation".into(),
             references: vec![reference.clone()],

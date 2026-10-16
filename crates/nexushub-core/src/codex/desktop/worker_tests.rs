@@ -101,6 +101,46 @@ fn source_id() -> String {
     "ab".repeat(32)
 }
 
+#[test]
+fn empty_spans_preserve_legacy_ledger_bytes_and_nonempty_spans_bind_identity() {
+    use super::super::references::{NativeReference, ReferenceSpan};
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger();
+    let source = source_id();
+    let references = vec![NativeReference::app("Fixture".into(), "app://fixture".into()).unwrap()];
+    let legacy = json!({"kind":"queue","text":"@Fixture","references":references});
+    let body = super::submission_body("queue", "@Fixture", &references, &[]);
+    assert_eq!(
+        serde_json::to_vec(&legacy).unwrap(),
+        serde_json::to_vec(&body).unwrap()
+    );
+    ledger
+        .enqueue(&source, THREAD_ID, FIRST_MESSAGE_ID, &legacy)
+        .unwrap();
+    ledger
+        .enqueue(&source, THREAD_ID, FIRST_MESSAGE_ID, &body)
+        .unwrap();
+    let body = super::submission_body(
+        "queue",
+        "@Fixture",
+        &references,
+        &[ReferenceSpan {
+            reference: 0,
+            start: 0,
+            end: 8,
+        }],
+    );
+    assert!(ledger
+        .enqueue(&source, THREAD_ID, FIRST_MESSAGE_ID, &body)
+        .is_err());
+    ledger
+        .enqueue(&source, THREAD_ID, SECOND_MESSAGE_ID, &body)
+        .unwrap();
+    let reopened = fixture.ledger();
+    let items = reopened.list(&source, THREAD_ID).unwrap();
+    assert_eq!(items[1].body.as_ref(), Some(&body));
+}
+
 fn turn(id: &str, status: &str) -> Value {
     json!({"id":id,"status":status,"items":[]})
 }

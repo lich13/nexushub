@@ -9,17 +9,37 @@ pub struct MessageInput {
     pub client_id: String,
     pub text: String,
     pub references: Vec<super::references::NativeReference>,
+    pub reference_spans: Vec<super::references::ReferenceSpan>,
 }
 
 impl MessageInput {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         uuid::Uuid::parse_str(&self.client_id).map_err(|_| DesktopError::InvalidIdentity)?;
         if (self.text.trim().is_empty() && self.references.is_empty())
             || self.text.len() > MAX_PROMPT_BYTES
             || self.text.contains('\0')
             || self.references.len() > 32
+            || self.reference_spans.len() > 32
+            || self.prompt().len() > MAX_PROMPT_BYTES
         {
             return Err(DesktopError::InvalidInput);
+        }
+        let mut ranges: Vec<_> = self.reference_spans.iter().collect();
+        ranges.sort_unstable_by_key(|span| span.start);
+        let mut previous_end = 0;
+        for span in ranges {
+            let placeholder = self
+                .references
+                .get(span.reference)
+                .and_then(|reference| reference.placeholder())
+                .ok_or(DesktopError::InvalidInput)?;
+            if span.start < previous_end
+                || span.start >= span.end
+                || self.text.get(span.start..span.end) != Some(placeholder.as_str())
+            {
+                return Err(DesktopError::InvalidInput);
+            }
+            previous_end = span.end;
         }
         Ok(())
     }
@@ -28,9 +48,23 @@ impl MessageInput {
         // The private desktop bridge reads text_elements.length directly,
         // despite the public app-server schema allowing this field to be absent.
         let prompt = self.prompt();
+        let offset = prompt.len() - self.text.len();
+        let mut spans: Vec<_> = self.reference_spans.iter().collect();
+        spans.sort_unstable_by_key(|span| span.start);
+        // Desktop build 20586 uses camelCase byteRange inside text_elements.
+        // The outer field is snake_case; public core TextElement is not the IPC DTO.
+        let elements: Vec<_> = spans
+            .into_iter()
+            .map(|span| {
+                json!({
+                    "byteRange": {"start": offset + span.start, "end": offset + span.end},
+                    "placeholder": self.references[span.reference].placeholder(),
+                })
+            })
+            .collect();
         let mut input = Vec::new();
         if !prompt.trim().is_empty() {
-            input.push(json!({"type":"text", "text":prompt, "text_elements":[]}));
+            input.push(json!({"type":"text", "text":prompt, "text_elements":elements}));
         }
         input.extend(
             self.references
@@ -461,3 +495,7 @@ fn validate_form(schema: &Value, content: &Value) -> Result<()> {
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod input_tests;

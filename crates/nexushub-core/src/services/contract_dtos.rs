@@ -3,6 +3,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "DesktopSessionRequest",
     "DesktopActionRequest",
     "DesktopAction",
+    "DesktopReferenceSpan",
     "DesktopMode",
     "DesktopAnswer",
     "DesktopView",

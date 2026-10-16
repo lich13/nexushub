@@ -4,9 +4,10 @@ export type DesktopMode = "default" | "plan";
 export type DesktopThreadRequest = { revision: number; threadId: string };
 export type DesktopSessionRequest = { revision: number; sessionId: string };
 export type DesktopAnswer = { questionId: string; answers: string[] };
+export type DesktopReferenceSpan = { handle: string; start: number; end: number };
 export type DesktopAction =
-  | { type: "send"; messageId: string; text: string; references: string[] }
-  | { type: "steer"; messageId: string; text: string; references: string[]; turnId: string }
+  | { type: "send"; messageId: string; text: string; references: string[]; referenceSpans?: DesktopReferenceSpan[] }
+  | { type: "steer"; messageId: string; text: string; references: string[]; referenceSpans?: DesktopReferenceSpan[]; turnId: string }
   | { type: "stop"; turnId: string }
   | { type: "cancelQueued" | "dismissUnknown"; messageId: string }
   | { type: "resumeQueue" }

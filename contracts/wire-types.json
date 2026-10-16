@@ -124,6 +124,10 @@
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopQueuedMessage",
       "ts": "webui/src/lib/api/desktop.ts#DesktopQueuedMessage"
     },
+    "DesktopReferenceSpan": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopReferenceSpan",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopReferenceSpan"
+    },
     "DesktopSessionRequest": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopSessionRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopSessionRequest"
@@ -1234,6 +1238,29 @@
             "name": "Plugin",
             "serde": []
           }
+        ]
+      },
+      "ReferenceSpan": {
+        "fields": [
+          {
+            "name": "reference",
+            "serde": [],
+            "type": "usize"
+          },
+          {
+            "name": "start",
+            "serde": [],
+            "type": "usize"
+          },
+          {
+            "name": "end",
+            "serde": [],
+            "type": "usize"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
         ]
       }
     },
@@ -4859,6 +4886,13 @@
                 "name": "references",
                 "serde": [],
                 "type": "Vec < String >"
+              },
+              {
+                "name": "reference_spans",
+                "serde": [
+                  "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+                ],
+                "type": "Vec < DesktopReferenceSpan >"
               }
             ],
             "name": "Send",
@@ -4880,6 +4914,13 @@
                 "name": "references",
                 "serde": [],
                 "type": "Vec < String >"
+              },
+              {
+                "name": "reference_spans",
+                "serde": [
+                  "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+                ],
+                "type": "Vec < DesktopReferenceSpan >"
               },
               {
                 "name": "turn_id",
@@ -5372,6 +5413,29 @@
         "kind": "struct",
         "serde": [
           "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "DesktopReferenceSpan": {
+        "fields": [
+          {
+            "name": "handle",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "start",
+            "serde": [],
+            "type": "usize"
+          },
+          {
+            "name": "end",
+            "serde": [],
+            "type": "usize"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
         ]
       },
       "DesktopSessionRequest": {
@@ -9554,7 +9618,8 @@
         "DesktopThreadRequest": "exporttypeDesktopThreadRequest={revision:number;threadId:string};",
         "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
         "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
-        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[]}|{type:\"steer\";messageId:string;text:string;references:string[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
+        "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
+        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
         "DesktopActionRequest": "exporttypeDesktopActionRequest=DesktopSessionRequest&{action:DesktopAction};",
         "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
         "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
