@@ -23,7 +23,9 @@ use tauri::{ipc::Channel, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
+mod attachments;
 mod catalogs;
+mod clipboard;
 mod selection;
 use selection::{GrantValue, Grants};
 
@@ -37,15 +39,18 @@ pub struct CodexDesktopBridge {
     intent: AtomicU64,
     grants: Mutex<Grants>,
     catalogs: catalogs::Catalogs,
+    receiver: Mutex<Option<attachments::Receiver>>,
+    importing: Mutex<()>,
 }
 
 struct BridgeRuntime {
-    _lease: DesktopWorkerLease,
+    _lease: Arc<DesktopWorkerLease>,
     ledger: DesktopLedger,
     codex_home: PathBuf,
     source: String,
     workers: Mutex<HashMap<String, DesktopWorker>>,
     selection: Mutex<Option<Selection>>,
+    attachments: Arc<std::sync::Mutex<nexushub_core::codex::desktop::attachments::AttachmentStore>>,
 }
 
 struct Selection {
@@ -62,6 +67,8 @@ impl CodexDesktopBridge {
             intent: AtomicU64::new(0),
             grants: Mutex::new(Grants::default()),
             catalogs: catalogs::Catalogs::default(),
+            receiver: Mutex::new(None),
+            importing: Mutex::new(()),
         }
     }
 
@@ -71,12 +78,20 @@ impl CodexDesktopBridge {
             return Ok(runtime.clone());
         }
         let db = state.db.clone();
+        let attachment_root =
+            nexushub_core::codex::desktop::attachments::root_for_database(db.path());
+        let existing_root = attachment_root.clone();
         let home = state.codex_paths().home;
         let (lease, home, existing) = nexushub_core::read_tasks::spawn_blocking(move || {
             let lease = DesktopLedger::lock_database(&db)
                 .map_err(|_| "另一个 NexusHub 正在使用本机发送队列")?;
-            let existing =
-                DesktopLedger::has_encrypted_messages(&db).map_err(|_| "无法读取本机发送队列")?;
+            let existing = DesktopLedger::has_encrypted_messages(&db)
+                .map_err(|_| "无法读取本机发送队列")?
+                || match std::fs::symlink_metadata(existing_root) {
+                    Ok(_) => true,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(_) => return Err("无法核对粘贴附件存储".into()),
+                };
             let home = home.canonicalize().map_err(|_| "无法定位本机 Codex")?;
             Ok::<_, String>((lease, home, existing))
         })
@@ -110,13 +125,28 @@ impl CodexDesktopBridge {
             .await
             .map_err(|_| "钥匙串未及时响应，请检查系统授权")??;
         let source = nexushub_core::security::hash_token(&home.to_string_lossy());
+        let attachment_crypto = crypto.clone();
+        let (attachments, lease) = nexushub_core::read_tasks::spawn_blocking(move || {
+            let attachments = nexushub_core::codex::desktop::attachments::AttachmentStore::open(
+                attachment_root,
+                attachment_crypto,
+                chrono::Utc::now().timestamp().max(0) as u64,
+            )?;
+            Ok::<_, &'static str>((attachments, Arc::new(lease)))
+        })
+        .await
+        .map_err(|_| "无法初始化粘贴附件存储")??;
         let ledger = DesktopLedger::new(state.db.clone(), crypto);
         let recovery = ledger.clone();
         let recovery_source = source.clone();
-        nexushub_core::read_tasks::spawn_blocking(move || recovery.recover(&recovery_source))
-            .await
-            .map_err(|_| "无法恢复本机发送队列")?
-            .map_err(|_| "无法恢复本机发送队列")?;
+        let recovery_lease = lease.clone();
+        nexushub_core::read_tasks::spawn_blocking(move || {
+            let _lease = recovery_lease;
+            recovery.recover(&recovery_source)
+        })
+        .await
+        .map_err(|_| "无法恢复本机发送队列")?
+        .map_err(|_| "无法恢复本机发送队列")?;
         let runtime = Arc::new(BridgeRuntime {
             _lease: lease,
             ledger,
@@ -124,6 +154,7 @@ impl CodexDesktopBridge {
             source,
             workers: Mutex::new(HashMap::new()),
             selection: Mutex::new(None),
+            attachments: Arc::new(std::sync::Mutex::new(attachments)),
         });
         *slot = Some(runtime.clone());
         Ok(runtime)
@@ -292,15 +323,22 @@ pub async fn action(
             )
             .collect::<Result<Vec<_>, String>>()?
     };
+    let attachments = runtime.attachments.clone();
     let references = nexushub_core::read_tasks::spawn_blocking(move || {
-        references
+        // The same mutex serializes draft cleanup and handoff retention. A file
+        // cannot be released between capture and the durable retention marker.
+        let mut store = attachments.lock().map_err(|_| "无法核对粘贴附件")?;
+        let references = references
             .into_iter()
             .map(|reference| reference.capture())
             .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "所选引用已变化，请重新选择")?;
+        store.retain_before_send(&references)?;
+        Ok::<_, &'static str>(references)
     })
     .await
     .map_err(|_| "无法核对所选引用")?
-    .map_err(desktop_error)?;
+    .map_err(str::to_owned)?;
     if let DesktopAction::Settings {
         model,
         reasoning_effort,
@@ -354,6 +392,10 @@ pub async fn detach(
     bridge: State<'_, CodexDesktopBridge>,
     request: DesktopSessionRequest,
 ) -> Result<DesktopAck, String> {
+    let receiver = bridge.receiver.lock().await.clone();
+    if let Some(receiver) = receiver.filter(|receiver| receiver.session() == request.session_id) {
+        attachments::unbind(&bridge, receiver.id()).await;
+    }
     // Releasing an old callback is always safe, including after machine change.
     // Only the matching subscription is revoked; queued user work remains owned
     // by its original local worker and cannot migrate to a remote machine.
@@ -370,6 +412,26 @@ pub async fn detach(
         }
     }
     Ok(DesktopAck { ok: true })
+}
+
+#[tauri::command(rename = "codex.desktop.attachments")]
+pub async fn attachments(
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopState>,
+    remote: State<'_, RemoteConnections>,
+    bridge: State<'_, CodexDesktopBridge>,
+    request: DesktopAttachmentRequest,
+    on_event: Channel<DesktopAttachmentEvent>,
+) -> Result<DesktopAttachmentResult, String> {
+    attachments::handle(window, &state, &remote, &bridge, request, on_event).await
+}
+
+pub(crate) fn native_drop(
+    window: tauri::WebviewWindow,
+    paths: Vec<PathBuf>,
+    position: tauri::PhysicalPosition<f64>,
+) {
+    attachments::drop_files(window, paths, position);
 }
 
 #[tauri::command(rename = "codex.desktop.open")]

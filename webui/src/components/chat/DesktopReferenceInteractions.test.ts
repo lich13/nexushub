@@ -8,7 +8,11 @@ const hooks = vi.hoisted(() => ({
   cells: new Map<number, unknown>(),
   desktop: null as any,
   catalog: null as any,
-  catalogCalls: [] as unknown[][]
+  catalogCalls: [] as unknown[][],
+  attachments: null as any,
+  attachmentSessionId: undefined as string | undefined,
+  attachmentReceive: null as ((items: any[]) => void) | null,
+  attachmentHandles: [] as string[]
 }));
 
 vi.mock("react", async importOriginal => ({
@@ -30,6 +34,14 @@ vi.mock("react", async importOriginal => ({
 }));
 
 vi.mock("../../hooks/useCodexDesktop", () => ({ useCodexDesktop: () => hooks.desktop }));
+vi.mock("../../hooks/useDesktopAttachments", () => ({
+  useDesktopAttachments: (sessionId: string | undefined, _region: unknown, handles: string[], receive: (items: any[]) => void) => {
+    hooks.attachmentSessionId = sessionId;
+    hooks.attachmentHandles = handles;
+    hooks.attachmentReceive = sessionId ? receive : null;
+    return hooks.attachments;
+  }
+}));
 vi.mock("../../hooks/useDesktopReferenceCatalog", () => ({
   useDesktopReferenceCatalog: (sessionId: string | undefined, kind: string, query: string) => {
     hooks.catalogCalls.push([sessionId, kind, query]);
@@ -44,11 +56,12 @@ vi.mock("../../lib/query/desktop", () => ({
 
 type Element = ReactElement<Record<string, any>>;
 
-function view(): DesktopView {
+function view(overrides: Partial<DesktopView> = {}): DesktopView {
   return {
     sessionId: "session-fixture", threadId: "thread-fixture", revision: 1,
     connected: true, writable: true, runtime: "codex", activeTurnId: null,
-    model: null, reasoningEffort: null, mode: null, requests: [], queue: [], error: null
+    model: null, reasoningEffort: null, mode: null, requests: [], queue: [], error: null,
+    ...overrides
   };
 }
 
@@ -86,6 +99,15 @@ function keyEvent(key: string, composing = false) {
   };
 }
 
+function attachmentItem(index: number) {
+  return { handle: `file-handle-${index}-fixture`, name: `file-${index}.txt`, kind: "file" };
+}
+
+function receiveAttachments(items: ReturnType<typeof attachmentItem>[]) {
+  if (!hooks.attachmentReceive) throw new Error("Desktop attachment callback fixture is missing");
+  hooks.attachmentReceive(items);
+}
+
 async function flushMicrotasks() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
@@ -106,6 +128,10 @@ beforeEach(() => {
     ],
     busy: false, errors: [], hasMore: false, more: vi.fn(), retry: vi.fn()
   };
+  hooks.attachments = { paste: vi.fn(), release: vi.fn() };
+  hooks.attachmentSessionId = undefined;
+  hooks.attachmentReceive = null;
+  hooks.attachmentHandles = [];
   let id = 0;
   vi.stubGlobal("crypto", { randomUUID: () => `message-fixture-${++id}` });
 });
@@ -113,6 +139,19 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("desktop composer reference interactions", () => {
+  test.each([
+    ["detached", null],
+    ["disconnected", view({ connected: false })],
+    ["read-only", view({ writable: false })]
+  ])("shows the connection row without stale status for a %s snapshot", (_description, snapshot) => {
+    hooks.desktop.view = snapshot;
+    const tree = render();
+
+    expect(required(tree, element => element.type === "div" && element.props.className === "desktop-connect-row")).toBeTruthy();
+    expect(elements(tree).some(element => element.props.className === "desktop-collaboration-status")).toBe(false);
+    expect(required(tree, element => element.type === "button" && element.props.children === "连接")).toBeTruthy();
+  });
+
   test.each([
     { text: "$dia", kind: "skills", query: "dia" },
     { text: "please @rev", kind: "mentions", query: "rev" }
@@ -199,5 +238,62 @@ describe("desktop composer reference interactions", () => {
     });
     expect(Object.keys(action).sort()).toEqual(["messageId", "referenceSpans", "references", "text", "type"]);
     expect(JSON.stringify(action)).not.toContain("example.invalid/private-fixture");
+  });
+
+  test("rejects an over-limit attachment batch atomically and releases every incoming handle", () => {
+    render();
+    const existing = Array.from({ length: 31 }, (_, index) => attachmentItem(index));
+    receiveAttachments(existing);
+    render();
+    expect(hooks.attachmentHandles).toEqual(existing.map(item => item.handle));
+
+    hooks.attachments.release.mockClear();
+    const incoming = [attachmentItem(31), attachmentItem(32)];
+    receiveAttachments(incoming);
+    const tree = render();
+
+    expect(hooks.attachmentHandles).toEqual(existing.map(item => item.handle));
+    expect(hooks.attachments.release).toHaveBeenCalledExactlyOnceWith(incoming.map(item => item.handle));
+    expect(elements(tree).some(element => element.props.role === "alert" && element.props.children === "引用数量超出限制，本次附件未添加")).toBe(true);
+  });
+
+  test("releases a removed attachment handle", () => {
+    render();
+    const item = attachmentItem(0);
+    receiveAttachments([item]);
+    const tree = render();
+    required(tree, element => element.type === "button" && element.props["aria-label"] === `移除 ${item.name}`).props.onClick();
+    const afterRemoval = render();
+
+    expect(hooks.attachments.release).toHaveBeenCalledExactlyOnceWith([item.handle]);
+    expect(hooks.attachmentHandles).toEqual([]);
+    expect(elements(afterRemoval).some(element => element.props.className === "desktop-reference-chips")).toBe(false);
+  });
+
+  test("pauses native attachment receiving while a desktop action is busy", () => {
+    render();
+    expect(hooks.attachmentSessionId).toBe("session-fixture");
+
+    hooks.desktop.busy = true;
+    render();
+
+    expect(hooks.attachmentSessionId).toBeUndefined();
+    expect(hooks.attachmentReceive).toBeNull();
+  });
+
+  test("pauses native attachment receiving while choosing a file", async () => {
+    const tree = render();
+    expect(hooks.attachmentSessionId).toBe("session-fixture");
+
+    required(tree, element => element.type === "button" && element.props.title === "添加文件或图片").props.onClick();
+    const choosing = render();
+
+    expect(hooks.attachmentSessionId).toBeUndefined();
+    expect(hooks.attachmentReceive).toBeNull();
+    expect(textarea(choosing).props.disabled).toBe(true);
+
+    await flushMicrotasks();
+    render();
+    expect(hooks.attachmentSessionId).toBe("session-fixture");
   });
 });

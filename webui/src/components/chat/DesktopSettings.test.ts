@@ -59,6 +59,9 @@ vi.mock("../../hooks/useCodexDesktop", () => ({ useCodexDesktop: () => hooks.des
 vi.mock("../../hooks/useDesktopReferenceCatalog", () => ({
   useDesktopReferenceCatalog: () => ({ items: [], busy: false, errors: [], hasMore: false, more: () => undefined, retry: () => undefined })
 }));
+vi.mock("../../hooks/useDesktopAttachments", () => ({
+  useDesktopAttachments: () => ({ paste: vi.fn(), release: vi.fn() })
+}));
 vi.mock("../../lib/query/desktop", () => ({
   chooseDesktopItem: vi.fn(),
   createDesktopThread: vi.fn(),

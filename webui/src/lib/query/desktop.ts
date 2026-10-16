@@ -3,6 +3,8 @@
 export {
   actOnDesktopThread, attachDesktopThread, chooseDesktopItem, createDesktopThread,
   desktopCatalog, openDesktopThread,
+  bindDesktopAttachments,
   type DesktopAction, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode,
-  type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview
+  type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview,
+  type DesktopAttachmentBounds, type DesktopAttachmentEvent
 } from "../api/desktop";

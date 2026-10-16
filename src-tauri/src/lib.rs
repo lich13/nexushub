@@ -22,6 +22,7 @@ pub fn run() {
         codex_desktop::catalog,
         codex_desktop::choose,
         codex_desktop::create,
+        codex_desktop::attachments,
         commands::plans::savePlanMarkdown,
         remote::remoteGet,
         remote::remoteVerify,
@@ -81,6 +82,26 @@ pub fn run() {
                 return true;
             }
             active_handler(invoke)
+        })
+        .on_window_event(|window, event| {
+            // Wry's single-webview window routes OS drops as WindowEvent;
+            // multi-webview surfaces use WebviewEvent below. Neither uses JS.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) =
+                event
+            {
+                if let Some(window) = window.app_handle().get_webview_window(window.label()) {
+                    codex_desktop::native_drop(window, paths.clone(), *position);
+                }
+            }
+        })
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) =
+                event
+            {
+                if let Some(window) = webview.app_handle().get_webview_window(webview.label()) {
+                    codex_desktop::native_drop(window, paths.clone(), *position);
+                }
+            }
         })
         .setup(|app| {
             if let Err(err) = resources::retire_legacy_desktop_web_service(

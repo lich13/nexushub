@@ -34,6 +34,16 @@ export type DesktopCatalog = { items: DesktopCatalogItem[]; nextCursor: string |
 export type DesktopChooseRequest = { revision: number; sessionId: string | null; kind: string };
 export type DesktopChosenItem = { handle: string; name: string; kind: string };
 export type DesktopChoice = { item: DesktopChosenItem | null };
+export type DesktopAttachmentBounds = { x: number; y: number; width: number; height: number };
+export type DesktopAttachmentAction =
+  | { type: "bind"; bounds: DesktopAttachmentBounds; handles: string[] }
+  | { type: "bounds"; bindingId: string; bounds: DesktopAttachmentBounds; handles: string[] }
+  | { type: "paste"; bindingId: string }
+  | { type: "release"; bindingId: string; handles: string[] }
+  | { type: "unbind"; bindingId: string };
+export type DesktopAttachmentRequest = DesktopSessionRequest & { action: DesktopAttachmentAction };
+export type DesktopAttachmentEvent = { bindingId: string; items: DesktopChosenItem[]; error: string | null };
+export type DesktopAttachmentResult = { bindingId: string };
 export type DesktopCreateRequest = { revision: number; projectHandle: string };
 export type DesktopCreatedThread = { threadId: string };
 export type DesktopAck = { ok: boolean };
@@ -77,4 +87,32 @@ export function chooseDesktopItem(kind: string, sessionId: string | null = null)
 }
 export function createDesktopThread(projectHandle: string) {
   return runtimeRpc<DesktopCreatedThread>("codex.desktop.create", { request: { revision: localRevision(), projectHandle } satisfies DesktopCreateRequest }, true);
+}
+
+export async function bindDesktopAttachments(sessionId: string, bounds: DesktopAttachmentBounds, handles: string[], receive: (event: DesktopAttachmentEvent) => void) {
+  const revision = localRevision();
+  let bindingId: string | undefined;
+  let closed = false;
+  const pending: DesktopAttachmentEvent[] = [];
+  const channel = createNativeChannel<DesktopAttachmentEvent>(event => {
+    if (closed || connectionSnapshot().revision !== revision) return;
+    if (!bindingId) { if (pending.length < 32) pending.push(event); return; }
+    if (event.bindingId === bindingId) receive(event);
+  });
+  const action = (action: DesktopAttachmentAction) => runtimeRpc<DesktopAttachmentResult>("codex.desktop.attachments", { request: { revision, sessionId, action } satisfies DesktopAttachmentRequest, onEvent: channel.value }, true);
+  try {
+    const result = await runtimeRpc<DesktopAttachmentResult>("codex.desktop.attachments", { request: { revision, sessionId, action: { type: "bind", bounds, handles } } satisfies DesktopAttachmentRequest, onEvent: channel.value }, true);
+    bindingId = result.bindingId;
+    for (const event of pending) if (event.bindingId === bindingId && connectionSnapshot().revision === revision) receive(event);
+    return {
+      update: (bounds: DesktopAttachmentBounds, handles: string[]) => action({ type: "bounds", bindingId: result.bindingId, bounds, handles }),
+      paste: () => action({ type: "paste", bindingId: result.bindingId }),
+      release: (handles: string[]) => action({ type: "release", bindingId: result.bindingId, handles }),
+      close: async () => {
+        if (closed) return;
+        closed = true; channel.close();
+        await invokeNative<DesktopAttachmentResult>("codex.desktop.attachments", { request: { revision, sessionId, action: { type: "unbind", bindingId: result.bindingId } } satisfies DesktopAttachmentRequest, onEvent: channel.value });
+      }
+    };
+  } catch (error) { closed = true; channel.close(); throw error; }
 }
