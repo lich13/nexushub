@@ -79,7 +79,7 @@ if "linux-tauri:" in ci or "linux-tauri" in release:
 for stale in ["AppImage", ".deb", ".rpm", '"linux-x86_64"', "xvfb-run", "package-linux-tauri-x86_64.sh"]:
     if stale in release:
         raise SystemExit(f"Release retains retired marker: {stale}")
-for marker in ["webd-linux:", "macos:", "nexushub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected seven release assets"]:
+for marker in ["webd-linux:", "macos:", "nexushub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected eight release assets"]:
     if marker not in release:
         raise SystemExit(f"Release missing marker: {marker}")
 
@@ -120,6 +120,8 @@ PY
 
 shellcheck deploy/nexushub-webd/install.sh deploy/nexushub-webd/update.sh deploy/nexushub-webd/rollback.sh scripts/deploy-cloud.sh
 python3 scripts/test-install-safety.py
+python3 scripts/test-install-signatures.py
+node --test scripts/test-security-audit.mjs
 python3 scripts/check-workspaces.py
 python3 scripts/test-check-workspaces.py
 python3 scripts/check-versions.py

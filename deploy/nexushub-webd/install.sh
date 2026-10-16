@@ -69,6 +69,8 @@ check_layout() {
   local root
   root="$(archive_root_from_deploy)"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing executable bin/${BIN_NAME}"
+  [[ -f "${root}/deploy/updater.pub" ]] || die "archive missing updater public key"
+  [[ -f "${root}/deploy/install-safety.py" ]] || die "archive missing installer validator"
   [[ -f "${root}/deploy/install.sh" ]] || die "archive missing deploy/install.sh"
   [[ -f "${root}/deploy/update.sh" ]] || die "archive missing deploy/update.sh"
   [[ -f "${root}/deploy/systemd.service" ]] || die "archive missing deploy/systemd.service"
@@ -547,6 +549,7 @@ main() {
   fi
   require_root
   require_command python3
+  require_command minisign
   TRANSACTION="$(mktemp -d)"
   trap finish_install EXIT
   if systemctl is-active --quiet "${SERVICE_NAME}.service"; then WAS_ACTIVE=1; fi
@@ -555,6 +558,7 @@ main() {
   retire_web_payload
   install_codex_wrappers
   replace_file "${SAFETY}" "${SHARE_DIR}/install-safety.py" 0644
+  replace_file "$(script_dir)/updater.pub" "${SHARE_DIR}/updater.pub" 0644
   install_config
   install_codex_home_write_paths
   install_systemd

@@ -19,6 +19,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify version, contract, privacy and matching CI
@@ -49,32 +50,57 @@ jobs:
     name: Linux webd asset
     runs-on: ubuntu-24.04
     needs: guard
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
+        with:
+          toolchain: 1.99.0
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-v1-release-webd-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-v1-release-webd-
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-release-webd-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-release-webd-
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.21.0
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
+      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y minisign
       - run: bash scripts/package-webd-linux-x86_64.sh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexushub-webd-linux-x86_64
           path: |
             dist/nexushub-webd-linux-x86_64.tar.gz
             dist/nexushub-webd-linux-x86_64.tar.gz.sha256
+            dist/nexushub-webd-linux-x86_64.tar.gz.sig
 
   macos:
     name: macOS arm64 assets
     runs-on: macos-14
     needs: guard
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
+        with:
+          toolchain: 1.99.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 12.11.2
@@ -88,8 +114,8 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-v1-pnpm-
+          key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -97,8 +123,8 @@ jobs:
             ~/.cargo/git
             target
             src-tauri/target
-          key: ${{ runner.os }}-v1-release-macos-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-v1-release-macos-
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-release-macos-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-release-macos-
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
       - run: bash scripts/package-darwin-arm64.sh
         env:
@@ -114,11 +140,12 @@ jobs:
             dist/NexusHub-*-darwin-arm64.dmg.sha256
 
   release:
-    name: Publish seven assets
+    name: Publish eight assets
     runs-on: ubuntu-24.04
     needs: [webd-linux, macos]
     permissions:
       contents: write
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -152,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           count="$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')"
-          [[ "${count}" == "7" ]] || { echo "expected seven release assets, found ${count}" >&2; find dist -maxdepth 1 -type f -print; exit 1; }
+          [[ "${count}" == "8" ]] || { echo "expected eight release assets, found ${count}" >&2; find dist -maxdepth 1 -type f -print; exit 1; }
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           body_path: ${{ runner.temp }}/release-notes.md
@@ -164,3 +191,4 @@ jobs:
             dist/latest.json
             dist/nexushub-webd-linux-x86_64.tar.gz
             dist/nexushub-webd-linux-x86_64.tar.gz.sha256
+            dist/nexushub-webd-linux-x86_64.tar.gz.sig
