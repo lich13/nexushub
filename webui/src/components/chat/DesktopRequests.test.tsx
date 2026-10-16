@@ -59,4 +59,15 @@ describe("Codex desktop pending requests", () => {
     expect(html).not.toContain("提交回答");
     expect(html).not.toContain("<form");
   });
+
+  test.each([
+    ["旧服务未声明", "command", undefined, false],
+    ["支持会话级命令审批", "command", ["acceptForSession"], true],
+    ["支持会话级文件审批", "file", ["acceptForSession"], true],
+    ["权限审批仍仅限本回合", "permissions", ["acceptForSession"], false]
+  ])("会话级审批按钮受后端能力门控：%s", (_label, kind, supportedDecisions, shown) => {
+    const html = render([request({ kind, canAccept: true, supportedDecisions })]);
+
+    expect(html.includes("允许本次会话")).toBe(shown);
+  });
 });

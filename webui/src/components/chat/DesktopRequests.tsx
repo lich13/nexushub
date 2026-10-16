@@ -26,6 +26,7 @@ function RequestBody({ request, busy, act, open }: { request: DesktopPendingRequ
           {["command", "file", "permissions"].includes(request.kind) && <>
             <button disabled={busy} onClick={() => run({ type: "decide", requestKey: request.key, allow: false })}>拒绝</button>
             {request.canAccept && <button disabled={busy} onClick={() => run({ type: "decide", requestKey: request.key, allow: true })}>允许本次</button>}
+            {request.canAccept && ["command", "file"].includes(request.kind) && request.supportedDecisions?.includes("acceptForSession") && <button disabled={busy} onClick={() => run({ type: "decide", requestKey: request.key, allow: true, decision: "acceptForSession" })}>允许本次会话</button>}
           </>}
           {request.kind === "elicitation" && <button disabled={busy} onClick={() => run({ type: "elicitation", requestKey: request.key, accept: false, content: null })}>拒绝</button>}
           {!request.canAccept && <span className="muted-text">请在 Codex 中查看完整请求并处理。</span>}
