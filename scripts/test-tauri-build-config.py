@@ -2,10 +2,12 @@
 """Exercise signed/unsigned hooks and reject server assets in skip mode."""
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("build_config", Path(__file__).with_name("tauri-build-config.py"))
 build_config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_config)
