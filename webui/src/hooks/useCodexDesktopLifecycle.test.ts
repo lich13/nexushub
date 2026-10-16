@@ -18,7 +18,8 @@ const lifecycle = vi.hoisted(() => ({
   cache: {
     invalidateThread: vi.fn(),
     invalidateThreads: vi.fn(),
-    invalidateThreadAndThreads: vi.fn()
+    invalidateThreadAndThreads: vi.fn(),
+    refreshDesktopThread: vi.fn(async (_threadId: string): Promise<void> => undefined)
   }
 }));
 
@@ -155,6 +156,7 @@ beforeEach(() => {
   lifecycle.cache.invalidateThread.mockReset();
   lifecycle.cache.invalidateThreads.mockReset();
   lifecycle.cache.invalidateThreadAndThreads.mockReset();
+  lifecycle.cache.refreshDesktopThread.mockReset().mockResolvedValue(undefined);
 
   const documentFixture = {
     hidden: false,
@@ -180,6 +182,8 @@ beforeEach(() => {
 afterEach(async () => {
   unmount();
   await flushMicrotasks();
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -235,6 +239,7 @@ describe("Codex desktop hook lifecycle", () => {
   });
 
   test("hiding detaches the UI subscription and becoming visible attaches again", async () => {
+    vi.useFakeTimers();
     const connected = await connect("thread-visible");
     const documentFixture = lifecycle.documentFixture as { hidden: boolean };
     const notifyVisibility = () => {
@@ -249,6 +254,10 @@ describe("Codex desktop hook lifecycle", () => {
     expect(hidden.busy).toBe(false);
     expect(connected.detach).toHaveBeenCalledOnce();
     expect(attachmentList()).toHaveLength(1);
+    connected.attachment.receive(desktopView("thread-visible", "session-thread-visible", 90));
+    expect(render("thread-visible").view).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lifecycle.cache.refreshDesktopThread).not.toHaveBeenCalled();
 
     documentFixture.hidden = false;
     notifyVisibility();
@@ -259,5 +268,64 @@ describe("Codex desktop hook lifecycle", () => {
     resolveAttachment(resumedAttachment, resumedView);
     await flushMicrotasks();
     expect(render("thread-visible").view).toEqual(resumedView);
+  });
+
+  test("a new session drops late stream updates from the previous session", async () => {
+    vi.useFakeTimers();
+    const connected = await connect("thread-session");
+    await vi.advanceTimersByTimeAsync(350);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+    const current = render("thread-session").view;
+
+    connected.attachment.receive(desktopView("thread-session", "session-replaced", 90));
+    expect(render("thread-session").view).toEqual(current);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+  });
+
+  test("approval and completion events during a slow detail read get one trailing refresh", async () => {
+    vi.useFakeTimers();
+    const slow = deferred<void>();
+    lifecycle.cache.refreshDesktopThread.mockReturnValueOnce(slow.promise);
+    const connected = await connect("thread-refresh");
+    await vi.advanceTimersByTimeAsync(350);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+
+    connected.attachment.receive({
+      ...desktopView("thread-refresh", "session-thread-refresh", 2),
+      requests: [{
+        key: "request-fixture", kind: "command", title: "Fixture request", body: "",
+        questions: [], formSchema: null, canAccept: true
+      }]
+    });
+    const completed = { ...desktopView("thread-refresh", "session-thread-refresh", 3), runtime: "idle" };
+    connected.attachment.receive(completed);
+    expect(render("thread-refresh").view).toEqual(completed);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+    slow.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(349);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(2);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenLastCalledWith("thread-refresh");
+  });
+
+  test("manual actions request a coalesced thread detail refresh", async () => {
+    vi.useFakeTimers();
+    const connected = await connect("thread-action");
+    await vi.advanceTimersByTimeAsync(350);
+    lifecycle.cache.refreshDesktopThread.mockClear();
+    vi.mocked(actOnDesktopThread).mockResolvedValueOnce(desktopView("thread-action", "session-thread-action", 2));
+
+    await connected.desktop.act({ type: "stop", turnId: "turn-fixture" });
+    expect(lifecycle.cache.refreshDesktopThread).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(349);
+    expect(lifecycle.cache.refreshDesktopThread).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledOnce();
+    expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledWith("thread-action");
   });
 });

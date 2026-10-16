@@ -310,6 +310,8 @@ export function useThreadCacheActions() {
       qc.invalidateQueries({ queryKey: threadQueryKeys.threads(), ...(refetchType ? { refetchType } : {}) }),
     invalidateThread: (threadId: string, refetchType?: "active" | "all" | "inactive" | "none") =>
       qc.invalidateQueries({ queryKey: threadQueryKeys.thread(threadId), ...(refetchType ? { refetchType } : {}) }),
+    refreshDesktopThread: (threadId: string) =>
+      qc.invalidateQueries({ queryKey: threadQueryKeys.thread(threadId) }, { cancelRefetch: false }),
     invalidateThreadAndThreads: (threadId: string, refetchType?: "active" | "all" | "inactive" | "none") => {
       qc.invalidateQueries({ queryKey: threadQueryKeys.thread(threadId), ...(refetchType ? { refetchType } : {}) });
       qc.invalidateQueries({ queryKey: threadQueryKeys.threads(), ...(refetchType ? { refetchType } : {}) });
