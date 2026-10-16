@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.23": [
+        "限制 API 回环监听、受控更新命令和 Bark 地址，保持现有功能与协议兼容",
+        "Linux 更新增加分离签名验证，规范解包权限并强化依赖审计与构建门禁。",
+    ],
     "1.2.22": [
         "加固迁移、管理操作和安装回滚，保留现有会话与兼容行为",
         "整理读取模块、资源预算与文档，统一远程机器文案并补强契约检查。",
@@ -159,6 +163,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.23":
+        sections = {
+            "版本概览": ["本版加固现有监听、更新链与工程检查，保留既有阅读、通知及管理流程。"],
+            "功能调整": [
+                "不新增用户功能、RPC、设置或界面入口；Codex、Claude Code、Grok、Probe 和现有管理保护保持原有边界。",
+                "开发与 CI 固定 Rust 1.99.0，最低 Rust 声明为 1.88；前端依赖采用锁文件中的精确版本。",
+            ],
+            "问题修复": [
+                "拒绝非回环 API 监听，在数据库及后台任务启动前返回固定错误。更新与 Probe 任务使用固定程序和字面参数，不执行自定义 shell 字符串。",
+                "Bark 保存与投递共用地址校验，拒绝危险 IP、数字 IP 别名和 URL 凭据；保留 HTTP 回环，非法配置不会改用默认服务发送。",
+                "Linux 更新先验证 SHA-256 和 Minisign 分离签名，再解包并核对版本、平台及布局；解压不继承特殊位或 world-writable 权限。",
+                "CI 增加超时、--locked 和工具缓存；高危、严重及无法判级的活动漏洞或扫描失败阻断，低中危与维护类告警继续报告。定向修复相关 Rust 依赖。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，RPC、桌面命令、DTO 与 tombstone 不变；保留 Keychain、认证比较、禁止重定向和 systemd 隔离。",
+                "配置只允许回环监听；更新任务接受现行及完整匹配的历史默认命令，其他自定义 shell 配置会明确拒绝。",
+                "不改写原生会话。安装普通失败恢复本轮替换文件，不回滚业务数据库；显式本地 --archive/--binary 运维方式保留。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项发布资产。",
+            ],
+            "升级提示": [
+                "部署客户端与服务器须预装 Minisign。首次从 1.2.22 或更早版本升级，先由可信客户端验证正式包，再安装新的验签器和公钥；不降级为仅 SHA-256。",
+                "先升级远程 API，再安装 macOS App；保留现有配置、连接、凭据、通知状态和会话。正常阅读、通知、更新反馈与日常使用待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.22":
         sections = {

@@ -34,7 +34,7 @@ Grok 的活动显示与删除资格分别判断。登记和进程身份确认没
 
 ## 通知与兼容
 
-Bark 对临时失败进行有限重试，并尊重服务端的重试等待时间；次数、间隔和有效期见[通知投递规则](docs/ARCHITECTURE.md#通知与监测)。已成功分段不重发，重试会重新核对身份、问题状态、开关和目标。网络结果未知时仍可能重复提醒；“Bark 已受理”只表示服务端确认，设备实收需要单独核对。
+Bark 接受 HTTPS 服务和 HTTP 回环服务；危险地址或无效配置会明确失败，不会改用默认服务投递。Bark 对临时失败进行有限重试，并尊重服务端的重试等待时间；次数、间隔和有效期见[通知投递规则](docs/ARCHITECTURE.md#通知与监测)。已成功分段不重发，重试会重新核对身份、问题状态、开关和目标。网络结果未知时仍可能重复提醒；“Bark 已受理”只表示服务端确认，设备实收需要单独核对。
 
 API 协议保持 **2**。先升级远程 API，再安装 App；旧服务缺少大小或子智能体能力时保留阅读和对应未知／升级提示，缺少历史变更信息时沿用兼容刷新方式。缺少分批扫描能力时使用单次扫描，不显示进度或停止按钮。
 
@@ -50,13 +50,13 @@ Pi、Gotify、网页版和自动 Goal 恢复已退役。迁移仅清理 NexusHub
 
 ### 远程 API
 
-Linux `webd` 只提供管理 API 和健康检查，不提供网页、登录页或静态资源。打开 App 的“设置 → 远程连接”，填写 HTTPS 地址和管理员 API Key。地址保存在本机设置，Key 保存在 macOS Keychain。
+Linux `webd` 只提供管理 API 和健康检查，不提供网页、登录页或静态资源。配置只接受回环监听，远程访问通过 HTTPS 反向代理。打开 App 的“设置 → 远程连接”，填写 HTTPS 地址和管理员 API Key。地址保存在本机设置，Key 保存在 macOS Keychain。
 
 使用导航旁的机器按钮可在“本机”和“远程机器”之间切换。查询缓存、分页、展开状态和写操作都按机器隔离；连接失败不会自动切换目标。
 
 ## 快速部署
 
-部署参数必须从仓库外提供，示例使用保留域名和占位主机：
+部署客户端和服务器须先安装 Minisign，并同时取得正式归档、SHA-256 文件与分离签名。首次从旧版本升级时由可信客户端验签，具体步骤见[部署手册](docs/cloud-deploy-runbook.md#安装与升级)。部署参数必须从仓库外提供，示例使用保留域名和占位主机：
 
 ```bash
 NEXUSHUB_DOMAIN=panel.example.invalid \
@@ -80,12 +80,12 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 
 ## 发布资产
 
-[查看 v1.2.22 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.22)。发布页包含七项资产：
+[查看 v1.2.23 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.23)。发布页包含八项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；
 - 仅包含 `darwin-aarch64` 的 `latest.json`；
-- Linux x86_64 `webd` 服务包与校验文件。
+- Linux x86_64 `webd` 服务包、校验文件与分离签名。
 
 `darwin-aarch64` 是 updater 使用的平台键，下载文件名中的 `darwin-arm64` 表示同一 macOS ARM64 架构。Linux 服务包不能用于桌面 updater。
 
@@ -96,19 +96,31 @@ corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
 node scripts/check-wire-types.mjs
 node --test scripts/test-wire-types.mjs
 cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 corepack pnpm@12.11.2 --dir webui typecheck
 corepack pnpm@12.11.2 --dir webui test
 corepack pnpm@12.11.2 --dir webui build:tauri
 NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
 NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
 bash scripts/test-install-script.sh
+python3 scripts/check-versions.py
+python3 scripts/check-workspaces.py
+python3 scripts/test-install-safety.py
+python3 scripts/test-install-signatures.py
+python3 scripts/test-privacy-check.py
+python3 scripts/test-check-versions.py
+python3 scripts/test-check-workspaces.py
+python3 scripts/test-tauri-build-config.py
+node --test scripts/test-security-audit.mjs
 python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-`src-tauri` 是独立 Cargo workspace。测试使用虚构 Provider 数据，不删除本机用户会话。
+`rust-toolchain.toml` 固定开发与 CI 工具链；Node、pnpm 和构建工具使用仓库锁定版本。`src-tauri` 是独立 Cargo workspace；最低 Rust 策略、缓存和审计门禁见[构建说明](docs/ARCHITECTURE.md#构建ci-与发布)。测试需要 Python 3.11+、ShellCheck、Minisign 及锁文件对应的 Playwright 浏览器，使用虚构 Provider 数据，不删除本机用户会话。
 
 交互预算使用生产前端构建，在 macOS 可见窗口中依次运行两种浏览器，测量期间关闭 trace 录制，避免无头窗口调度、其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
 
