@@ -11,7 +11,7 @@ use crate::{
     db::desktop_submissions::{DesktopLedger, Submission},
     services::codex_desktop::{DesktopAction, DesktopMode, DesktopQueuedMessage, DesktopView},
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
 
 struct ActionRequest {
@@ -410,6 +410,7 @@ impl WorkerLoop {
             } => {
                 let spans = super::references::resolve_spans(references, reference_spans)?;
                 MessageInput {
+                    native_mentions: true,
                     client_id: message_id.clone(),
                     text: text.clone(),
                     references: resolved.clone(),
@@ -484,6 +485,7 @@ impl WorkerLoop {
                     &message_id,
                     DesktopCommand::Steer {
                         message: MessageInput {
+                            native_mentions: true,
                             client_id: message_id.clone(),
                             text,
                             references: resolved,
@@ -688,6 +690,11 @@ impl WorkerLoop {
                 .unwrap_or_else(|| json!([])),
         )
         .map_err(|_| DesktopError::InvalidInput)?;
+        let native_mentions = match body.get("nativeMentions") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(DesktopError::InvalidInput),
+        };
         let id = item.id.clone();
         let claimed_id = id.clone();
         let source = self.source.clone();
@@ -702,6 +709,7 @@ impl WorkerLoop {
         self.submit(
             &id,
             DesktopCommand::Start(MessageInput {
+                native_mentions,
                 client_id: id.clone(),
                 text,
                 references,
@@ -826,6 +834,7 @@ fn submission_body(
     // the exact 1.3.0 body, including retries after an application upgrade.
     if !spans.is_empty() {
         body["referenceSpans"] = json!(spans);
+        body["nativeMentions"] = json!(true);
     }
     body
 }

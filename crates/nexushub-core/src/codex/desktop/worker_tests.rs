@@ -4,7 +4,7 @@ use super::DesktopWorker;
 use crate::{
     crypto::SecretBox,
     db::{desktop_submissions::DesktopLedger, PanelDb},
-    services::codex_desktop::{DesktopAction, DesktopAnswer, DesktopView},
+    services::codex_desktop::{DesktopAction, DesktopAnswer, DesktopReferenceSpan, DesktopView},
 };
 use serde_json::{json, Value};
 use std::{
@@ -147,6 +147,7 @@ fn empty_spans_preserve_legacy_ledger_bytes_and_nonempty_spans_bind_identity() {
     let references = vec![NativeReference::app("Fixture".into(), "app://fixture".into()).unwrap()];
     let legacy = json!({"kind":"queue","text":"@Fixture","references":references});
     let body = super::submission_body("queue", "@Fixture", &references, &[]);
+    assert!(body.get("nativeMentions").is_none());
     assert_eq!(
         serde_json::to_vec(&legacy).unwrap(),
         serde_json::to_vec(&body).unwrap()
@@ -167,6 +168,7 @@ fn empty_spans_preserve_legacy_ledger_bytes_and_nonempty_spans_bind_identity() {
             end: 8,
         }],
     );
+    assert_eq!(body["nativeMentions"], true);
     assert!(ledger
         .enqueue(&source, THREAD_ID, FIRST_MESSAGE_ID, &body)
         .is_err());
@@ -175,7 +177,262 @@ fn empty_spans_preserve_legacy_ledger_bytes_and_nonempty_spans_bind_identity() {
         .unwrap();
     let reopened = fixture.ledger();
     let items = reopened.list(&source, THREAD_ID).unwrap();
+    assert!(items[0]
+        .body
+        .as_ref()
+        .and_then(|body| body.get("nativeMentions"))
+        .is_none());
+    assert_eq!(
+        serde_json::to_vec(items[0].body.as_ref().unwrap()).unwrap(),
+        serde_json::to_vec(&legacy).unwrap()
+    );
     assert_eq!(items[1].body.as_ref(), Some(&body));
+    assert_eq!(items[1].body.as_ref().unwrap()["nativeMentions"], true);
+}
+
+#[tokio::test]
+async fn native_mentions_reach_owner_for_start_and_steer_and_persist_the_flag() {
+    use super::super::references::NativeReference;
+
+    let fixture = Fixture::new();
+    let source = source_id();
+    let ledger = fixture.ledger();
+    let app = NativeReference::app("search".into(), "app://fixture-search".into())
+        .expect("synthetic app reference is accepted");
+    let listener = fixture.bind();
+    let (start_seen_tx, start_seen_rx) = oneshot::channel();
+    let (release_start_tx, release_start_rx) = oneshot::channel();
+    let (steer_seen_tx, steer_seen_rx) = oneshot::channel();
+    let (release_steer_tx, release_steer_rx) = oneshot::channel();
+
+    let broker = tokio::spawn(async move {
+        let mut stream = accept_session(&listener, thread_state("idle", Vec::new())).await;
+        let owner_check = expect_request(&mut stream, "thread-owner-discovery").await;
+        send_success(&mut stream, &owner_check, json!({}), Some(OWNER_ID)).await;
+
+        let start = expect_request(&mut stream, "thread-follower-start-turn").await;
+        assert_eq!(
+            start["params"]["turnStart"]["request"]["input"],
+            json!([
+                {
+                    "type":"text",
+                    "text":"[$search](app://fixture-search)😀",
+                    "text_elements":[]
+                },
+                {"type":"mention","name":"search","path":"app://fixture-search"}
+            ])
+        );
+        assert_eq!(
+            start["params"]["turnStart"]["context"]["attachments"],
+            json!([])
+        );
+        assert!(start["params"]["turnStart"]["request"]
+            .get("attachments")
+            .is_none());
+        start_seen_tx
+            .send(())
+            .expect("test inspects queued native-mention bytes before owner acceptance");
+        release_start_rx
+            .await
+            .expect("test releases the native start response");
+        send_success(
+            &mut stream,
+            &start,
+            json!({"result":{"turn":{"id":TURN_ID}}}),
+            Some(OWNER_ID),
+        )
+        .await;
+
+        let mut active = thread_state("active", vec![turn(TURN_ID, "inProgress")]);
+        active["cwd"] = json!("/fixture/workspace");
+        send_snapshot(&mut stream, 2, active).await;
+        let owner_check = expect_request(&mut stream, "thread-owner-discovery").await;
+        send_success(&mut stream, &owner_check, json!({}), Some(OWNER_ID)).await;
+
+        let steer = expect_request(&mut stream, "thread-follower-steer-turn").await;
+        assert_eq!(
+            steer["params"]["input"],
+            json!([
+                {
+                    "type":"text",
+                    "text":"[$search](app://fixture-search)继续",
+                    "text_elements":[]
+                },
+                {"type":"mention","name":"search","path":"app://fixture-search"}
+            ])
+        );
+        assert_eq!(steer["params"]["attachments"], json!([]));
+        assert_eq!(
+            steer["params"]["restoreMessage"]["context"]["fileAttachments"],
+            json!([])
+        );
+        steer_seen_tx
+            .send(())
+            .expect("test inspects immediate steer bytes before owner acceptance");
+        release_steer_rx
+            .await
+            .expect("test releases the native steer response");
+        send_success(
+            &mut stream,
+            &steer,
+            json!({"result":{"turnId":TURN_ID}}),
+            Some(OWNER_ID),
+        )
+        .await;
+        expect_unfollow_then_close(&mut stream).await;
+    });
+
+    let session = DesktopSession::attach(&fixture.codex_home, THREAD_ID)
+        .await
+        .expect("worker attaches to fake desktop socket");
+    let worker = DesktopWorker::spawn(session, ledger.clone(), source.clone())
+        .await
+        .expect("worker starts with the temporary encrypted queue");
+    worker
+        .act_with_references(
+            DesktopAction::Send {
+                message_id: FIRST_MESSAGE_ID.into(),
+                text: "@search😀".into(),
+                references: vec!["fixture-search-handle".into()],
+                reference_spans: vec![DesktopReferenceSpan {
+                    handle: "fixture-search-handle".into(),
+                    start: 0,
+                    end: 7,
+                }],
+            },
+            vec![app.clone()],
+        )
+        .await
+        .expect("new native mention message enters the encrypted queue");
+    timeout(Duration::from_secs(5), start_seen_rx)
+        .await
+        .expect("owner receives native start within the test bound")
+        .expect("fake owner signals receipt of native start");
+    let stored_start = ledger.list(&source, THREAD_ID).unwrap();
+    assert_eq!(
+        stored_start[0].body.as_ref().unwrap()["nativeMentions"],
+        true
+    );
+    assert_eq!(
+        stored_start[0].body.as_ref().unwrap()["referenceSpans"],
+        json!([{"reference":0,"start":0,"end":7}])
+    );
+    release_start_tx
+        .send(())
+        .expect("native start response is released after persistence is checked");
+    wait_for_view(&worker, |view| {
+        view.active_turn_id.as_deref() == Some(TURN_ID)
+    })
+    .await;
+
+    let steer_worker = worker.clone();
+    let steer_task = tokio::spawn(async move {
+        steer_worker
+            .act_with_references(
+                DesktopAction::Steer {
+                    message_id: SECOND_MESSAGE_ID.into(),
+                    text: "@search继续".into(),
+                    references: vec!["fixture-search-handle".into()],
+                    reference_spans: vec![DesktopReferenceSpan {
+                        handle: "fixture-search-handle".into(),
+                        start: 0,
+                        end: 7,
+                    }],
+                    turn_id: TURN_ID.into(),
+                },
+                vec![app],
+            )
+            .await
+    });
+    timeout(Duration::from_secs(5), steer_seen_rx)
+        .await
+        .expect("owner receives native steer within the test bound")
+        .expect("fake owner signals receipt of native steer");
+    let stored_steer = ledger.list(&source, THREAD_ID).unwrap();
+    let steer_body = stored_steer
+        .iter()
+        .find(|item| item.id == SECOND_MESSAGE_ID)
+        .and_then(|item| item.body.as_ref())
+        .expect("steer remains encrypted until the owner accepts it");
+    assert_eq!(steer_body["nativeMentions"], true);
+    assert_eq!(
+        steer_body["referenceSpans"],
+        json!([{"reference":0,"start":0,"end":7}])
+    );
+    release_steer_tx
+        .send(())
+        .expect("native steer response is released after persistence is checked");
+    steer_task
+        .await
+        .expect("steer action task completes")
+        .expect("owner accepts native steer");
+
+    drop(worker);
+    broker.await.expect("fake owner assertions pass");
+}
+
+#[tokio::test]
+async fn legacy_spans_without_native_mentions_flag_keep_text_elements_on_dispatch() {
+    use super::super::references::NativeReference;
+
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger();
+    let source = source_id();
+    let reference = NativeReference::app("search".into(), "app://fixture-search".into())
+        .expect("synthetic app reference is accepted");
+    let legacy = json!({
+        "kind":"queue",
+        "text":"@search",
+        "references":[reference],
+        "referenceSpans":[{"reference":0,"start":0,"end":7}]
+    });
+    assert!(legacy.get("nativeMentions").is_none());
+    ledger
+        .enqueue(&source, THREAD_ID, FIRST_MESSAGE_ID, &legacy)
+        .expect("legacy encrypted queue item is inserted");
+    let listener = fixture.bind();
+    let broker = tokio::spawn(async move {
+        let mut stream = accept_session(&listener, thread_state("idle", Vec::new())).await;
+        let owner_check = expect_request(&mut stream, "thread-owner-discovery").await;
+        send_success(&mut stream, &owner_check, json!({}), Some(OWNER_ID)).await;
+        let start = expect_request(&mut stream, "thread-follower-start-turn").await;
+        assert_eq!(
+            start["params"]["turnStart"]["request"]["input"],
+            json!([
+                {
+                    "type":"text",
+                    "text":"@search",
+                    "text_elements":[{
+                        "byteRange":{"start":0,"end":7},
+                        "placeholder":"@search"
+                    }]
+                },
+                {"type":"mention","name":"search","path":"app://fixture-search"}
+            ])
+        );
+        send_success(
+            &mut stream,
+            &start,
+            json!({"result":{"turn":{"id":TURN_ID}}}),
+            Some(OWNER_ID),
+        )
+        .await;
+        expect_unfollow_then_close(&mut stream).await;
+    });
+
+    let session = DesktopSession::attach(&fixture.codex_home, THREAD_ID)
+        .await
+        .expect("worker attaches to fake desktop socket");
+    let worker = DesktopWorker::spawn(session, ledger, source)
+        .await
+        .expect("worker starts with the legacy encrypted queue");
+    worker
+        .act(DesktopAction::ResumeQueue)
+        .await
+        .expect("legacy queue resume action is accepted");
+    wait_for_view(&worker, |view| view.queue.is_empty()).await;
+    drop(worker);
+    broker.await.expect("fake owner assertions pass");
 }
 
 fn turn(id: &str, status: &str) -> Value {
