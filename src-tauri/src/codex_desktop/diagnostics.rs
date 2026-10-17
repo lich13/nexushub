@@ -64,6 +64,17 @@ fn version_text(bytes: &[u8], build: bool) -> Option<String> {
     {
         return None;
     }
+    if !build {
+        let core = value.split('-').next()?;
+        let parts: Vec<_> = core.split('.').collect();
+        if parts.len() != 3
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return None;
+        }
+    }
     Some(value.into())
 }
 

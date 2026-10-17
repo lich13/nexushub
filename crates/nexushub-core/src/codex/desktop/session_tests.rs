@@ -132,7 +132,14 @@ fn session_pair_with_state(initial_state: Value) -> (DesktopSession, UnixStream)
         owner_id: OWNER_ID.into(),
         revision: Some(1),
     };
-    (DesktopSession { connection, state }, broker)
+    (
+        DesktopSession {
+            connection,
+            state,
+            codex_home: None,
+        },
+        broker,
+    )
 }
 
 async fn read_frame(stream: &mut UnixStream) -> std::result::Result<Value, DesktopError> {
@@ -211,6 +218,48 @@ async fn execute_with_native_result(
     let result = session.execute(&command).await;
     broker_task.await.expect("fixture broker task completes");
     result
+}
+
+async fn verified_mutation(stream: &mut UnixStream, method: &str) -> Value {
+    let recheck = read_frame(stream).await.expect("owner recheck is sent");
+    assert_eq!(recheck["method"], "thread-owner-discovery");
+    send_owner_response(stream, &recheck, OWNER_ID).await;
+
+    let mutation = read_frame(stream)
+        .await
+        .expect("mutation is sent after the owner recheck");
+    assert_eq!(mutation["method"], method);
+    mutation
+}
+
+async fn send_native_error(stream: &mut UnixStream, request: &Value, error: &str) {
+    write_frame(
+        stream,
+        &json!({
+            "type":"response",
+            "requestId":request["requestId"],
+            "resultType":"error",
+            "handledByClientId":OWNER_ID,
+            "error":error
+        }),
+    )
+    .await
+    .expect("fixture native error is written");
+}
+
+async fn send_native_success(stream: &mut UnixStream, request: &Value, result: Value) {
+    write_frame(
+        stream,
+        &json!({
+            "type":"response",
+            "requestId":request["requestId"],
+            "resultType":"success",
+            "handledByClientId":OWNER_ID,
+            "result":result
+        }),
+    )
+    .await
+    .expect("fixture native success is written");
 }
 
 #[tokio::test]
@@ -389,7 +438,7 @@ async fn state_patches_received_while_waiting_for_response_are_applied() {
 }
 
 #[tokio::test]
-async fn native_handling_removes_pending_approvals_questions_and_elicitations() {
+async fn native_handling_removes_pending_approvals_permissions_questions_and_elicitations() {
     let mut file_state = active_state();
     file_state["turns"][0]["items"] = json!([{
         "id": "fixture-file-change-item",
@@ -424,6 +473,19 @@ async fn native_handling_removes_pending_approvals_questions_and_elicitations() 
             "item/fileChange/requestApproval",
             "thread-follower-file-approval-decision",
             file_state,
+            DesktopReply::Decision { allow: true },
+        ),
+        (
+            "item/permissions/requestApproval",
+            "thread-follower-permissions-request-approval-response",
+            active_state_with_request(
+                "item/permissions/requestApproval",
+                json!({
+                    "threadId":THREAD_ID,
+                    "turnId":TURN_ID,
+                    "permissions":{"network":true}
+                }),
+            ),
             DesktopReply::Decision { allow: true },
         ),
         (
@@ -527,6 +589,143 @@ async fn native_handling_removes_pending_approvals_questions_and_elicitations() 
 }
 
 #[tokio::test]
+async fn business_rejections_for_stop_and_all_reply_types_keep_the_session_usable() {
+    let mut file_state = active_state();
+    file_state["turns"][0]["items"] = json!([{
+        "id":"fixture-file-change-item",
+        "type":"fileChange",
+        "changes":[{"path":"fixture.txt","diff":"--- before\n+++ after\n","kind":"update"}]
+    }]);
+    file_state["requests"] = json!([{
+        "id":"fixture-pending-request",
+        "method":"item/fileChange/requestApproval",
+        "params":{"threadId":THREAD_ID,"turnId":TURN_ID,"itemId":"fixture-file-change-item"}
+    }]);
+
+    let cases = vec![
+        (
+            DesktopCommand::Stop {
+                expected_turn_id: TURN_ID.into(),
+            },
+            active_state(),
+            "thread-follower-interrupt-turn",
+        ),
+        (
+            reply_command_for_state(
+                &active_state_with_request(
+                    "item/commandExecution/requestApproval",
+                    json!({"threadId":THREAD_ID,"turnId":TURN_ID,"command":"fixture command"}),
+                ),
+                "item/commandExecution/requestApproval",
+                DesktopReply::Decision { allow: true },
+            ),
+            active_state_with_request(
+                "item/commandExecution/requestApproval",
+                json!({"threadId":THREAD_ID,"turnId":TURN_ID,"command":"fixture command"}),
+            ),
+            "thread-follower-command-approval-decision",
+        ),
+        (
+            reply_command_for_state(
+                &file_state,
+                "item/fileChange/requestApproval",
+                DesktopReply::Decision { allow: true },
+            ),
+            file_state,
+            "thread-follower-file-approval-decision",
+        ),
+        (
+            reply_command_for_state(
+                &active_state_with_request(
+                    "item/permissions/requestApproval",
+                    json!({"threadId":THREAD_ID,"turnId":TURN_ID,"permissions":{"network":true}}),
+                ),
+                "item/permissions/requestApproval",
+                DesktopReply::Decision { allow: true },
+            ),
+            active_state_with_request(
+                "item/permissions/requestApproval",
+                json!({"threadId":THREAD_ID,"turnId":TURN_ID,"permissions":{"network":true}}),
+            ),
+            "thread-follower-permissions-request-approval-response",
+        ),
+        (
+            reply_command_for_state(
+                &active_state_with_request(
+                    "item/tool/requestUserInput",
+                    json!({"threadId":THREAD_ID,"turnId":TURN_ID,"questions":[{"id":"fixture-question","question":"Fixture question"}]}),
+                ),
+                "item/tool/requestUserInput",
+                DesktopReply::Answers {
+                    answers: vec![("fixture-question".into(), vec!["fixture answer".into()])],
+                },
+            ),
+            active_state_with_request(
+                "item/tool/requestUserInput",
+                json!({"threadId":THREAD_ID,"turnId":TURN_ID,"questions":[{"id":"fixture-question","question":"Fixture question"}]}),
+            ),
+            "thread-follower-submit-user-input",
+        ),
+        (
+            reply_command_for_state(
+                &active_state_with_request(
+                    "mcpServer/elicitation/request",
+                    json!({
+                        "threadId":THREAD_ID,
+                        "turnId":TURN_ID,
+                        "mode":"form",
+                        "message":"Fixture request",
+                        "requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}
+                    }),
+                ),
+                "mcpServer/elicitation/request",
+                DesktopReply::Elicitation {
+                    accept: true,
+                    content: Some(json!({"name":"fixture answer"})),
+                },
+            ),
+            active_state_with_request(
+                "mcpServer/elicitation/request",
+                json!({
+                    "threadId":THREAD_ID,
+                    "turnId":TURN_ID,
+                    "mode":"form",
+                    "message":"Fixture request",
+                    "requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}
+                }),
+            ),
+            "thread-follower-submit-mcp-server-elicitation-response",
+        ),
+    ];
+
+    for (command, initial_state, first_method) in cases {
+        let (mut session, mut broker) = session_pair_with_state(initial_state);
+        let broker_task = tokio::spawn(async move {
+            let rejected = verified_mutation(&mut broker, first_method).await;
+            send_native_error(&mut broker, &rejected, "fixture-handler-rejection").await;
+
+            let next =
+                verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+            send_native_success(&mut broker, &next, json!({"applied":true})).await;
+        });
+
+        assert!(matches!(
+            session.execute(&command).await,
+            Err(DesktopError::Rejected)
+        ));
+        assert!(
+            session.is_connected(),
+            "{first_method} rejection keeps IPC open"
+        );
+        session
+            .execute(&settings_command())
+            .await
+            .expect("next explicit request succeeds on the same session");
+        broker_task.await.expect("fixture broker assertions pass");
+    }
+}
+
+#[tokio::test]
 async fn missing_mutation_response_is_reported_as_outcome_unknown() {
     let (mut session, mut broker) = session_pair();
     let broker_task = tokio::spawn(async move {
@@ -546,4 +745,199 @@ async fn missing_mutation_response_is_reported_as_outcome_unknown() {
     let result = session.execute(&start_command()).await;
     assert!(matches!(result, Err(DesktopError::OutcomeUnknown)));
     broker_task.await.expect("fixture broker task completes");
+}
+
+#[tokio::test]
+async fn request_timeout_ms_matches_start_steer_and_default_waits() {
+    let cases = [
+        (
+            start_command(),
+            idle_state(),
+            "thread-follower-start-turn",
+            90_000,
+            json!({"result":{"turn":{"id":TURN_ID}}}),
+        ),
+        (
+            steer_command(),
+            active_state(),
+            "thread-follower-steer-turn",
+            30_000,
+            json!({"result":{"turnId":TURN_ID}}),
+        ),
+        (
+            settings_command(),
+            idle_state(),
+            "thread-follower-update-thread-settings",
+            10_000,
+            json!({"applied":true}),
+        ),
+    ];
+
+    for (command, state, method, timeout_ms, native_result) in cases {
+        let (mut session, mut broker) = session_pair_with_state(state);
+        let broker_task = tokio::spawn(async move {
+            let mutation = verified_mutation(&mut broker, method).await;
+            assert_eq!(mutation["timeoutMs"], timeout_ms);
+            send_native_success(&mut broker, &mutation, native_result).await;
+        });
+
+        session
+            .execute(&command)
+            .await
+            .expect("fixture mutation receives its native result");
+        broker_task.await.expect("fixture broker assertions pass");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn start_succeeds_after_fifteen_virtual_seconds_within_owner_deadline() {
+    let (mut session, mut broker) = session_pair();
+    let (clock_stop_tx, clock_stop_rx) = tokio::sync::oneshot::channel();
+    let clock_driver = tokio::spawn(async move {
+        let mut stop = clock_stop_rx;
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                _ = &mut stop => break,
+            }
+        }
+    });
+    let broker_task = tokio::spawn(async move {
+        let mutation = verified_mutation(&mut broker, "thread-follower-start-turn").await;
+        assert_eq!(mutation["timeoutMs"], 90_000);
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        send_native_success(
+            &mut broker,
+            &mutation,
+            json!({"result":{"turn":{"id":TURN_ID}}}),
+        )
+        .await;
+    });
+    let result = session.execute(&start_command()).await;
+    clock_stop_tx
+        .send(())
+        .expect("virtual clock driver stops after the request completes");
+    clock_driver.await.expect("virtual clock driver exits");
+    let result = result.expect("Start remains valid after a fifteen-second owner response");
+    assert_eq!(result.turn_id.as_deref(), Some(TURN_ID));
+    broker_task.await.expect("fixture broker task completes");
+}
+
+#[tokio::test]
+async fn protocol_error_aliases_are_unsupported_and_leave_session_open() {
+    let (mut session, mut broker) = session_pair();
+    let broker_task = tokio::spawn(async move {
+        for error in ["request-version-mismatch", "no-handler-for-request"] {
+            let mutation =
+                verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+            send_native_error(&mut broker, &mutation, error).await;
+        }
+
+        let mutation =
+            verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+        send_native_success(&mut broker, &mutation, json!({"applied":true})).await;
+    });
+
+    for _ in 0..2 {
+        assert!(matches!(
+            session.execute(&settings_command()).await,
+            Err(DesktopError::UnsupportedProtocol)
+        ));
+        assert!(session.is_connected());
+    }
+    session
+        .execute(&settings_command())
+        .await
+        .expect("a later native request succeeds on the same session");
+    assert!(session.is_connected());
+    broker_task.await.expect("fixture broker assertions pass");
+}
+
+#[tokio::test]
+async fn handler_errors_are_unknown_for_messages_rejected_for_settings_and_do_not_retry() {
+    let cases = [
+        (
+            start_command(),
+            idle_state(),
+            "thread-follower-start-turn",
+            true,
+        ),
+        (
+            steer_command(),
+            active_state(),
+            "thread-follower-steer-turn",
+            true,
+        ),
+        (
+            settings_command(),
+            idle_state(),
+            "thread-follower-update-thread-settings",
+            false,
+        ),
+    ];
+
+    for (command, state, method, outcome_unknown) in cases {
+        let (mut session, mut broker) = session_pair_with_state(state);
+        let broker_task = tokio::spawn(async move {
+            let mutation = verified_mutation(&mut broker, method).await;
+            send_native_error(&mut broker, &mutation, "fixture-handler-exception").await;
+
+            let later =
+                verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+            send_native_success(&mut broker, &later, json!({"applied":true})).await;
+        });
+
+        let result = session.execute(&command).await;
+        if outcome_unknown {
+            assert!(matches!(result, Err(DesktopError::OutcomeUnknown)));
+        } else {
+            assert!(matches!(result, Err(DesktopError::Rejected)));
+        }
+        assert!(session.is_connected());
+        session
+            .execute(&settings_command())
+            .await
+            .expect("a subsequent explicit command succeeds without a session restart");
+        broker_task.await.expect("fixture broker assertions pass");
+    }
+}
+
+#[tokio::test]
+async fn transport_and_owner_identity_failures_are_not_rejected_responses() {
+    for (native_error, handled_by, expected_identity_error) in [
+        (Some("client-disconnected"), OWNER_ID, false),
+        (None, OTHER_OWNER_ID, true),
+    ] {
+        let (mut session, mut broker) = session_pair();
+        let broker_task = tokio::spawn(async move {
+            let mutation =
+                verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+            let mut response = json!({
+                "type":"response",
+                "requestId":mutation["requestId"],
+                "resultType":if native_error.is_some() { "error" } else { "success" },
+                "handledByClientId":handled_by
+            });
+            if let Some(error) = native_error {
+                response["error"] = json!(error);
+            }
+            write_frame(&mut broker, &response)
+                .await
+                .expect("transport or identity fixture response is written");
+            let closed = timeout(Duration::from_secs(2), read_frame(&mut broker))
+                .await
+                .expect("failed session closes after transport or identity failure")
+                .expect_err("session does not send another request after a failed exchange");
+            assert_eq!(closed, DesktopError::Disconnected);
+        });
+
+        let result = session.execute(&settings_command()).await;
+        if expected_identity_error {
+            assert!(matches!(result, Err(DesktopError::InvalidIdentity)));
+        } else {
+            assert!(matches!(result, Err(DesktopError::Disconnected)));
+        }
+        assert!(!session.is_connected());
+        broker_task.await.expect("fixture broker assertions pass");
+    }
 }

@@ -1291,3 +1291,31 @@ fn existing_pretty_body_and_compact_params_limits_still_reject_approval() {
         DesktopError::UnsupportedProtocol,
     );
 }
+
+#[test]
+fn stop_and_reply_distinguish_explicit_refusal_from_malformed_acknowledgement() {
+    let commands = [
+        DesktopCommand::Stop {
+            expected_turn_id: TURN_ID.into(),
+        },
+        DesktopCommand::Reply {
+            request_id: json!(REQUEST_ID),
+            expected_request_key: "fixture-key".into(),
+            method: "item/commandExecution/requestApproval".into(),
+            expected_turn_id: Some(TURN_ID.into()),
+            response: DesktopReply::decision(false, None).unwrap(),
+        },
+    ];
+    for command in commands {
+        assert!(matches!(
+            command.result(&json!({"ok": false})),
+            Err(DesktopError::Rejected)
+        ));
+        for malformed in [json!({}), json!({"ok": "false"}), json!({"ok": null})] {
+            assert!(matches!(
+                command.result(&malformed),
+                Err(DesktopError::OutcomeUnknown)
+            ));
+        }
+    }
+}

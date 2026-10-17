@@ -396,6 +396,9 @@ impl DesktopCommand {
                 Some(id)
             }
             Self::Stop { expected_turn_id } => {
+                if value["ok"] == false {
+                    return Err(DesktopError::Rejected);
+                }
                 if value["ok"] != true
                     || value["interruptedTurnId"].as_str() != Some(expected_turn_id)
                 {
@@ -413,6 +416,9 @@ impl DesktopCommand {
                 None
             }
             Self::Reply { .. } => {
+                if value["ok"] == false {
+                    return Err(DesktopError::Rejected);
+                }
                 if value["ok"] != true {
                     return Err(DesktopError::OutcomeUnknown);
                 }

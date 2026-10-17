@@ -15,7 +15,8 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 
 struct ActionRequest {
-    action: DesktopAction,
+    action: Option<DesktopAction>,
+    expected_session: String,
     references: Vec<NativeReference>,
     response: oneshot::Sender<Result<DesktopView>>,
 }
@@ -64,6 +65,7 @@ impl DesktopWorker {
         let initial = projection::view(session.state(), &session_id, queue_view(&pending));
         let (view_tx, view) = watch::channel(initial);
         let (actions, action_rx) = mpsc::channel(16);
+        let session_owner = session.owner_id().to_owned();
         tokio::spawn(
             WorkerLoop {
                 session,
@@ -75,6 +77,10 @@ impl DesktopWorker {
                 paths,
                 wait_for_turn: None,
                 last_error: None,
+                connection_phase: "connected",
+                confirmed_owner: session_owner,
+                resync_used: false,
+                reconnect_attempts: 0,
                 view: view_tx,
                 actions: action_rx,
             }
@@ -109,6 +115,22 @@ impl DesktopWorker {
         action: DesktopAction,
         references: Vec<NativeReference>,
     ) -> Result<DesktopView> {
+        self.act_in_session(action, references, self.current().session_id)
+            .await
+    }
+
+    pub async fn act_in_session(
+        &self,
+        action: DesktopAction,
+        references: Vec<NativeReference>,
+        expected_session: String,
+    ) -> Result<DesktopView> {
+        if self.current().session_id != expected_session {
+            return Err(DesktopError::RequestExpired);
+        }
+        if !self.current().writable {
+            return Err(DesktopError::ReadOnly);
+        }
         validate_action(&action)?;
         let count = match &action {
             DesktopAction::Send { references, .. } | DesktopAction::Steer { references, .. } => {
@@ -119,11 +141,28 @@ impl DesktopWorker {
         if count != references.len() {
             return Err(DesktopError::InvalidInput);
         }
+        self.request(Some(action), references, expected_session)
+            .await
+    }
+
+    /// Only the explicit host Connect entrance may confirm a recovered owner.
+    pub async fn confirm_owner(&self) -> Result<DesktopView> {
+        self.request(None, Vec::new(), self.current().session_id)
+            .await
+    }
+
+    async fn request(
+        &self,
+        action: Option<DesktopAction>,
+        references: Vec<NativeReference>,
+        expected_session: String,
+    ) -> Result<DesktopView> {
         let (response, receive) = oneshot::channel();
         self.actions
             .try_send(ActionRequest {
                 action,
                 references,
+                expected_session,
                 response,
             })
             .map_err(|_| DesktopError::Busy)?;
@@ -141,6 +180,10 @@ struct WorkerLoop {
     paths: Option<crate::codex::CodexPaths>,
     wait_for_turn: Option<String>,
     last_error: Option<DesktopError>,
+    connection_phase: &'static str,
+    confirmed_owner: String,
+    resync_used: bool,
+    reconnect_attempts: usize,
     view: watch::Sender<DesktopView>,
     actions: mpsc::Receiver<ActionRequest>,
 }
@@ -152,27 +195,26 @@ impl WorkerLoop {
         }
         loop {
             let event = tokio::select! {
-                event = self.session.next_change() => event,
+                event = self.session.next_change() => {
+                    if event.is_ok() { self.reconnect_attempts = 0; }
+                    event
+                },
                 action = self.actions.recv() => {
                     let Some(action) = action else {break};
-                    let result = self.action(action.action,action.references).await;
+                    let result = if action.expected_session != self.session_id { Err(DesktopError::RequestExpired) }
+                        else if let Some(command) = action.action { self.action(command, action.references).await }
+                        else { self.confirm().await };
                     if result.is_ok() { self.last_error = None; }
-                    self.publish(result.as_ref().err().copied());
+                    let error = result.as_ref().err().copied();
+                    self.publish(error);
                     let _ = action.response.send(result.map(|()|self.view.borrow().clone()));
-                    Ok(())
+                    if !self.session.is_connected() { Err(error.unwrap_or(DesktopError::Disconnected)) } else { Ok(()) }
                 },
             };
             if let Err(error) = event {
-                let source = self.source.clone();
-                let thread = self.thread_id.clone();
-                let _ = storage(&self.ledger, move |ledger| ledger.hold(&source, &thread)).await;
-                let _ = self.refresh_queue().await;
-                let mut view = self.make_view();
-                view.connected = false;
-                view.writable = false;
-                view.error = Some(error.user_message().into());
-                self.view.send_replace(view);
-                break;
+                if !self.recover(error).await {
+                    break;
+                }
             }
             if let Err(error) = self.reconcile().await {
                 self.publish(Some(error));
@@ -187,12 +229,147 @@ impl WorkerLoop {
     }
 
     fn make_view(&self) -> DesktopView {
-        projection::view(
+        let mut view = projection::view(
             self.session.state(),
             &self.session_id,
             queue_view(&self.pending),
-        )
+        );
+        view.connection_phase = Some(self.connection_phase.into());
+        view.connected = matches!(
+            self.connection_phase,
+            "connected" | "owner_confirmation_required"
+        );
+        view.writable &=
+            self.connection_phase == "connected" && self.session.owner_id() == self.confirmed_owner;
+        if !view.connected {
+            view.requests.clear();
+        }
+        view
     }
+
+    async fn confirm(&mut self) -> Result<()> {
+        if !self.session.is_connected() {
+            return Err(DesktopError::Disconnected);
+        }
+        self.session.verify_owner().await?;
+        self.session.state().check_writable()?;
+        self.confirmed_owner = self.session.owner_id().to_owned();
+        self.connection_phase = "connected";
+        self.resync_used = false;
+        Ok(())
+    }
+
+    async fn recover(&mut self, error: DesktopError) -> bool {
+        let source = self.source.clone();
+        let thread = self.thread_id.clone();
+        if storage(&self.ledger, move |ledger| ledger.hold(&source, &thread))
+            .await
+            .is_err()
+            || self.refresh_queue().await.is_err()
+        {
+            self.connection_phase = "disconnected";
+            self.publish(Some(DesktopError::Unavailable));
+            return false;
+        }
+        let Some(home) = self.session.codex_home().map(std::path::Path::to_owned) else {
+            self.connection_phase = "disconnected";
+            self.publish(Some(error));
+            return false;
+        };
+        let resync = error == DesktopError::OutOfSync && !self.resync_used;
+        let reconnect = matches!(
+            error,
+            DesktopError::Disconnected
+                | DesktopError::OwnerUnavailable
+                | DesktopError::Timeout
+                | DesktopError::OutcomeUnknown
+        );
+        if !resync && !reconnect {
+            self.connection_phase = "disconnected";
+            self.publish(Some(error));
+            return false;
+        }
+        if resync {
+            self.resync_used = true;
+        }
+        self.connection_phase = if resync { "resyncing" } else { "reconnecting" };
+        // Rotate before waiting so old actions, grants and UI responses cannot
+        // be accepted during recovery even if the new snapshot has revision 1.
+        self.session_id = uuid::Uuid::new_v4().to_string();
+        self.publish(Some(error));
+        loop {
+            let delay = if resync {
+                0
+            } else {
+                let Some(delay) = [1, 2, 4, 8, 16].get(self.reconnect_attempts) else {
+                    break;
+                };
+                self.reconnect_attempts += 1;
+                *delay
+            };
+            let home = home.clone();
+            let thread = self.thread_id.clone();
+            let attempt = async move {
+                if delay > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                }
+                DesktopSession::attach(&home, &thread).await
+            };
+            tokio::pin!(attempt);
+            let attempt = loop {
+                tokio::select! {
+                    result = &mut attempt => break result,
+                    request = self.actions.recv() => {
+                        let Some(request) = request else { return false; };
+                        let _ = request.response.send(Err(DesktopError::ReadOnly));
+                    }
+                }
+            };
+            match attempt {
+                Ok(session) => {
+                    let old = std::mem::replace(&mut self.session, session);
+                    old.close().await;
+                    self.project_after_recovery();
+                    return true;
+                }
+                Err(failure) => {
+                    super::diagnostics::record(
+                        super::diagnostics::Source::Ipc,
+                        "connect",
+                        None,
+                        None,
+                        None,
+                        failure,
+                    );
+                    if resync
+                        || !matches!(
+                            failure,
+                            DesktopError::Unavailable
+                                | DesktopError::Disconnected
+                                | DesktopError::OwnerUnavailable
+                                | DesktopError::Timeout
+                        )
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        self.connection_phase = "disconnected";
+        self.publish(Some(error));
+        false
+    }
+
+    fn project_after_recovery(&mut self) {
+        self.connection_phase = if self.session.owner_id() == self.confirmed_owner {
+            "connected"
+        } else {
+            "owner_confirmation_required"
+        };
+        self.last_error = None;
+        self.publish(None);
+    }
+
     fn publish(&mut self, error: Option<DesktopError>) {
         if error.is_some() {
             self.last_error = error;
@@ -213,6 +390,9 @@ impl WorkerLoop {
         action: DesktopAction,
         resolved: Vec<NativeReference>,
     ) -> Result<()> {
+        if self.connection_phase != "connected" || self.session.owner_id() != self.confirmed_owner {
+            return Err(DesktopError::ReadOnly);
+        }
         self.session.state().check_writable()?;
         let spans = match &action {
             DesktopAction::Send {
@@ -471,7 +651,10 @@ impl WorkerLoop {
     }
 
     async fn dispatch_queued(&mut self) -> Result<()> {
-        if self.session.state().check_idle().is_err() {
+        if self.connection_phase != "connected"
+            || self.session.owner_id() != self.confirmed_owner
+            || self.session.state().check_idle().is_err()
+        {
             return Ok(());
         }
         if let Some(turn) = &self.wait_for_turn {
@@ -529,6 +712,8 @@ impl WorkerLoop {
     }
 
     async fn submit(&mut self, id: &str, command: DesktopCommand) -> Result<()> {
+        self.refresh_queue().await?;
+        self.publish(None);
         let result = self.execute(&command).await;
         let source = self.source.clone();
         let thread = self.thread_id.clone();
@@ -587,7 +772,9 @@ impl WorkerLoop {
         let sender = &self.view;
         self.session
             .execute_observing(command, |state| {
-                sender.send_replace(projection::view(state, session_id, queue.clone()));
+                let mut view = projection::view(state, session_id, queue.clone());
+                view.connection_phase = Some("connected".into());
+                sender.send_replace(view);
             })
             .await
     }

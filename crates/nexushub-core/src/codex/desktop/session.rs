@@ -13,6 +13,7 @@ use tokio::time::timeout;
 pub struct DesktopSession {
     connection: DesktopReadSession,
     state: NativeState,
+    codex_home: Option<std::path::PathBuf>,
 }
 
 impl DesktopSession {
@@ -20,6 +21,7 @@ impl DesktopSession {
         let connection = DesktopReadSession::attach(codex_home, thread_id).await?;
         let mut session = Self {
             connection,
+            codex_home: Some(codex_home.to_owned()),
             state: NativeState::new(thread_id)?,
         };
         timeout(CODEX_DESKTOP_CONNECT_WAIT, async {
@@ -33,8 +35,23 @@ impl DesktopSession {
         Ok(session)
     }
 
+    pub fn codex_home(&self) -> Option<&Path> {
+        self.codex_home.as_deref()
+    }
+
     pub fn state(&self) -> &NativeState {
         &self.state
+    }
+
+    pub fn owner_id(&self) -> &str {
+        &self.connection.owner_id
+    }
+    pub fn is_connected(&self) -> bool {
+        self.connection.stream.is_some()
+    }
+
+    pub async fn verify_owner(&mut self) -> Result<()> {
+        self.recheck_owner(&mut |_| {}).await
     }
 
     pub async fn next_change(&mut self) -> Result<()> {
@@ -72,9 +89,30 @@ impl DesktopSession {
             Err(error @ (DesktopError::OwnerUnavailable | DesktopError::UnsupportedProtocol)) => {
                 return Err(error)
             }
-            Err(_) => {
+            Err(DesktopError::Rejected) => {
+                return Err(
+                    if matches!(
+                        command,
+                        DesktopCommand::Start(_) | DesktopCommand::Steer { .. }
+                    ) {
+                        DesktopError::OutcomeUnknown
+                    } else {
+                        DesktopError::Rejected
+                    },
+                );
+            }
+            Err(error) => {
                 self.connection.stream.take();
-                return Err(DesktopError::OutcomeUnknown);
+                return Err(
+                    if matches!(
+                        command,
+                        DesktopCommand::Start(_) | DesktopCommand::Steer { .. }
+                    ) {
+                        DesktopError::OutcomeUnknown
+                    } else {
+                        error
+                    },
+                );
             }
         };
         command.result(&response["result"]).map_err(|error| {
@@ -117,13 +155,16 @@ impl DesktopSession {
         target_owner: bool,
         changed: &mut impl FnMut(&NativeState),
     ) -> Result<Value> {
+        let wait = super::protocol::request_wait(request.method);
+        let method = request.method;
+        let version = request.version;
         let operation = async {
             let request_id = uuid::Uuid::new_v4().to_string();
             let mut envelope = json!({
                 "type":"request", "requestId":request_id,
                 "sourceClientId":self.connection.client_id,
                 "method":request.method,"version":request.version,"params":request.params,
-                "timeoutMs":CODEX_DESKTOP_CONNECT_WAIT.as_millis() as u64,
+                "timeoutMs":wait.as_millis() as u64,
             });
             if target_owner {
                 envelope["targetClientId"] = json!(self.connection.owner_id);
@@ -146,19 +187,14 @@ impl DesktopSession {
                             Some(request.version),
                             None,
                             message["error"].as_str(),
-                            DesktopError::Rejected,
+                            super::protocol::response_error(message["error"].as_str()),
                         );
                     }
                     return match message["resultType"].as_str() {
                         Some("success") => Ok(message),
-                        Some("error") => Err(match message["error"].as_str() {
-                            Some("no-client-found") => DesktopError::OwnerUnavailable,
-                            Some("unsupported-version" | "method-not-found") => {
-                                DesktopError::UnsupportedProtocol
-                            }
-                            Some("timeout") => DesktopError::Timeout,
-                            _ => DesktopError::Rejected,
-                        }),
+                        Some("error") => {
+                            Err(super::protocol::response_error(message["error"].as_str()))
+                        }
                         _ => Err(DesktopError::InvalidFrame),
                     };
                 }
@@ -168,9 +204,17 @@ impl DesktopSession {
                 }
             }
         };
-        timeout(CODEX_DESKTOP_CONNECT_WAIT, operation)
-            .await
-            .map_err(|_| DesktopError::Timeout)?
+        timeout(wait, operation).await.map_err(|_| {
+            super::diagnostics::record(
+                super::diagnostics::Source::Ipc,
+                method,
+                Some(version),
+                None,
+                None,
+                DesktopError::Timeout,
+            );
+            DesktopError::Timeout
+        })?
     }
 }
 

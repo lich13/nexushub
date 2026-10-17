@@ -199,7 +199,26 @@ impl DesktopReadSession {
         }
     }
 
-    fn event_from_message(&mut self, mut message: Value) -> Result<Option<DesktopEvent>> {
+    fn event_from_message(&mut self, message: Value) -> Result<Option<DesktopEvent>> {
+        let method = match message["method"].as_str() {
+            Some("thread-stream-state-changed") => "thread-stream-state-changed",
+            Some("thread-queued-followups-changed") => "thread-queued-followups-changed",
+            _ => "connect",
+        };
+        let version = message["version"].as_u64();
+        self.event_from_message_inner(message).inspect_err(|error| {
+            diagnostics::record(
+                diagnostics::Source::Ipc,
+                method,
+                version,
+                None,
+                None,
+                *error,
+            );
+        })
+    }
+
+    fn event_from_message_inner(&mut self, mut message: Value) -> Result<Option<DesktopEvent>> {
         if message["type"] != "broadcast" {
             return Ok(None);
         }
@@ -290,18 +309,14 @@ impl DesktopReadSession {
                     Some(version),
                     None,
                     response["error"].as_str(),
-                    DesktopError::Rejected,
+                    protocol::response_error(response["error"].as_str()),
                 );
             }
             return match response["resultType"].as_str() {
                 Some("success") => Ok(response),
-                Some("error") => Err(match response["error"].as_str() {
-                    Some("no-client-found") => DesktopError::OwnerUnavailable,
-                    Some("unsupported-version" | "method-not-found") => {
-                        DesktopError::UnsupportedProtocol
-                    }
-                    Some("timeout") => DesktopError::Timeout,
-                    _ => DesktopError::Unavailable,
+                Some("error") => Err(match protocol::response_error(response["error"].as_str()) {
+                    DesktopError::Rejected => DesktopError::Unavailable,
+                    error => error,
                 }),
                 _ => Err(DesktopError::InvalidFrame),
             };

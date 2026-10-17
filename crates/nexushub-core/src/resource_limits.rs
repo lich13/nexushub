@@ -39,6 +39,8 @@ pub const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
 // returned snapshots; this bound is not a cap on retained UI state or RSS.
 pub(crate) const CODEX_DESKTOP_FRAME_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const CODEX_DESKTOP_CONNECT_WAIT: Duration = Duration::from_secs(10);
+pub(crate) const CODEX_DESKTOP_START_WAIT: Duration = Duration::from_secs(90);
+pub(crate) const CODEX_DESKTOP_STEER_WAIT: Duration = Duration::from_secs(30);
 pub(crate) const CODEX_DESKTOP_HELPER_WAIT: Duration = Duration::from_secs(20);
 pub(crate) const CODEX_DESKTOP_APPS_WAIT: Duration = Duration::from_secs(60);
 pub(crate) const CODEX_DESKTOP_HELPER_PERMIT_WAIT: Duration = Duration::from_secs(60);

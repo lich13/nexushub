@@ -32,6 +32,8 @@ pub struct DesktopDiagnostics {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopThreadRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm_owner: Option<bool>,
     pub revision: u64,
     pub thread_id: String,
 }
@@ -132,6 +134,10 @@ pub struct DesktopAnswer {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_build: Option<String>,
     pub session_id: String,
     pub thread_id: String,
     pub revision: u64,
@@ -222,14 +228,14 @@ pub struct DesktopQuestionOption {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopCatalogRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_refetch: Option<bool>,
     pub revision: u64,
     pub session_id: Option<String>,
     pub project_handle: Option<String>,
     pub kind: String,
     pub query: String,
     pub cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub force_refetch: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -225,7 +225,8 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
 #[test]
 fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
     use nexushub_core::services::codex_desktop::{
-        DesktopActionRequest, DesktopChoice, DesktopView,
+        DesktopActionRequest, DesktopCatalogRequest, DesktopChoice, DesktopThreadRequest,
+        DesktopView,
     };
     for action in [
         json!({"type":"send","messageId":"fixture","text":"request","references":["opaque-reference"]}),
@@ -255,6 +256,24 @@ fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
     });
     let decoded: DesktopView = serde_json::from_value(view.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), view);
+    for confirm in [None, Some(false), Some(true)] {
+        let mut wire = json!({"revision":7,"threadId":"thread-fixture"});
+        if let Some(value) = confirm {
+            wire["confirmOwner"] = json!(value);
+        }
+        let decoded: DesktopThreadRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded.confirm_owner, confirm);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+    }
+    for force in [None, Some(false), Some(true)] {
+        let mut wire = json!({"revision":7,"sessionId":"session-fixture","projectHandle":null,"kind":"modes","query":"","cursor":null});
+        if let Some(value) = force {
+            wire["forceRefetch"] = json!(value);
+        }
+        let decoded: DesktopCatalogRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded.force_refetch, force);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+    }
     assert_eq!(
         serde_json::to_value(DesktopChoice { item: None }).unwrap(),
         json!({"item":null})
