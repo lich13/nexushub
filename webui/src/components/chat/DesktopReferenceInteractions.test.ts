@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DesktopView } from "../../lib/api/desktop";
-import { desktopDiagnostics } from "../../lib/query/desktop";
+import { chooseDesktopItem, desktopDiagnostics } from "../../lib/query/desktop";
 import { DesktopComposer } from "./DesktopComposer";
 
 const hooks = vi.hoisted(() => ({
@@ -73,9 +73,16 @@ function elements(node: ReactNode): Element[] {
   return [node, ...elements(node.props.children)];
 }
 
-function render() {
+function renderedText(node: ReactNode): string {
+  if (Array.isArray(node)) return node.map(renderedText).join("");
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (isValidElement<Record<string, any>>(node)) return renderedText(node.props.children);
+  return "";
+}
+
+function render(threadId = "thread-fixture") {
   hooks.index = 0;
-  return DesktopComposer({ threadId: "thread-fixture" }) as unknown as ReactElement;
+  return DesktopComposer({ threadId }) as unknown as ReactElement;
 }
 
 function required(tree: ReactNode, predicate: (element: Element) => boolean): Element {
@@ -142,6 +149,7 @@ beforeEach(() => {
   hooks.attachmentSessionId = undefined;
   hooks.attachmentReceive = null;
   hooks.attachmentHandles = [];
+  vi.mocked(chooseDesktopItem).mockReset().mockResolvedValue({ item: null });
   vi.mocked(desktopDiagnostics).mockReset();
   let id = 0;
   vi.stubGlobal("crypto", { randomUUID: () => `message-fixture-${++id}` });
@@ -150,24 +158,57 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("desktop composer reference interactions", () => {
-  test("starts the WebKit clipboard write during the click before diagnostics resolve", async () => {
-    let resolve!: (value: any) => void;
+  test("requests native diagnostic copying and shows pending and success states without browser clipboard access", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof desktopDiagnostics>>) => void;
     vi.mocked(desktopDiagnostics).mockReturnValueOnce(new Promise(accept => { resolve = accept; }));
-    const payloads: Promise<Blob>[] = [];
-    vi.stubGlobal("ClipboardItem", class {
-      constructor(parts: Record<string, Promise<Blob>>) { payloads.push(parts["text/plain"]); }
-    });
-    const write = vi.fn(async () => { await payloads[0]; });
-    const navigatorFixture = Object.create(globalThis.navigator ?? null);
-    Object.defineProperty(navigatorFixture, "clipboard", { value: { write }, configurable: true });
-    vi.stubGlobal("navigator", navigatorFixture);
+    const writeText = mockClipboard();
     hooks.desktop.view = null;
-    required(render(), element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
-    expect(write).toHaveBeenCalledOnce();
-    const diagnostics = { records: [], desktopBuild: "20586", bundledCliVersion: "0.0.0-fixture" };
+    const copyButton = required(render(), element => element.type === "button" && element.props["aria-label"] === "复制诊断");
+    copyButton.props.onClick();
+    expect(desktopDiagnostics).toHaveBeenCalledExactlyOnceWith(true);
+    expect(required(render(), element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.disabled).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+
+    const diagnostics = { records: [], desktopBuild: "fixture-build", bundledCliVersion: "0.0.0-fixture" };
     resolve(diagnostics);
     await flushMicrotasks();
-    expect(JSON.parse(await (await payloads[0]).text())).toEqual(diagnostics);
+    const completed = render();
+    expect(required(completed, element => element.props.role === "status").props.children).toBe("诊断已复制");
+    expect(required(completed, element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.disabled).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { identity: "thread", outcome: "success" },
+    { identity: "session", outcome: "success" },
+    { identity: "thread", outcome: "error" },
+    { identity: "session", outcome: "error" }
+  ] as const)("ignores late diagnostic $outcome after the $identity changes", async ({ identity, outcome }) => {
+    let resolve!: (value: Awaited<ReturnType<typeof desktopDiagnostics>>) => void;
+    let reject!: (reason?: unknown) => void;
+    vi.mocked(desktopDiagnostics).mockReturnValueOnce(new Promise((accept, fail) => {
+      resolve = accept;
+      reject = fail;
+    }));
+
+    required(render(), element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.onClick();
+    if (identity === "thread") {
+      render("thread-next");
+    } else {
+      hooks.desktop.view = view({ sessionId: "session-next" });
+      render();
+    }
+
+    if (outcome === "success") {
+      resolve({ records: [], desktopBuild: "fixture-build", bundledCliVersion: null });
+    } else {
+      reject(new Error("late diagnostics fixture"));
+    }
+    await flushMicrotasks();
+
+    const tree = render(identity === "thread" ? "thread-next" : "thread-fixture");
+    expect(elements(tree).some(element => element.props.role === "status" || element.props.role === "alert")).toBe(false);
+    expect(desktopDiagnostics).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   test.each([
@@ -210,16 +251,50 @@ describe("desktop composer reference interactions", () => {
     expect(textarea(render()).props["aria-expanded"]).toBe(false);
   });
 
-  test("opens and closes the reference picker from the toolbar", () => {
+  test("offers file, skill, plugin and app, and Codex goal actions from the add menu", async () => {
     let tree = render();
-    required(tree, element => element.type === "button" && element.props.children === "引用").props.onClick();
-    tree = render();
-    expect(required(tree, element => element.type === "div" && element.props.className === "desktop-reference-picker")).toBeTruthy();
-    expect(hooks.catalogCalls.at(-1)).toEqual(["session-fixture", "skills", ""]);
+    const summary = required(tree, element => element.type === "summary" && element.props["aria-label"] === "添加引用或附件");
+    expect(summary.props.title).toBe("添加引用或附件");
+    const menu = required(tree, element => element.type === "details" && element.props.className === "desktop-add-menu");
+    expect(menu.props.open).toBeUndefined();
+    const labels = elements(menu).filter(element => element.type === "button").map(element => renderedText(element.props.children));
+    expect(labels).toEqual(["文件或图片", "技能$", "插件与应用@", "目标在 Codex 中管理"]);
 
-    required(tree, element => element.type === "button" && element.props.title === "关闭引用").props.onClick();
+    required(menu, element => element.type === "button" && renderedText(element.props.children).includes("文件或图片")).props.onClick();
+    expect(chooseDesktopItem).toHaveBeenCalledExactlyOnceWith("file", "session-fixture");
+    await flushMicrotasks();
+
     tree = render();
-    expect(elements(tree).some(element => element.type === "div" && element.props.className === "desktop-reference-picker")).toBe(false);
+    const skillsMenu = required(tree, element => element.type === "details" && element.props.className === "desktop-add-menu");
+    required(skillsMenu, element => element.type === "button" && renderedText(element.props.children).includes("技能")).props.onClick();
+    tree = render();
+    expect(hooks.catalogCalls.at(-1)).toEqual(["session-fixture", "skills", ""]);
+    expect(required(tree, element => element.type === "div" && element.props.className === "desktop-reference-picker")).toBeTruthy();
+
+    const mentionsMenu = required(tree, element => element.type === "details" && element.props.className === "desktop-add-menu");
+    required(mentionsMenu, element => element.type === "button" && renderedText(element.props.children).includes("插件与应用")).props.onClick();
+    tree = render();
+    expect(hooks.catalogCalls.at(-1)).toEqual(["session-fixture", "mentions", ""]);
+
+    const goalMenu = required(tree, element => element.type === "details" && element.props.className === "desktop-add-menu");
+    required(goalMenu, element => element.type === "button" && renderedText(element.props.children).includes("目标")).props.onClick();
+    expect(hooks.desktop.open).toHaveBeenCalledOnce();
+  });
+
+  test("keeps the add menu open for null or internal blur targets", () => {
+    const menu = required(render(), element => element.type === "details" && element.props.className === "desktop-add-menu");
+    const inside = {};
+    const outside = {};
+    const currentTarget = { open: true, contains: vi.fn((target: unknown) => target === inside) };
+
+    menu.props.onBlur({ currentTarget, relatedTarget: null });
+    expect(currentTarget.open).toBe(true);
+    expect(currentTarget.contains).not.toHaveBeenCalled();
+
+    menu.props.onBlur({ currentTarget, relatedTarget: inside });
+    expect(currentTarget.open).toBe(true);
+    menu.props.onBlur({ currentTarget, relatedTarget: outside });
+    expect(currentTarget.open).toBe(false);
   });
 
   test("supports arrow and Enter selection while leaving IME Enter untouched", () => {
@@ -306,28 +381,30 @@ describe("desktop composer reference interactions", () => {
     expect(JSON.stringify(action)).not.toContain("example.invalid/app-fixture");
   });
 
-  test("copies host diagnostics while disconnected", async () => {
+  test("reports completion when the native desktop copies diagnostics while disconnected", async () => {
     hooks.desktop.view = view({ connected: false });
     const writeText = mockClipboard();
     const diagnostics = { records: [], desktopBuild: "fixture-build", bundledCliVersion: null };
     vi.mocked(desktopDiagnostics).mockResolvedValue(diagnostics);
 
     const tree = render();
-    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    required(tree, element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.onClick();
     await flushMicrotasks();
+    const completed = render();
 
     expect(desktopDiagnostics).toHaveBeenCalledOnce();
-    expect(desktopDiagnostics).toHaveBeenCalledWith();
-    expect(writeText).toHaveBeenCalledExactlyOnceWith(JSON.stringify(diagnostics, null, 2));
+    expect(desktopDiagnostics).toHaveBeenCalledWith(true);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(required(completed, element => element.props.role === "status").props.children).toBe("诊断已复制");
   });
 
-  test("shows a safe copy error when diagnostics or clipboard access fails", async () => {
+  test("shows a safe copy error when the native diagnostics command fails", async () => {
     hooks.desktop.view = view({ connected: false });
     const writeText = mockClipboard();
     vi.mocked(desktopDiagnostics).mockRejectedValue(new Error("diagnostics fixture unavailable"));
 
     let tree = render();
-    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    required(tree, element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.onClick();
     await flushMicrotasks();
     tree = render();
 
@@ -335,11 +412,14 @@ describe("desktop composer reference interactions", () => {
     expect(required(tree, element => element.props.role === "alert").props.children).toBe("无法复制诊断，请重试");
 
     vi.mocked(desktopDiagnostics).mockResolvedValue({ records: [], desktopBuild: null, bundledCliVersion: null });
-    writeText.mockRejectedValueOnce(new Error("clipboard fixture unavailable"));
-    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    required(tree, element => element.type === "button" && element.props["aria-label"] === "复制诊断").props.onClick();
     await flushMicrotasks();
     tree = render();
-    expect(required(tree, element => element.props.role === "alert").props.children).toBe("无法复制诊断，请重试");
+    expect(desktopDiagnostics).toHaveBeenCalledTimes(2);
+    expect(desktopDiagnostics).toHaveBeenNthCalledWith(1, true);
+    expect(desktopDiagnostics).toHaveBeenNthCalledWith(2, true);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(required(tree, element => element.props.role === "status").props.children).toBe("诊断已复制");
   });
 
   test("rejects an over-limit attachment batch atomically and releases every incoming handle", () => {
@@ -387,7 +467,7 @@ describe("desktop composer reference interactions", () => {
     const tree = render();
     expect(hooks.attachmentSessionId).toBe("session-fixture");
 
-    required(tree, element => element.type === "button" && element.props.title === "添加文件或图片").props.onClick();
+    required(tree, element => element.type === "button" && renderedText(element.props.children).includes("文件或图片")).props.onClick();
     const choosing = render();
 
     expect(hooks.attachmentSessionId).toBeUndefined();

@@ -283,6 +283,12 @@ describe("desktop settings catalogs", () => {
     await flushMicrotasks();
     tree = renderSettings();
 
+    const disclosure = required(tree, element => element.type === "details" && element.props.className === "desktop-model-settings");
+    const summary = required(disclosure, element => element.type === "summary");
+    expect(disclosure.props.open).toBeUndefined();
+    expect(renderedText(summary.props.children)).toContain("Fixture Model");
+    expect(renderedText(summary.props.children)).toContain("high");
+
     const effort = select(tree, "思考强度");
     expect(elements(effort).some(element => element.type === "option" && element.props.value === "max")).toBe(true);
     expect(elements(effort).some(element => element.type === "option" && element.props.value === "ultra")).toBe(true);
@@ -292,15 +298,40 @@ describe("desktop settings catalogs", () => {
 
     setDesktopView("session-fixture", "model-fixture", "max", "default");
     tree = renderSettings();
+    const selectedSummary = required(tree, element => element.type === "summary" && renderedText(element.props.children).includes("Fixture Model"));
+    expect(renderedText(selectedSummary.props.children)).toContain("max");
     select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
     expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: "max", mode: "plan" });
 
     setDesktopView("session-fixture", "model-fixture", "xhigh", "default");
     tree = renderSettings();
+    expect(renderedText(required(tree, element => element.type === "summary" && renderedText(element.props.children).includes("Fixture Model")).props.children)).toContain("xhigh");
     select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
     expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: null, mode: "plan" });
     tree = renderSettings();
     expect(elements(tree).some(element => element.props.role === "status" && element.props.children === "当前思考强度不可用，将继承原生默认")).toBe(true);
+  });
+
+  test("keeps settings open while a native select blur has no related target", async () => {
+    let tree = renderSettings();
+    catalogCalls()[0].pending.resolve({ items: [catalogItem("model-fixture", "Fixture Model")], nextCursor: null });
+    catalogCalls()[1].pending.resolve({ items: [catalogItem("default", "默认", "mode", []), catalogItem("plan", "Plan", "mode", [])], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+
+    const disclosure = required(tree, element => element.type === "details" && element.props.className === "desktop-model-settings");
+    const inside = select(tree, "协作模式");
+    const outside = {};
+    const currentTarget = { open: true, contains: vi.fn((target: unknown) => target === inside) };
+
+    disclosure.props.onBlur({ currentTarget, relatedTarget: null });
+    expect(currentTarget.open).toBe(true);
+    expect(currentTarget.contains).not.toHaveBeenCalled();
+
+    disclosure.props.onBlur({ currentTarget, relatedTarget: inside });
+    expect(currentTarget.open).toBe(true);
+    disclosure.props.onBlur({ currentTarget, relatedTarget: outside });
+    expect(currentTarget.open).toBe(false);
   });
 
   test("shows a failed setting action and keeps the controlled view until the next view arrives", async () => {
