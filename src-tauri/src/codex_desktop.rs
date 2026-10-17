@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Weak,
     },
 };
 use tauri::{ipc::Channel, State};
@@ -61,6 +61,7 @@ struct BridgeRuntime {
     codex_home: PathBuf,
     source: String,
     workers: Mutex<HashMap<String, DesktopWorker>>,
+    connecting: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     selection: Mutex<Option<Selection>>,
     attachments: Arc<std::sync::Mutex<nexushub_core::codex::desktop::attachments::AttachmentStore>>,
 }
@@ -165,6 +166,7 @@ impl CodexDesktopBridge {
             codex_home: home,
             source,
             workers: Mutex::new(HashMap::new()),
+            connecting: Mutex::new(HashMap::new()),
             selection: Mutex::new(None),
             attachments: Arc::new(std::sync::Mutex::new(attachments)),
         });
@@ -174,18 +176,66 @@ impl CodexDesktopBridge {
 }
 
 impl BridgeRuntime {
-    async fn attach(&self, thread_id: &str) -> Result<DesktopWorker, String> {
-        let mut workers = self.workers.lock().await;
-        workers.retain(|_, worker| !worker.is_closed());
-        if let Some(worker) = workers.get(thread_id) {
-            return Ok(worker.clone());
+    async fn attach(
+        &self,
+        thread_id: &str,
+        confirm_owner: Option<bool>,
+    ) -> Result<DesktopWorker, String> {
+        // Per-thread admission shares attachment work without holding the global
+        // worker registry over socket I/O. Weak locks do not retain old threads.
+        let admission = {
+            let mut connecting = self.connecting.lock().await;
+            connecting.retain(|_, gate| gate.strong_count() > 0);
+            if let Some(gate) = connecting.get(thread_id).and_then(Weak::upgrade) {
+                gate
+            } else {
+                if connecting.len() >= MAX_WORKERS {
+                    return Err("本机协作连接繁忙，请稍后重试".into());
+                }
+                let gate = Arc::new(Mutex::new(()));
+                connecting.insert(thread_id.into(), Arc::downgrade(&gate));
+                gate
+            }
+        };
+        let _admission = admission.lock().await;
+        let existing = {
+            let mut workers = self.workers.lock().await;
+            if workers.get(thread_id).is_some_and(DesktopWorker::is_closed)
+                && confirm_owner != Some(true)
+            {
+                return Err("桌面连接已变化，请点击连接确认".into());
+            }
+            workers.retain(|_, worker| !worker.is_closed());
+            workers.get(thread_id).cloned()
+        };
+        if let Some(worker) = existing {
+            if confirm_owner == Some(true) {
+                worker.confirm_owner().await.map_err(desktop_error)?;
+            }
+            return Ok(worker);
         }
+        if confirm_owner == Some(false) {
+            return Err("桌面连接已变化，请点击连接确认".into());
+        }
+        let session = DesktopSession::attach(&self.codex_home, thread_id)
+            .await
+            .map_err(desktop_error)?;
+        session.state().check_writable().map_err(desktop_error)?;
+        let mut workers = self.workers.lock().await;
         if workers.len() >= MAX_WORKERS {
+            let selected = self
+                .selection
+                .lock()
+                .await
+                .as_ref()
+                .map(|selection| selection.worker.current().thread_id);
             let stale = workers
                 .iter()
-                .find(|(_, worker)| {
+                .find(|(key, worker)| {
                     let current = worker.current();
-                    current.runtime == "idle" && current.queue.is_empty()
+                    selected.as_ref() != Some(*key)
+                        && current.runtime == "idle"
+                        && current.queue.is_empty()
                 })
                 .map(|(key, _)| key.clone());
             if let Some(stale) = stale {
@@ -194,10 +244,6 @@ impl BridgeRuntime {
                 return Err("本机协作线程已达到上限，请稍后重试".into());
             }
         }
-        let session = DesktopSession::attach(&self.codex_home, thread_id)
-            .await
-            .map_err(desktop_error)?;
-        session.state().check_writable().map_err(desktop_error)?;
         let worker = DesktopWorker::spawn_checked(
             session,
             self.ledger.clone(),
@@ -215,13 +261,28 @@ impl BridgeRuntime {
             .lock()
             .await
             .as_ref()
-            .filter(|selection| selection.id == session_id && !selection.worker.is_closed())
+            .filter(|selection| {
+                session_token(&selection.id, &selection.worker.current().session_id) == session_id
+                    && !selection.worker.is_closed()
+            })
             .map(|selection| selection.worker.clone())
             .ok_or_else(|| "桌面连接已变化，请重新连接".into())
     }
 }
 
+fn session_token(subscription: &str, epoch: &str) -> String {
+    format!("{subscription}.{epoch}")
+}
+
 pub(crate) fn desktop_error(error: DesktopError) -> String {
+    nexushub_core::codex::desktop::diagnostics::record(
+        nexushub_core::codex::desktop::diagnostics::Source::Local,
+        "connect",
+        None,
+        None,
+        None,
+        error,
+    );
     error.user_message().into()
 }
 
@@ -242,6 +303,38 @@ async fn verify_thread(state: &DesktopState, thread_id: &str) -> Result<(), Stri
     .map_err(str::to_owned)
 }
 
+async fn await_owner<T, F: std::future::Future<Output = Result<T, String>>>(
+    mut connect: impl FnMut() -> F,
+) -> Result<T, String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    tokio::time::timeout_at(deadline, async {
+        loop {
+            // Tokio may poll the inner future at the deadline before polling
+            // the timer; never start one more connection attempt at 20 seconds.
+            if tokio::time::Instant::now() >= deadline {
+                return Err(desktop_error(DesktopError::OwnerUnavailable));
+            }
+            match connect().await {
+                Ok(value) => return Ok(value),
+                Err(error)
+                    if [
+                        DesktopError::OwnerUnavailable,
+                        DesktopError::Unavailable,
+                        DesktopError::Disconnected,
+                    ]
+                    .iter()
+                    .any(|kind| error == kind.user_message()) =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .map_err(|_| desktop_error(DesktopError::OwnerUnavailable))?
+}
+
 #[tauri::command(rename = "codex.desktop.attach")]
 pub async fn attach(
     state: State<'_, DesktopState>,
@@ -255,7 +348,12 @@ pub async fn attach(
     verify_thread(&state, &request.thread_id).await?;
     let runtime = bridge.runtime(&state).await?;
     remote.require_local(request.revision)?;
-    let worker = runtime.attach(&request.thread_id).await?;
+    let (worker, metadata) = tokio::join!(
+        await_owner(|| runtime.attach(&request.thread_id, request.confirm_owner)),
+        diagnostics::metadata(),
+    );
+    let worker = worker?;
+    let desktop_build = metadata.desktop_build;
     remote.require_local(request.revision)?;
     if bridge.intent.load(Ordering::SeqCst) != intent {
         return Err("所选线程已变化，已丢弃旧连接".into());
@@ -265,7 +363,8 @@ pub async fn attach(
     // Read the initial value from this subscription so a change between the
     // snapshot and subscription cannot be missed while native Codex is idle.
     let mut initial = updates.borrow_and_update().clone();
-    initial.session_id = token.clone();
+    initial.session_id = session_token(&token, &initial.session_id);
+    initial.desktop_build = desktop_build.clone();
     let connection = remote.inner().clone();
     let event_token = token.clone();
     let listener = tokio::spawn(async move {
@@ -277,9 +376,9 @@ pub async fn attach(
                 break;
             }
             let mut value = updates.borrow_and_update().clone();
-            value.session_id = event_token.clone();
-            let closed = !value.connected;
-            if on_event.send(value).is_err() || closed {
+            value.session_id = session_token(&event_token, &value.session_id);
+            value.desktop_build = desktop_build.clone();
+            if on_event.send(value).is_err() {
                 break;
             }
         }
@@ -395,7 +494,16 @@ pub async fn action(
     remote.require_local(request.revision)?;
     let worker = runtime.worker(&request.session_id).await?;
     let mut view = worker
-        .act_with_references(request.action, references)
+        .act_in_session(
+            request.action,
+            references,
+            request
+                .session_id
+                .rsplit_once('.')
+                .ok_or("桌面连接已变化")?
+                .1
+                .to_owned(),
+        )
         .await
         .map_err(desktop_error)?;
     view.session_id = request.session_id;
@@ -416,10 +524,11 @@ pub async fn detach(
     // by its original local worker and cannot migrate to a remote machine.
     if let Some(runtime) = bridge.runtime.lock().await.as_ref() {
         let mut selection = runtime.selection.lock().await;
-        if selection
-            .as_ref()
-            .is_some_and(|selection| selection.id == request.session_id)
-        {
+        if selection.as_ref().is_some_and(|selection| {
+            request
+                .session_id
+                .starts_with(&format!("{}.", selection.id))
+        }) {
             if let Some(selection) = selection.take() {
                 selection.listener.abort();
             }
@@ -507,9 +616,9 @@ pub async fn choose(
         if directory {
             selection::project(path)
         } else {
-            nexushub_core::codex::desktop::references::NativeReference::selected_file(path)
+            nexushub_core::codex::desktop::references::NativeReference::selected_file_detailed(path)
                 .map(GrantValue::Reference)
-                .map_err(desktop_error)
+                .map_err(|(_, message)| message.to_owned())
         }
     })
     .await
@@ -616,3 +725,7 @@ pub async fn catalog(
     runtime.worker(session_id).await?;
     Ok(page.project(request.revision, &thread, &mut *bridge.grants.lock().await))
 }
+
+#[cfg(test)]
+#[path = "codex_desktop/connection_tests.rs"]
+mod connection_tests;

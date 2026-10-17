@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { DesktopAction, DesktopView } from "../lib/api/desktop";
 import { DesktopStatus } from "../components/chat/DesktopStatus";
 import { actOnDesktopThread, attachDesktopThread, openDesktopThread } from "../lib/query/desktop";
+import { requestDesktopOpenIntent } from "../lib/desktopIntent";
 import { useCodexDesktop } from "./useCodexDesktop";
 
 const lifecycle = vi.hoisted(() => ({
@@ -79,7 +80,7 @@ vi.mock("../lib/query/threads", () => ({ useThreadCacheActions: () => lifecycle.
 
 type Attached = NonNullable<Awaited<ReturnType<typeof attachDesktopThread>>>;
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void };
-type Attachment = { threadId: string; receive: (view: DesktopView) => void; pending: Deferred<Attached> };
+type Attachment = { threadId: string; receive: (view: DesktopView) => void; confirmOwner: boolean; pending: Deferred<Attached> };
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -177,9 +178,9 @@ beforeEach(() => {
   lifecycle.documentFixture = documentFixture;
   vi.stubGlobal("document", documentFixture);
 
-  vi.mocked(attachDesktopThread).mockReset().mockImplementation((threadId, receive) => {
+  vi.mocked(attachDesktopThread).mockReset().mockImplementation((threadId, receive, confirmOwner = true) => {
     const pending = deferred<Attached>();
-    lifecycle.attachments.push({ threadId, receive, pending });
+    lifecycle.attachments.push({ threadId, receive, confirmOwner, pending });
     return pending.promise;
   });
   vi.mocked(actOnDesktopThread).mockReset().mockResolvedValue(desktopView("thread-fixture"));
@@ -226,14 +227,17 @@ describe("Codex desktop hook lifecycle", () => {
     desktop.connect();
     render("thread-old");
     const oldAttachment = attachmentList()[0];
+    expect(oldAttachment.confirmOwner).toBe(true);
 
     desktop = render("thread-new");
     expect(desktop.view).toBeNull();
     expect(statusMarkup(desktop.view)).toBe("");
     expect(desktop.busy).toBe(false);
+    expect(attachmentList()).toHaveLength(1);
     desktop.connect();
     render("thread-new");
     const newAttachment = attachmentList()[1];
+    expect(newAttachment.confirmOwner).toBe(true);
     const newView = desktopView("thread-new", "session-new", 3);
     const newDetach = resolveAttachment(newAttachment, newView);
     await flushMicrotasks();
@@ -255,6 +259,7 @@ describe("Codex desktop hook lifecycle", () => {
   test("hiding detaches the UI subscription and becoming visible attaches again", async () => {
     vi.useFakeTimers();
     const connected = await connect("thread-visible");
+    expect(attachmentList()[0].confirmOwner).toBe(true);
     const documentFixture = lifecycle.documentFixture as { hidden: boolean };
     const notifyVisibility = () => {
       if (!lifecycle.visibilityListener) throw new Error("visibility listener fixture is missing");
@@ -280,6 +285,7 @@ describe("Codex desktop hook lifecycle", () => {
     render("thread-visible");
     expect(attachmentList()).toHaveLength(2);
     const resumedAttachment = attachmentList()[1];
+    expect(resumedAttachment.confirmOwner).toBe(false);
     const resumedView = desktopView("thread-visible", "session-resumed", 2);
     resolveAttachment(resumedAttachment, resumedView);
     await flushMicrotasks();
@@ -301,6 +307,112 @@ describe("Codex desktop hook lifecycle", () => {
     expect(statusMarkup(render("thread-session").view)).not.toContain("执行中");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
+  });
+
+  test("a read-only owner stays unconfirmed on hide and show until an explicit connect", async () => {
+    let desktop = render("thread-readonly");
+    desktop.connect();
+    render("thread-readonly");
+    const first = attachmentList()[0];
+    expect(first.confirmOwner).toBe(true);
+    const readonlyView = { ...desktopView("thread-readonly"), writable: false };
+    const firstDetach = resolveAttachment(first, readonlyView);
+    await flushMicrotasks();
+    expect(render("thread-readonly").view?.writable).toBe(false);
+
+    const documentFixture = lifecycle.documentFixture as { hidden: boolean };
+    documentFixture.hidden = true;
+    lifecycle.visibilityListener?.();
+    render("thread-readonly");
+    expect(firstDetach).toHaveBeenCalledOnce();
+
+    documentFixture.hidden = false;
+    lifecycle.visibilityListener?.();
+    render("thread-readonly");
+    const resumed = attachmentList()[1];
+    expect(resumed.confirmOwner).toBe(false);
+    resolveAttachment(resumed, { ...readonlyView, sessionId: "session-readonly-resumed" });
+    await flushMicrotasks();
+
+    desktop = render("thread-readonly");
+    desktop.connect();
+    render("thread-readonly");
+    expect(attachmentList()[2].confirmOwner).toBe(true);
+  });
+
+  test("a successful Open intent automatically attaches with owner confirmation", async () => {
+    const result = deferred<{ ok: boolean }>();
+    vi.mocked(openDesktopThread).mockReturnValueOnce(result.promise);
+    const desktop = render("thread-open");
+    const opening = desktop.open();
+
+    expect(openDesktopThread).toHaveBeenCalledExactlyOnceWith("thread-open");
+    result.resolve({ ok: true });
+    await opening;
+    render("thread-open");
+
+    expect(attachmentList()).toHaveLength(1);
+    expect(attachmentList()[0].confirmOwner).toBe(true);
+  });
+
+  test("a late Open result after changing threads does not start an attach", async () => {
+    const result = deferred<{ ok: boolean }>();
+    vi.mocked(openDesktopThread).mockReturnValueOnce(result.promise);
+    const opening = render("thread-open-old").open();
+    render("thread-open-new");
+
+    result.resolve({ ok: true });
+    await opening;
+    render("thread-open-new");
+
+    expect(attachmentList()).toHaveLength(0);
+  });
+
+  test("a create intent is consumed once and attaches with owner confirmation", async () => {
+    requestDesktopOpenIntent("thread-created");
+    render("thread-created");
+
+    expect(attachmentList()).toHaveLength(1);
+    expect(attachmentList()[0].confirmOwner).toBe(true);
+    expect(attachmentList()[0].threadId).toBe("thread-created");
+  });
+
+  test("projects a synthetic dispatch event in the status row within one second", async () => {
+    vi.useFakeTimers();
+    const connected = await connect("thread-projection");
+    const dispatching = {
+      ...desktopView("thread-projection"),
+      queue: [{ id: "message-fixture", status: "dispatching", kind: "send", preview: "fixture", createdAt: 1 }]
+    };
+
+    connected.attachment.receive(dispatching);
+    await vi.advanceTimersByTimeAsync(999);
+
+    const projection = render("thread-projection").view;
+    expect(projection).toEqual(dispatching);
+    expect(statusMarkup(projection)).toContain("正在提交到 Codex…");
+  });
+
+  test("connection metadata accepts a new session epoch and drops old session and action results", async () => {
+    const connected = await connect("thread-epoch");
+    connected.attachment.receive(desktopView("thread-epoch", "session-thread-epoch", 8));
+    expect(render("thread-epoch").view?.revision).toBe(8);
+    const pendingResult = deferred<DesktopView>();
+    vi.mocked(actOnDesktopThread).mockReturnValueOnce(pendingResult.promise);
+    const pendingAction = render("thread-epoch").act({ type: "stop", turnId: "turn-fixture" });
+    const epoch = {
+      ...desktopView("thread-epoch", "session-next", 1),
+      connectionPhase: "connecting"
+    };
+
+    connected.attachment.receive(epoch);
+    expect(render("thread-epoch").view).toEqual(epoch);
+    connected.attachment.receive({ ...desktopView("thread-epoch", "session-thread-epoch", 99), runtime: "active", activeTurnId: "stale-turn" });
+    expect(render("thread-epoch").view).toEqual(epoch);
+
+    pendingResult.resolve(desktopView("thread-epoch", "session-thread-epoch", 100));
+    await expect(pendingAction).rejects.toThrow("所选线程已变化，旧操作结果已丢弃");
+    expect(render("thread-epoch").view).toEqual(epoch);
   });
 
   test("approval and completion events during a slow detail read get one trailing refresh", async () => {
@@ -331,6 +443,21 @@ describe("Codex desktop hook lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(2);
     expect(lifecycle.cache.refreshDesktopThread).toHaveBeenLastCalledWith("thread-refresh");
+  });
+
+  test("a later successful operation or recovery clears a previous operation error", async () => {
+    const connected = await connect("thread-error");
+    const action = { type: "stop" as const, turnId: "turn-fixture" };
+    vi.mocked(actOnDesktopThread).mockRejectedValueOnce(new Error("Codex 未接受此操作"));
+    await expect(connected.desktop.act(action)).rejects.toThrow("Codex 未接受此操作");
+    expect(render("thread-error").error).toBe("Codex 未接受此操作");
+    vi.mocked(actOnDesktopThread).mockResolvedValueOnce(desktopView("thread-error", "session-thread-error", 2));
+    await render("thread-error").act(action);
+    expect(render("thread-error").error).toBe("");
+    vi.mocked(actOnDesktopThread).mockRejectedValueOnce(new Error("操作结果未确认"));
+    await expect(render("thread-error").act(action)).rejects.toThrow("操作结果未确认");
+    connected.attachment.receive({ ...desktopView("thread-error", "recovered-fixture", 1), connectionPhase: "connected" });
+    expect(render("thread-error").error).toBe("");
   });
 
   test("manual actions request a coalesced thread detail refresh", async () => {

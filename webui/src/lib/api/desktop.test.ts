@@ -66,16 +66,37 @@ describe("Codex desktop transport", () => {
     const receive = vi.fn();
     const attached = await attachDesktopThread("thread-fixture", receive);
     const emit = bridge.callbacks.get(1)!;
+    const latest = view("thread-fixture", "session-latest", 2);
+
+    emit({ index: 2, message: latest });
 
     await attached.detach();
-    emit({ index: 1, message: view("thread-fixture") });
+    emit({ index: 3, message: view("thread-fixture", "session-after-detach", 3) });
 
     expect(bridge.unregisterCallback).toHaveBeenCalledExactlyOnceWith(1);
     expect(bridge.callbacks.size).toBe(0);
-    expect(receive).not.toHaveBeenCalled();
+    expect(receive).toHaveBeenCalledExactlyOnceWith(latest);
     expect(bridge.invoke).toHaveBeenLastCalledWith("codex.desktop.detach", {
-      request: { revision: 0, sessionId: "session-fixture" }
+      request: { revision: 0, sessionId: "session-latest" }
     });
+  });
+
+  test.each([
+    ["default owner confirmation", undefined, true],
+    ["passive subscription", false, false]
+  ])("forwards %s to the native attach request", async (_label, confirmOwner, expected) => {
+    const bridge = installBridge();
+    const { attachDesktopThread } = await import("./desktop");
+    const attached = await attachDesktopThread("thread-fixture", vi.fn(), confirmOwner);
+    const call = bridge.invoke.mock.calls.find(([command]) => command === "codex.desktop.attach");
+
+    expect(call).toBeDefined();
+    expect((call?.[1] as { request: Record<string, unknown> }).request).toEqual({
+      revision: 0,
+      threadId: "thread-fixture",
+      confirmOwner: expected
+    });
+    await attached.detach();
   });
 
   test("drops frames for another thread and for a previous machine revision", async () => {

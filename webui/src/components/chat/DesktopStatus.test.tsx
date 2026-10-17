@@ -88,7 +88,7 @@ describe("desktop collaboration status", () => {
       queue: [queued("queued", 1), queued("outcome_unknown", 2), queued("dispatching", 3)]
     }));
 
-    expect(html).toContain("正在发送");
+    expect(html).toContain("正在提交到 Codex…");
     expect(html).toContain('aria-label="运行中"');
   });
 

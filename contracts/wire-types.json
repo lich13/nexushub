@@ -5940,6 +5940,13 @@
       "DesktopThreadRequest": {
         "fields": [
           {
+            "name": "confirm_owner",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < bool >"
+          },
+          {
             "name": "revision",
             "serde": [],
             "type": "u64"
@@ -5957,6 +5964,20 @@
       },
       "DesktopView": {
         "fields": [
+          {
+            "name": "connection_phase",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "desktop_build",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
           {
             "name": "session_id",
             "serde": [],
@@ -9804,8 +9825,10 @@
       "json": [],
       "signatures": [
         "async fn diagnostics (remote : State < '_ , RemoteConnections > , request : DesktopDiagnosticsRequest ,) -> Result < DesktopDiagnostics , String >",
+        "fn session_token (subscription : & str , epoch : & str) -> String",
         "fn desktop_error (error : DesktopError) -> String",
         "async fn verify_thread (state : & DesktopState , thread_id : & str) -> Result < () , String >",
+        "async fn await_owner < T , F : std :: future :: Future < Output = Result < T , String > > > (mut connect : impl FnMut () -> F ,) -> Result < T , String >",
         "async fn attach (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopThreadRequest , on_event : Channel < DesktopView > ,) -> Result < DesktopView , String >",
         "async fn action (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopActionRequest ,) -> Result < DesktopView , String >",
         "async fn detach (bridge : State < '_ , CodexDesktopBridge > , request : DesktopSessionRequest ,) -> Result < DesktopAck , String >",
@@ -10136,7 +10159,7 @@
     },
     "webui/src/lib/api/desktop.ts": {
       "calls": [
-        "runtimeRpc<DesktopView>(\"codex.desktop.attach\",{request:{revision,threadId}satisfiesDesktopThreadRequest,onEvent:channel.value},true)",
+        "runtimeRpc<DesktopView>(\"codex.desktop.attach\",{request:{revision,threadId,confirmOwner}satisfiesDesktopThreadRequest,onEvent:channel.value},true)",
         "invokeNative<DesktopAck>(\"codex.desktop.detach\",{request})",
         "runtimeRpc<DesktopView>(\"codex.desktop.action\",{request:{revision:localRevision(),sessionId,action}satisfiesDesktopActionRequest},true)",
         "runtimeRpc<DesktopAck>(\"codex.desktop.open\",{request:{revision:localRevision(),threadId}satisfiesDesktopThreadRequest},true)",
@@ -10179,8 +10202,8 @@
         "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
         "DesktopReview": "exporttypeDesktopReview={command:string|null;cwd:string|null;reason:string|null;changes:DesktopFileReview[];permissions:DesktopPermissionsReview|null;extra:string|null;truncated:boolean};",
         "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
-        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={revision:number;threadId:string};",
-        "DesktopView": "exporttypeDesktopView={sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
+        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={confirmOwner?:boolean;revision:number;threadId:string};",
+        "DesktopView": "exporttypeDesktopView={connectionPhase?:string|null;desktopBuild?:string|null;sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
       }
     },
     "webui/src/lib/api/filePaths.ts": {

@@ -4,7 +4,7 @@ export type DesktopMode = "default" | "plan";
 export type DesktopDiagnosticsRequest = { revision: number };
 export type DesktopDiagnostic = { timestamp: number; source: string; method: string; version: number | null; code: number | null; category: string; hint: string };
 export type DesktopDiagnostics = { records: DesktopDiagnostic[]; desktopBuild: string | null; bundledCliVersion: string | null };
-export type DesktopThreadRequest = { revision: number; threadId: string };
+export type DesktopThreadRequest = { confirmOwner?: boolean; revision: number; threadId: string };
 export type DesktopSessionRequest = { revision: number; sessionId: string };
 export type DesktopAnswer = { questionId: string; answers: string[] };
 export type DesktopReferenceSpan = { handle: string; start: number; end: number };
@@ -27,6 +27,7 @@ export type DesktopPermissionsReview = { network: string | null; fileSystem: str
 export type DesktopReview = { command: string | null; cwd: string | null; reason: string | null; changes: DesktopFileReview[]; permissions: DesktopPermissionsReview | null; extra: string | null; truncated: boolean };
 export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean; supportedDecisions?: string[]; review?: DesktopReview | null };
 export type DesktopView = {
+  connectionPhase?: string | null; desktopBuild?: string | null;
   sessionId: string; threadId: string; revision: number; connected: boolean; writable: boolean;
   runtime: string; activeTurnId: string | null; model: string | null; reasoningEffort: string | null;
   mode: DesktopMode | null; requests: DesktopPendingRequest[]; queue: DesktopQueuedMessage[]; error: string | null;
@@ -57,7 +58,7 @@ function localRevision(): number {
   return connection.revision;
 }
 
-export async function attachDesktopThread(threadId: string, receive: (view: DesktopView) => void) {
+export async function attachDesktopThread(threadId: string, receive: (view: DesktopView) => void, confirmOwner = true) {
   const revision = localRevision();
   let latest: DesktopView | undefined;
   const channel = createNativeChannel<DesktopView>(view => {
@@ -65,10 +66,10 @@ export async function attachDesktopThread(threadId: string, receive: (view: Desk
     latest = view; receive(view);
   });
   try {
-    const initial = await runtimeRpc<DesktopView>("codex.desktop.attach", { request: { revision, threadId } satisfies DesktopThreadRequest, onEvent: channel.value }, true);
+    const initial = await runtimeRpc<DesktopView>("codex.desktop.attach", { request: { revision, threadId, confirmOwner } satisfies DesktopThreadRequest, onEvent: channel.value }, true);
     return { initial: latest ?? initial, detach: async () => {
       channel.close();
-      await detachDesktopThread({ revision, sessionId: initial.sessionId });
+      await detachDesktopThread({ revision, sessionId: latest?.sessionId ?? initial.sessionId });
     } };
   } catch (error) { channel.close(); throw error; }
 }

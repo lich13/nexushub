@@ -69,6 +69,8 @@ pub fn view(
 ) -> DesktopView {
     let value = state.value();
     DesktopView {
+        connection_phase: None,
+        desktop_build: None,
         session_id: session_id.into(),
         thread_id: state.thread_id().into(),
         revision: state.revision().unwrap_or(0),

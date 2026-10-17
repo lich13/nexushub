@@ -6,23 +6,35 @@ import { useDesktopReferenceCatalog } from "../../hooks/useDesktopReferenceCatal
 import { useCodexDesktop } from "../../hooks/useCodexDesktop";
 import { useDesktopAttachments } from "../../hooks/useDesktopAttachments";
 import { DesktopRequests } from "./DesktopRequests";
+import { requestDesktopOpenIntent } from "../../lib/desktopIntent";
 import { DesktopStatus } from "./DesktopStatus";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 
 export function NewDesktopThread({ onCreated }: { onCreated: (id: string) => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const created = useRef<string>();
+  const [uncertain, setUncertain] = useState(false);
   const create = async () => {
     setBusy(true); setError("");
     try {
-      const { item } = await chooseDesktopItem("project");
-      if (!item) return;
-      const result = await createDesktopThread(item.handle);
-      await onCreated(result.threadId);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法新建线程"); }
+      if (!created.current) {
+        const { item } = await chooseDesktopItem("project");
+        if (!item) return;
+        const result = await createDesktopThread(item.handle);
+        created.current = result.threadId;
+      }
+      requestDesktopOpenIntent(created.current);
+      await onCreated(created.current);
+      created.current = undefined;
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "无法新建线程";
+      if (message.includes("结果未确认")) setUncertain(true);
+      setError(message);
+    }
     finally { setBusy(false); }
   };
-  return <><button className="icon-button compact" title="新建 Codex 线程" disabled={busy} onClick={() => { void create(); }}><FolderPlus size={16} /></button>
+  return <><button className="icon-button compact" title="新建 Codex 线程" disabled={busy || uncertain} onClick={() => { void create(); }}><FolderPlus size={16} /></button>
     {error && <span role="alert" className="desktop-create-error">{error}</span>}</>;
 }
 
@@ -46,6 +58,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   const identity = useRef<{ payload: string; id: string }>();
   const discardTrigger = useRef<HTMLButtonElement>(null);
   const writable = Boolean(view?.connected && view.writable);
+  useEffect(() => { setLocalError(""); setCatalogKind(""); setDiscard(null); setChoosing(false); }, [threadId, view?.sessionId]);
   const attachments = useDesktopAttachments(writable && !busy && !choosing ? view?.sessionId : undefined, attachmentRegion, references.map(item => item.handle), items => {
     setDraft(value => {
       const additions = items.filter(item => !value.references.some(reference => reference.handle === item.handle));
@@ -97,28 +110,39 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
         if (value.references.length >= 32) { setLocalError("引用数量超出限制，本次附件未添加"); return value; }
         return { ...value, references: [...value.references, item] };
       });
-    } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
-    finally { setChoosing(false); }
+    } catch (reason) { if (currentSession.current === session) setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
+    finally { if (currentSession.current === session) setChoosing(false); }
   };
   const copyDiagnostics = async () => {
-    try { await navigator.clipboard.writeText(JSON.stringify(await desktopDiagnostics(), null, 2)); }
-    catch { setLocalError("无法复制诊断，请重试"); }
+    try {
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
+        // WebKit requires write() during the click. Supply the asynchronously
+        // collected diagnostic text as the clipboard item's promised content.
+        const content = desktopDiagnostics().then(value => new Blob([JSON.stringify(value, null, 2)], { type: "text/plain" }));
+        void content.catch(() => {});
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": content })]);
+      } else {
+        await navigator.clipboard.writeText(JSON.stringify(await desktopDiagnostics(), null, 2));
+      }
+      setLocalError("");
+    } catch { setLocalError("无法复制诊断，请重试"); }
   };
   const locked = busy || choosing;
   return <section className="desktop-composer" aria-label="与 Codex 协作">
+    {view?.desktopBuild && view.desktopBuild !== "20586" && <p className="muted-text">此 Codex 桌面 build 尚未验证；当前实现对照 build 20586。</p>}
     <button type="button" className="desktop-diagnostics" onClick={() => { void copyDiagnostics(); }}>复制诊断</button>
-    {!writable ? <div className="desktop-connect-row"><span role={desktop.error ? "alert" : undefined}>{desktop.error || (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
+      {view && view.queue.length > 0 && <details className="desktop-outbox" open={view.queue.some(item => item.status !== "queued")}>
+        <summary>待发送 · {view.queue.length}</summary>
+        <ol>{view.queue.map(item => <li key={item.id}>
+          <span><small>{item.status === "outcome_unknown" ? "结果待核对" : item.status === "held" ? item.kind === "steer" ? "补充未发送，请取消后重试" : "已暂停" : item.status === "dispatching" ? "正在提交到 Codex…" : "等待线程空闲"}</small>{item.preview || "引用内容"}</span>
+          {item.status === "outcome_unknown" ? <button ref={discardTrigger} disabled={locked || !writable} onClick={() => setDiscard(item.id)}>核对后移除</button>
+            : ["queued", "held"].includes(item.status) && <button disabled={locked || !writable} onClick={() => { void desktop.act({ type: "cancelQueued", messageId: item.id }).catch(() => {}); }}>取消</button>}
+        </li>)}</ol>
+        {view.queue.some(item => item.status === "held" && item.kind === "queue") && <button disabled={locked || !writable} onClick={() => { void desktop.act({ type: "resumeQueue" }).catch(() => {}); }}>继续发送队列</button>}
+      </details>}
+    {!writable ? <div className="desktop-connect-row"><span role={desktop.error ? "alert" : undefined}>{view?.connectionPhase === "owner_confirmation_required" ? "Codex owner 已变化，已恢复阅读；点击连接确认后继续协作" : view?.connectionPhase === "resyncing" ? "正在重新同步 Codex…" : view?.connectionPhase === "reconnecting" ? "正在恢复 Codex 连接…" : desktop.error || (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
       <DesktopStatus view={view} />
       <DesktopRequests requests={view!.requests} busy={locked} act={desktop.act} open={desktop.open} />
-      {view!.queue.length > 0 && <details className="desktop-outbox" open={view!.queue.some(item => item.status !== "queued")}>
-        <summary>待发送 · {view!.queue.length}</summary>
-        <ol>{view!.queue.map(item => <li key={item.id}>
-          <span><small>{item.status === "outcome_unknown" ? "结果待核对" : item.status === "held" ? item.kind === "steer" ? "补充未发送，请取消后重试" : "已暂停" : item.status === "dispatching" ? "正在发送" : "等待线程空闲"}</small>{item.preview || "引用内容"}</span>
-          {item.status === "outcome_unknown" ? <button ref={discardTrigger} disabled={locked} onClick={() => setDiscard(item.id)}>核对后移除</button>
-            : ["queued", "held"].includes(item.status) && <button disabled={locked} onClick={() => { void desktop.act({ type: "cancelQueued", messageId: item.id }).catch(() => {}); }}>取消</button>}
-        </li>)}</ol>
-        {view!.queue.some(item => item.status === "held" && item.kind === "queue") && <button disabled={locked} onClick={() => { void desktop.act({ type: "resumeQueue" }).catch(() => {}); }}>继续发送队列</button>}
-      </details>}
       <form ref={attachmentRegion} onSubmit={event => { event.preventDefault(); void send(); }}>
         {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.name}<button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => { attachments.release([item.handle]); setDraft(value => removeDesktopReference(value, item.handle)); }}><X size={12} /></button></span>)}</div>}
         <textarea ref={textarea} aria-label="发送给 Codex" aria-autocomplete="list" aria-controls={inline ? "desktop-reference-options" : undefined} aria-expanded={Boolean(inline)} aria-activedescendant={inline && catalog.items[option] ? `desktop-reference-option-${option}` : undefined}

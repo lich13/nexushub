@@ -1,6 +1,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DesktopView } from "../../lib/api/desktop";
+import { desktopDiagnostics } from "../../lib/query/desktop";
 import { DesktopComposer } from "./DesktopComposer";
 
 const hooks = vi.hoisted(() => ({
@@ -51,7 +52,8 @@ vi.mock("../../hooks/useDesktopReferenceCatalog", () => ({
 vi.mock("../../lib/query/desktop", () => ({
   chooseDesktopItem: vi.fn(async () => ({ item: null })),
   createDesktopThread: vi.fn(async () => ({ threadId: "thread-fixture" })),
-  desktopCatalog: vi.fn(async () => ({ items: [], nextCursor: null }))
+  desktopCatalog: vi.fn(async () => ({ items: [], nextCursor: null })),
+  desktopDiagnostics: vi.fn()
 }));
 
 type Element = ReactElement<Record<string, any>>;
@@ -112,6 +114,14 @@ async function flushMicrotasks() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
+function mockClipboard() {
+  const writeText = vi.fn(async (_text: string) => undefined);
+  const navigatorFixture = Object.create(globalThis.navigator ?? null);
+  Object.defineProperty(navigatorFixture, "clipboard", { value: { writeText }, configurable: true });
+  vi.stubGlobal("navigator", navigatorFixture);
+  return writeText;
+}
+
 beforeEach(() => {
   hooks.index = 0;
   hooks.cells.clear();
@@ -132,6 +142,7 @@ beforeEach(() => {
   hooks.attachmentSessionId = undefined;
   hooks.attachmentReceive = null;
   hooks.attachmentHandles = [];
+  vi.mocked(desktopDiagnostics).mockReset();
   let id = 0;
   vi.stubGlobal("crypto", { randomUUID: () => `message-fixture-${++id}` });
 });
@@ -139,6 +150,26 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("desktop composer reference interactions", () => {
+  test("starts the WebKit clipboard write during the click before diagnostics resolve", async () => {
+    let resolve!: (value: any) => void;
+    vi.mocked(desktopDiagnostics).mockReturnValueOnce(new Promise(accept => { resolve = accept; }));
+    const payloads: Promise<Blob>[] = [];
+    vi.stubGlobal("ClipboardItem", class {
+      constructor(parts: Record<string, Promise<Blob>>) { payloads.push(parts["text/plain"]); }
+    });
+    const write = vi.fn(async () => { await payloads[0]; });
+    const navigatorFixture = Object.create(globalThis.navigator ?? null);
+    Object.defineProperty(navigatorFixture, "clipboard", { value: { write }, configurable: true });
+    vi.stubGlobal("navigator", navigatorFixture);
+    hooks.desktop.view = null;
+    required(render(), element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    expect(write).toHaveBeenCalledOnce();
+    const diagnostics = { records: [], desktopBuild: "20586", bundledCliVersion: "0.0.0-fixture" };
+    resolve(diagnostics);
+    await flushMicrotasks();
+    expect(JSON.parse(await (await payloads[0]).text())).toEqual(diagnostics);
+  });
+
   test.each([
     ["detached", null],
     ["disconnected", view({ connected: false })],
@@ -150,6 +181,19 @@ describe("desktop composer reference interactions", () => {
     expect(required(tree, element => element.type === "div" && element.props.className === "desktop-connect-row")).toBeTruthy();
     expect(elements(tree).some(element => element.props.className === "desktop-collaboration-status")).toBe(false);
     expect(required(tree, element => element.type === "button" && element.props.children === "连接")).toBeTruthy();
+  });
+
+  test("keeps unknown and paused queue entries visible without authorizing a new owner", () => {
+    hooks.desktop.view = view({ writable: false, connectionPhase: "owner_confirmation_required", queue: [
+      { id: "unknown-fixture", kind: "queue", status: "outcome_unknown", preview: "unknown fixture" },
+      { id: "held-fixture", kind: "queue", status: "held", preview: "held fixture" }
+    ] });
+    const tree = render();
+    expect(required(tree, element => element.type === "small" && element.props.children === "结果待核对")).toBeTruthy();
+    for (const label of ["核对后移除", "取消", "继续发送队列"]) {
+      expect(required(tree, element => element.type === "button" && element.props.children === label).props.disabled).toBe(true);
+    }
+    expect(elements(tree).some(element => element.type === "textarea")).toBe(false);
   });
 
   test.each([
@@ -238,6 +282,64 @@ describe("desktop composer reference interactions", () => {
     });
     expect(Object.keys(action).sort()).toEqual(["messageId", "referenceSpans", "references", "text", "type"]);
     expect(JSON.stringify(action)).not.toContain("example.invalid/private-fixture");
+  });
+
+  test("sends @ app references as opaque handles with UTF-8 spans", async () => {
+    hooks.catalog.items = [{
+      handle: "app-handle-fixture", kind: "app", name: "工具", description: "fixture app",
+      reasoningEfforts: [], defaultReasoningEffort: null, path: "example.invalid/app-fixture"
+    }];
+    let tree = typeText("猫😀 @工");
+    textarea(tree).props.onKeyDown(keyEvent("Enter"));
+    tree = render();
+    expect(textarea(tree).props.value).toBe("猫😀 @工具 ");
+
+    required(tree, element => element.type === "form").props.onSubmit({ preventDefault: vi.fn() });
+    await flushMicrotasks();
+
+    const [action] = hooks.desktop.act.mock.calls[0];
+    expect(action).toEqual({
+      type: "send", messageId: "message-fixture-1", text: "猫😀 @工具 ",
+      references: ["app-handle-fixture"],
+      referenceSpans: [{ handle: "app-handle-fixture", start: 8, end: 15 }]
+    });
+    expect(JSON.stringify(action)).not.toContain("example.invalid/app-fixture");
+  });
+
+  test("copies host diagnostics while disconnected", async () => {
+    hooks.desktop.view = view({ connected: false });
+    const writeText = mockClipboard();
+    const diagnostics = { records: [], desktopBuild: "fixture-build", bundledCliVersion: null };
+    vi.mocked(desktopDiagnostics).mockResolvedValue(diagnostics);
+
+    const tree = render();
+    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    await flushMicrotasks();
+
+    expect(desktopDiagnostics).toHaveBeenCalledOnce();
+    expect(desktopDiagnostics).toHaveBeenCalledWith();
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(JSON.stringify(diagnostics, null, 2));
+  });
+
+  test("shows a safe copy error when diagnostics or clipboard access fails", async () => {
+    hooks.desktop.view = view({ connected: false });
+    const writeText = mockClipboard();
+    vi.mocked(desktopDiagnostics).mockRejectedValue(new Error("diagnostics fixture unavailable"));
+
+    let tree = render();
+    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    await flushMicrotasks();
+    tree = render();
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(required(tree, element => element.props.role === "alert").props.children).toBe("无法复制诊断，请重试");
+
+    vi.mocked(desktopDiagnostics).mockResolvedValue({ records: [], desktopBuild: null, bundledCliVersion: null });
+    writeText.mockRejectedValueOnce(new Error("clipboard fixture unavailable"));
+    required(tree, element => element.type === "button" && element.props.children === "复制诊断").props.onClick();
+    await flushMicrotasks();
+    tree = render();
+    expect(required(tree, element => element.props.role === "alert").props.children).toBe("无法复制诊断，请重试");
   });
 
   test("rejects an over-limit attachment batch atomically and releases every incoming handle", () => {

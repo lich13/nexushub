@@ -115,6 +115,7 @@ const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.ve
 // Local desktop subscriptions/catalogs are reads, but never routed to remote.invoke.
 reads.add("codex.desktop.attach");
 reads.add("codex.desktop.catalog");
+reads.add("codex.desktop.diagnostics");
 const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");
