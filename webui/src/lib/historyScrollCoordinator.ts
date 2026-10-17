@@ -82,7 +82,13 @@ export function createHistoryScrollCoordinator(onChange: () => void = () => {}) 
   };
   const capture = () => {
     const element = options?.streamRef.current;
-    if (element) { anchor = snapshot(element); lastTop = element.scrollTop; }
+    if (element) {
+      // Bottom following restores scrollHeight, never a reading anchor. Avoid
+      // measuring every message until the reader leaves the bottom; all such
+      // transitions turn following off before capturing their position.
+      anchor = follow.current ? null : snapshot(element);
+      lastTop = element.scrollTop;
+    }
   };
   const loadOlder = (reason: "search" | "scroll" = "scroll"): Promise<boolean> => {
     if (active) return active;

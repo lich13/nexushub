@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前源码版本为 1.3.3 候选，正式维护版本仍为 1.3.2；基线为 `f74d32a / v1.3.2`。用户反馈后的修订候选 `479acbd` 已覆盖安装，通过签名、产物隐私和必要启动检查，真实功能仍待用户验收。同提交 CI 前端、后端通过，macOS WebKit 线程切换性能复核仍超出 100ms 门槛，后续 Tauri 测试未执行；本机相同性能检查通过，环境差异的根因尚未定位。正式 1.3.3 未发布。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
+当前源码版本为 1.3.3 候选，正式维护版本仍为 1.3.2；基线为 `f74d32a / v1.3.2`。用户反馈后的修订候选 `479acbd` 已覆盖安装，通过签名、产物隐私和必要启动检查，真实功能仍待用户验收。同提交 CI 前端、后端通过，macOS WebKit 线程切换性能复核仍超出 100ms 门槛，后续 Tauri 测试未执行。返回实现后已减少底部跟随时的重复锚点扫描，本机原样本通过；新提交的 CI 结论尚待核实，不能据此声称解决了 CI 超标。正式 1.3.3 未发布。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
 
 ## 当前改动与证据
 
@@ -123,7 +123,17 @@
 
 此次状态文档更新的 `git diff --check` 退出 0。文档更新后的 Git 对象隐私扫描已执行，但结果收集丢失会话句柄，退出码与条目数无法取回；不把进程结束当作通过，也未因此重跑。此前产品源码、CI 前后端与候选产物的隐私检查结论保留，后续源码变更仍须执行相应检查。
 
-本机结果不能替代 CI。下一步返回实现阶段定位 WebKit 在 CI 的持续超标，先取得可归因证据，不将其推定为偶发波动或新输入区的确定缺陷；如需改产品代码，完成针对性验证后再进入收尾。候选十项仍待用户验收，正式发布继续受同提交三项 CI 与约定真机验收条件约束。
+本机结果不能替代 CI，因此返回实现阶段定位 WebKit 在 CI 的持续超标，不将其推定为偶发波动或新输入区的确定缺陷。后续修复证据见下节。候选十项仍待用户验收，正式发布继续受同提交三项 CI 与约定真机验收条件约束。
+
+## 线程切换性能修复
+
+2026-10-18 返回实现时，`672ef97` 与已安装候选具有相同产品源码。本机 WebKit 原样本再次得到切换 p95 50ms（20 次、72 条消息）。临时 DOM 诊断确认每次切换通常调用三次 `onRendered`，约 432 次节点位置读取来自 `snapshot → capture → onRendered`；即使跟随底部，也在扫描全部时间线节点。WebKit 未提供 longtask/long-animation-frame 数据，不能把整个 CI 耗时归因于此路径；单独绕过布局可见性读取也没有获得收益。临时诊断和输出已清理，正式测试与 100ms 门槛未修改。
+
+`historyScrollCoordinator.capture` 在跟随底部时只更新滚动位置，不查找未使用的阅读锚点；向上阅读、搜索和分页仍先关闭跟随再捕获锚点。新增两项回归覆盖底部追加、上滚翻页与轮询的可见偏移。在 `webui` 中定向执行 `pnpm exec vitest run src/lib/useHistoryScroll.test.ts` 共 11 项，退出 0；此前测试脚本的参数分隔符没有生效，意外执行的 56 文件/758 项也退出 0，之后未再执行全套。
+
+`corepack pnpm@12.11.2 --dir webui build:tauri` 包含类型检查，退出 0。随后复用生产构建执行 README 的串行 headed、trace-off 性能命令，两项均退出 0：Chromium/WebKit 展开 p95 为 30.8/33ms、滚动 30.5/30ms、线程切换 31.8/45ms，分别使用原有 60/20/20 次样本。该修复尚未打入已安装候选；本机测量不能替代新提交 CI 或真实滚动验收。
+
+既有 `activity-timeline.pw.ts` 中的 `Codex earlier-page loading preserves all tool rows and the open group` 和 `native pagination inserts older activity while preserving the visible anchor` 两个模式分别在 Chromium/WebKit 运行，4 项通过、退出 0；覆盖工具组分页、折叠选择与可见锚点。只使用合成 fixture，预览和本轮测试输出已清理。
 
 ## 保留边界与交付条件
 
