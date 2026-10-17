@@ -2,39 +2,32 @@
 //! It has no resume/turn/queue execution entrypoint. All conversation execution
 //! is routed to the already running desktop owner through the IPC session.
 use super::{DesktopError, Result};
-use crate::resource_limits::CODEX_DESKTOP_FRAME_BYTES;
+use crate::resource_limits::{
+    CODEX_DESKTOP_APPS_WAIT as APPS_WAIT, CODEX_DESKTOP_FRAME_BYTES,
+    CODEX_DESKTOP_HELPER_PERMIT_WAIT as PERMIT_WAIT, CODEX_DESKTOP_HELPER_WAIT as HELPER_WAIT,
+};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::Semaphore,
-    time::timeout,
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::{timeout, timeout_at, Instant},
 };
 
-const HELPER_WAIT: Duration = Duration::from_secs(20);
-static HELPER_GATE: OnceLock<Semaphore> = OnceLock::new();
+static HELPER_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub enum CatalogQuery {
-    Models {
-        cursor: Option<String>,
-    },
+    Models { cursor: Option<String> },
     Modes,
-    Skills {
-        cwd: PathBuf,
-    },
-    Plugins {
-        cwd: PathBuf,
-    },
-    Apps {
-        thread_id: Option<String>,
-        cursor: Option<String>,
-    },
+    Skills { cwd: PathBuf },
+    Plugins { cwd: PathBuf },
+    Apps { cursor: Option<String> },
 }
 
 pub struct DesktopHelper {
@@ -74,33 +67,29 @@ impl DesktopHelper {
     }
 
     pub async fn catalog(&self, query: CatalogQuery) -> Result<Value> {
-        let (method, params) = match query {
-            CatalogQuery::Models { cursor } => (
-                "model/list",
-                json!({"includeHidden":false,"limit":100,"cursor":cursor}),
-            ),
-            CatalogQuery::Modes => ("collaborationMode/list", json!({})),
-            CatalogQuery::Skills { cwd } => {
-                ("skills/list", json!({"cwds":[cwd],"forceReload":false}))
-            }
-            CatalogQuery::Plugins { cwd } => {
-                ("plugin/list", json!({"cwds":[cwd],"forceRefetch":false}))
-            }
-            CatalogQuery::Apps { thread_id, cursor } => {
-                if thread_id
-                    .as_ref()
-                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
-                    || cursor.as_ref().is_some_and(|cursor| cursor.len() > 4096)
-                {
-                    return Err(DesktopError::InvalidInput);
-                }
-                (
-                    "app/list",
-                    json!({"threadId":thread_id,"cursor":cursor,"limit":100,"forceRefetch":false}),
-                )
-            }
-        };
-        self.with_process(method, params).await
+        let mut reader = self
+            .catalog_reader(matches!(query, CatalogQuery::Apps { .. }))
+            .await?;
+        let result = reader.catalog(query, false).await;
+        reader.finish().await;
+        result
+    }
+
+    /// One permit and one native process for a complete logical catalog read.
+    /// The deadline includes initialization and all pages, not queue waiting.
+    pub async fn catalog_reader(&self, apps: bool) -> Result<CatalogReader> {
+        let permit = helper_permit().await?;
+        let mut process = HelperProcess::start(&self.executable, &self.codex_home)?;
+        let deadline = Instant::now() + if apps { APPS_WAIT } else { HELPER_WAIT };
+        timeout_at(deadline, process.initialize())
+            .await
+            .map_err(|_| DesktopError::Timeout)??;
+        Ok(CatalogReader {
+            _permit: permit,
+            process,
+            deadline,
+            next_id: 2,
+        })
     }
 
     /// Native thread/start creates an empty persistent thread; it never starts a
@@ -119,33 +108,17 @@ impl DesktopHelper {
             .await?;
         let id = result["thread"]["id"]
             .as_str()
-            .ok_or(DesktopError::InvalidFrame)?;
-        uuid::Uuid::parse_str(id).map_err(|_| DesktopError::InvalidIdentity)?;
+            .ok_or(DesktopError::OutcomeUnknown)?;
+        uuid::Uuid::parse_str(id).map_err(|_| DesktopError::OutcomeUnknown)?;
         Ok(id.into())
     }
 
     async fn with_process(&self, method: &'static str, params: Value) -> Result<Value> {
-        let _permit = timeout(
-            HELPER_WAIT,
-            HELPER_GATE.get_or_init(|| Semaphore::new(1)).acquire(),
-        )
-        .await
-        .map_err(|_| DesktopError::Timeout)?
-        .map_err(|_| DesktopError::Unavailable)?;
+        let _permit = helper_permit().await?;
         let mut process = HelperProcess::start(&self.executable, &self.codex_home)?;
         let mut submitted = false;
         let operation = async {
-            process
-                .request(
-                    1,
-                    "initialize",
-                    json!({
-                        "clientInfo":{"name":"nexushub","version":env!("CARGO_PKG_VERSION")},
-                        "capabilities":{"experimentalApi":true}
-                    }),
-                )
-                .await?;
-            process.write(&json!({"method":"initialized"})).await?;
+            process.initialize().await?;
             submitted = true;
             process.request(2, method, params).await
         };
@@ -153,24 +126,88 @@ impl DesktopHelper {
             .await
             .map_err(|_| DesktopError::Timeout)
             .and_then(|result| result);
-        // Reap only the helper we created. kill_on_drop also covers cancellation.
-        process.stdin.take();
-        if timeout(Duration::from_secs(1), process.child.wait())
-            .await
-            .is_err()
-        {
-            let _ = process.child.kill().await;
-        }
-        if method == "thread/start"
-            && submitted
-            && result
-                .as_ref()
-                .is_err_and(|error| !matches!(error, DesktopError::Rejected))
-        {
+        process.finish().await;
+        // No verified helper error proves absence of a persistent thread.
+        // Once submitted, never make an uncertain creation look retryable.
+        if method == "thread/start" && submitted && result.is_err() {
             return Err(DesktopError::OutcomeUnknown);
         }
         result
     }
+}
+
+async fn helper_permit() -> Result<OwnedSemaphorePermit> {
+    timeout(
+        PERMIT_WAIT,
+        HELPER_GATE
+            .get_or_init(|| Arc::new(Semaphore::new(1)))
+            .clone()
+            .acquire_owned(),
+    )
+    .await
+    .map_err(|_| DesktopError::Busy)?
+    .map_err(|_| DesktopError::Unavailable)
+}
+
+pub struct CatalogReader {
+    _permit: OwnedSemaphorePermit,
+    process: HelperProcess,
+    deadline: Instant,
+    next_id: u64,
+}
+
+impl CatalogReader {
+    pub async fn catalog(&mut self, query: CatalogQuery, force_refetch: bool) -> Result<Value> {
+        let (method, params) = catalog_request(query, force_refetch)?;
+        let id = self.next_id;
+        self.next_id += 1;
+        let result = timeout_at(self.deadline, self.process.request(id, method, params))
+            .await
+            .map_err(|_| DesktopError::Timeout)
+            .and_then(|result| result);
+        if let Err(error) = result {
+            super::diagnostics::record(
+                super::diagnostics::Source::Helper,
+                method,
+                None,
+                None,
+                None,
+                error,
+            );
+        }
+        result
+    }
+    pub async fn finish(self) {
+        self.process.finish().await;
+    }
+}
+
+fn catalog_request(query: CatalogQuery, force_refetch: bool) -> Result<(&'static str, Value)> {
+    Ok(match query {
+        CatalogQuery::Models { cursor } => (
+            "model/list",
+            json!({"includeHidden":false,"limit":100,"cursor":cursor}),
+        ),
+        CatalogQuery::Modes => ("collaborationMode/list", json!({})),
+        CatalogQuery::Skills { cwd } => (
+            "skills/list",
+            json!({"cwds":[cwd],"forceReload":force_refetch}),
+        ),
+        CatalogQuery::Plugins { cwd } => (
+            "plugin/list",
+            json!({"cwds":[cwd],"forceRefetch":force_refetch}),
+        ),
+        CatalogQuery::Apps { cursor } => {
+            if cursor.as_ref().is_some_and(|cursor| cursor.len() > 4096) {
+                return Err(DesktopError::InvalidInput);
+            }
+            // A transient helper does not own or resume the desktop thread.
+            (
+                "app/list",
+                json!({"threadId":null,"cursor":cursor,"limit":100,"forceRefetch":force_refetch}),
+            )
+        }
+    })
 }
 
 struct HelperProcess {
@@ -180,6 +217,21 @@ struct HelperProcess {
 }
 
 impl HelperProcess {
+    async fn initialize(&mut self) -> Result<()> {
+        self.request(1, "initialize", json!({"clientInfo":{"name":"nexushub","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
+        self.write(&json!({"method":"initialized"})).await
+    }
+
+    async fn finish(mut self) {
+        self.stdin.take();
+        if timeout(Duration::from_secs(1), self.child.wait())
+            .await
+            .is_err()
+        {
+            let _ = self.child.kill().await;
+        }
+    }
+
     fn start(executable: &Path, codex_home: &Path) -> Result<Self> {
         let mut child = Command::new(executable)
             .args(["app-server", "--listen", "stdio://"])

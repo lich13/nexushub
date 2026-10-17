@@ -361,23 +361,26 @@ pub async fn action(
         let helper = DesktopHelper::installed(state.codex_paths().home)
             .await
             .map_err(desktop_error)?;
-        bridge
-            .catalogs
-            .read(
-                &helper,
-                cwd,
-                &thread,
-                &DesktopCatalogRequest {
-                    revision: request.revision,
-                    session_id: Some(request.session_id.clone()),
-                    project_handle: None,
-                    kind: "models".into(),
-                    query: String::new(),
-                    cursor: None,
-                },
-                || require_catalog_context(&remote, &bridge, request.revision, intent),
-            )
-            .await?;
+        for kind in ["models", "modes"] {
+            bridge
+                .catalogs
+                .read(
+                    &helper,
+                    cwd,
+                    &thread,
+                    &DesktopCatalogRequest {
+                        force_refetch: None,
+                        revision: request.revision,
+                        session_id: Some(request.session_id.clone()),
+                        project_handle: None,
+                        kind: kind.into(),
+                        query: String::new(),
+                        cursor: None,
+                    },
+                    || require_catalog_context(&remote, &bridge, request.revision, intent),
+                )
+                .await?;
+        }
         bridge
             .catalogs
             .validate_settings(

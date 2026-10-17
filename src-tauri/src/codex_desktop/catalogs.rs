@@ -6,7 +6,7 @@ use super::{
 };
 use nexushub_core::{
     codex::desktop::{
-        helper::{CatalogQuery, DesktopHelper},
+        helper::{CatalogQuery, CatalogReader, DesktopHelper},
         references::NativeReference,
         DesktopError,
     },
@@ -91,7 +91,12 @@ impl Catalogs {
             thread,
             request,
             current,
-            fetch(helper, cwd, thread, &request.kind),
+            fetch(
+                helper,
+                cwd,
+                &request.kind,
+                request.force_refetch == Some(true),
+            ),
         )
         .await
     }
@@ -106,11 +111,23 @@ impl Catalogs {
         {
             let mut cache = self.cache.lock().await;
             current()?;
-            if let Some(page) = cache.cached(thread, request)? {
-                return Ok(page);
+            if request.force_refetch == Some(true) && request.cursor.is_some() {
+                return Err("重新读取必须从首页开始".into());
+            }
+            let cached = cache.cached(thread, request)?;
+            if request.force_refetch != Some(true) {
+                if let Some(page) = cached {
+                    return Ok(page);
+                }
             }
         }
-        let key = catalog_key(thread, request);
+        // A manual refresh must not join an ordinary in-flight read whose
+        // native force flag was false. Concurrent refreshes still coalesce.
+        let key = format!(
+            "{}:{}",
+            catalog_key(thread, request),
+            request.force_refetch == Some(true)
+        );
         let flight = {
             let mut flights = self.flights.lock().await;
             flights.retain(|_, value| value.strong_count() > 0);
@@ -127,11 +144,23 @@ impl Catalogs {
                 {
                     let mut cache = self.cache.lock().await;
                     current()?;
-                    if cache.cached(thread, request)?.is_some() {
+                    if request.force_refetch != Some(true)
+                        && cache.cached(thread, request)?.is_some()
+                    {
                         return Ok(());
                     }
                 }
-                let (items, modes) = fetch.await?;
+                // A detached or superseded selection must release its own
+                // helper and permit promptly, including a slow first app page.
+                let (items, modes) = {
+                    tokio::pin!(fetch);
+                    loop {
+                        tokio::select! {
+                            result = &mut fetch => break result?,
+                            _ = tokio::time::sleep(Duration::from_millis(100)) => current()?,
+                        }
+                    }
+                };
                 let mut cache = self.cache.lock().await;
                 current()?;
                 cache.insert(thread, request, items, modes)?;
@@ -330,7 +359,17 @@ impl CatalogCache {
             DesktopMode::Default => "default",
             DesktopMode::Plan => "plan",
         };
-        if !entry.modes.iter().any(|value| value == mode)
+        let modes = self
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.revision == revision
+                    && entry.thread == thread
+                    && entry.kind == "modes"
+                    && entry.created.elapsed() < CACHE_AGE
+            })
+            .ok_or("模式列表已失效，请重新读取")?;
+        if !modes.modes.iter().any(|value| value == mode)
             || effort.is_some_and(|effort| !item.efforts.iter().any(|value| value == effort))
         {
             return Err("所选模式或思考强度当前不可用".into());
@@ -342,6 +381,8 @@ impl CatalogCache {
 fn catalog_error(error: DesktopError) -> String {
     if error == DesktopError::Timeout {
         "目录超时，可重试".into()
+    } else if error == DesktopError::Busy {
+        "目录读取繁忙，可重试".into()
     } else {
         desktop_error(error)
     }
@@ -350,9 +391,16 @@ fn catalog_error(error: DesktopError) -> String {
 async fn fetch(
     helper: &DesktopHelper,
     cwd: &Path,
-    thread: &str,
     kind: &str,
+    force_refetch: bool,
 ) -> Result<(Vec<Item>, Vec<String>), String> {
+    if !matches!(kind, "models" | "modes" | "skills" | "plugins" | "apps") {
+        return Err("引用类型不支持".into());
+    }
+    let mut reader = helper
+        .catalog_reader(kind == "apps")
+        .await
+        .map_err(catalog_error)?;
     let mut items = Vec::new();
     let mut modes = Vec::new();
     match kind {
@@ -360,8 +408,8 @@ async fn fetch(
             let mut cursor = None;
             let mut seen = HashSet::new();
             loop {
-                let page = helper
-                    .catalog(CatalogQuery::Models { cursor })
+                let page = reader
+                    .catalog(CatalogQuery::Models { cursor }, false)
                     .await
                     .map_err(catalog_error)?;
                 for value in array(&page, "data")? {
@@ -390,8 +438,10 @@ async fn fetch(
                     break;
                 }
             }
-            let result = helper
-                .catalog(CatalogQuery::Modes)
+        }
+        "modes" => {
+            let result = reader
+                .catalog(CatalogQuery::Modes, false)
                 .await
                 .map_err(catalog_error)?;
             modes = array(&result, "data")?
@@ -400,12 +450,27 @@ async fn fetch(
                 .filter(|mode| matches!(*mode, "default" | "plan"))
                 .map(str::to_owned)
                 .collect();
+            items = modes
+                .iter()
+                .map(|mode| Item {
+                    id: mode.clone(),
+                    kind: "mode".into(),
+                    name: if mode == "plan" { "Plan" } else { "默认" }.into(),
+                    description: String::new(),
+                    efforts: vec![],
+                    default_effort: None,
+                    grant: None,
+                })
+                .collect();
         }
         "skills" => {
-            let result = helper
-                .catalog(CatalogQuery::Skills {
-                    cwd: cwd.to_owned(),
-                })
+            let result = reader
+                .catalog(
+                    CatalogQuery::Skills {
+                        cwd: cwd.to_owned(),
+                    },
+                    force_refetch,
+                )
                 .await
                 .map_err(catalog_error)?;
             for entry in array(&result, "data")? {
@@ -423,10 +488,13 @@ async fn fetch(
             }
         }
         "plugins" => {
-            let result = helper
-                .catalog(CatalogQuery::Plugins {
-                    cwd: cwd.to_owned(),
-                })
+            let result = reader
+                .catalog(
+                    CatalogQuery::Plugins {
+                        cwd: cwd.to_owned(),
+                    },
+                    force_refetch,
+                )
                 .await
                 .map_err(catalog_error)?;
             for marketplace in array(&result, "marketplaces")? {
@@ -440,26 +508,25 @@ async fn fetch(
             }
         }
         "apps" => {
-            items = apps(helper, thread).await?;
+            items = apps(&mut reader, force_refetch).await?;
         }
         _ => return Err("引用类型不支持".into()),
     }
+    reader.finish().await;
     limit(&items)?;
     let mut seen = HashSet::new();
     items.retain(|item| seen.insert((item.kind.clone(), item.id.clone())));
     Ok((items, modes))
 }
 
-async fn apps(helper: &DesktopHelper, thread: &str) -> Result<Vec<Item>, String> {
+async fn apps(reader: &mut CatalogReader, force_refetch: bool) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
     let mut cursor = None;
     let mut seen = HashSet::new();
     loop {
-        let page = helper
-            .catalog(CatalogQuery::Apps {
-                thread_id: Some(thread.into()),
-                cursor,
-            })
+        let refresh = force_refetch && cursor.is_none();
+        let page = reader
+            .catalog(CatalogQuery::Apps { cursor }, refresh)
             .await
             .map_err(catalog_error)?;
         for app in array(&page, "data")? {

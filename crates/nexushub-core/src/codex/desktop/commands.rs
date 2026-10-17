@@ -249,12 +249,9 @@ impl DesktopCommand {
             } => {
                 valid_setting(model)?;
                 if let Some(effort) = reasoning_effort {
-                    if !matches!(
-                        effort.as_str(),
-                        "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-                    ) {
-                        return Err(DesktopError::InvalidInput);
-                    }
+                    // The native catalog, checked by the host adapter, owns
+                    // the set of efforts (including max/ultra/custom values).
+                    valid_setting(effort)?;
                 }
                 (
                     super::protocol::Method::Settings,

@@ -393,6 +393,41 @@ fn model_and_mode_settings_do_not_carry_permission_overrides() {
 }
 
 #[test]
+fn settings_accept_catalog_efforts_and_reject_invalid_effort_values() {
+    let state = replica_with(state_for("idle"));
+    let long_valid = "x".repeat(128);
+    for effort in ["max", "ultra", "fixture-custom", long_valid.as_str()] {
+        let command = DesktopCommand::Settings {
+            model: "fixture-model".into(),
+            reasoning_effort: Some(effort.into()),
+            mode: CollaborationMode::Default,
+        };
+        assert!(
+            command.prepare(&state).is_ok(),
+            "catalog-provided effort {effort:?} should be accepted"
+        );
+    }
+
+    let too_long = "x".repeat(129);
+    for effort in [
+        "",
+        too_long.as_str(),
+        "fixture\neffort",
+        "fixture\u{0001}effort",
+    ] {
+        let command = DesktopCommand::Settings {
+            model: "fixture-model".into(),
+            reasoning_effort: Some(effort.into()),
+            mode: CollaborationMode::Default,
+        };
+        assert!(matches!(
+            command.prepare(&state),
+            Err(DesktopError::InvalidInput)
+        ));
+    }
+}
+
+#[test]
 fn settings_results_require_an_explicit_applied_boolean() {
     let command = DesktopCommand::Settings {
         model: "fixture-model".into(),

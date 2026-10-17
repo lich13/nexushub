@@ -175,17 +175,39 @@ describe("useDesktopReferenceCatalog", () => {
 
     failed.retry();
     render("session-fixture", "skills", "dia");
-    expect(desktopCatalog).toHaveBeenCalledOnce();
+    expect(desktopCatalog).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(250);
     await flushMicrotasks();
 
     const retried = render("session-fixture", "skills", "dia");
     expect(desktopCatalog).toHaveBeenCalledTimes(2);
     expect(desktopCatalog).toHaveBeenLastCalledWith({
-      sessionId: "session-fixture", projectHandle: null, kind: "skills", query: "dia", cursor: null
+      sessionId: "session-fixture", projectHandle: null, kind: "skills", query: "dia", cursor: null, forceRefetch: true
     });
     expect(retried.items).toEqual([skill]);
     expect(retried.errors).toEqual([]);
+  });
+
+  test("retry refreshes only the failed source and later searches use the ordinary cache", async () => {
+    const plugin = item("plugin", "ready");
+    const app = item("app", "ready");
+    vi.mocked(desktopCatalog).mockRejectedValueOnce(new Error("app fixture failed"))
+      .mockResolvedValueOnce(catalog([plugin])).mockResolvedValueOnce(catalog([app]))
+      .mockResolvedValue(catalog([]));
+    render("session-fixture", "mentions", "ready");
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    const failed = render("session-fixture", "mentions", "ready");
+    failed.retry();
+    expect(render("session-fixture", "mentions", "ready").items).toEqual([plugin]);
+    await flushMicrotasks();
+    expect(desktopCatalog).toHaveBeenCalledTimes(3);
+    expect(desktopCatalog).toHaveBeenLastCalledWith({ sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "ready", cursor: null, forceRefetch: true });
+    expect(render("session-fixture", "mentions", "ready").items).toEqual([app, plugin]);
+    render("session-fixture", "mentions", "changed");
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    expect(vi.mocked(desktopCatalog).mock.calls.slice(3).every(([request]) => request.forceRefetch === undefined)).toBe(true);
   });
 
   test("retry after an expired cursor requests the first page again", async () => {
@@ -216,7 +238,7 @@ describe("useDesktopReferenceCatalog", () => {
 
     const retried = render("session-fixture", "skills", "page");
     expect(desktopCatalog).toHaveBeenNthCalledWith(3, {
-      sessionId: "session-fixture", projectHandle: null, kind: "skills", query: "page", cursor: null
+      sessionId: "session-fixture", projectHandle: null, kind: "skills", query: "page", cursor: null, forceRefetch: true
     });
     expect(retried.items).toEqual([newPage]);
     expect(retried.errors).toEqual([]);

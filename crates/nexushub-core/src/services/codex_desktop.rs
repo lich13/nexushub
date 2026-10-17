@@ -228,6 +228,8 @@ pub struct DesktopCatalogRequest {
     pub kind: String,
     pub query: String,
     pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_refetch: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

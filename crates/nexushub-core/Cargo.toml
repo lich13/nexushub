@@ -29,5 +29,6 @@ uuid.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 syn = { version = "=2.0.117", features = ["full", "visit"] }
 quote = "=1.0.45"

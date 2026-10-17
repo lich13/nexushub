@@ -72,7 +72,7 @@ vi.mock("../common/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 
 type Element = ReactElement<Record<string, any>>;
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void };
-type CatalogCall = { request: { sessionId: string; projectHandle: null; kind: string; query: string; cursor: null }; pending: Deferred<DesktopCatalog> };
+type CatalogCall = { request: { sessionId: string; projectHandle: null; kind: string; query: string; cursor: null; forceRefetch?: boolean }; pending: Deferred<DesktopCatalog> };
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -81,25 +81,25 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function view(sessionId: string, model: string | null): DesktopView {
+function view(sessionId: string, model: string | null, reasoningEffort: string | null = "high", mode: "default" | "plan" | null = "default"): DesktopView {
   return {
     sessionId, threadId: "thread-fixture", revision: 1, connected: true, writable: true,
-    runtime: "codex", activeTurnId: null, model, reasoningEffort: "high", mode: "default",
+    runtime: "codex", activeTurnId: null, model, reasoningEffort, mode,
     requests: [], queue: [], error: null
   };
 }
 
-function setDesktopView(sessionId: string, model: string | null) {
+function setDesktopView(sessionId: string, model: string | null, reasoningEffort: string | null = "high", mode: "default" | "plan" | null = "default") {
   hooks.desktop = {
-    view: view(sessionId, model), busy: false, error: "",
+    view: view(sessionId, model, reasoningEffort, mode), busy: false, error: "",
     act: vi.fn(async () => undefined), open: vi.fn(async () => undefined), connect: vi.fn()
   };
 }
 
-function catalogItem(handle: string, name: string): DesktopCatalogItem {
+function catalogItem(handle: string, name: string, kind = "model", reasoningEfforts = ["low", "high"]): DesktopCatalogItem {
   return {
-    handle, kind: "model", name, description: "fixture model",
-    reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low"
+    handle, kind, name, description: `fixture ${kind}`,
+    reasoningEfforts, defaultReasoningEffort: reasoningEfforts[0] ?? null
   };
 }
 
@@ -111,6 +111,13 @@ function elements(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement<Record<string, any>>(node)) return [];
   return [node, ...elements(node.props.children)];
+}
+
+function renderedText(node: ReactNode): string {
+  if (Array.isArray(node)) return node.map(renderedText).join("");
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (isValidElement<Record<string, any>>(node)) return renderedText(node.props.children);
+  return "";
 }
 
 function required(tree: ReactNode, predicate: (element: Element) => boolean): Element {
@@ -165,8 +172,8 @@ function expectNoModelOption(tree: ReactNode, handle: string) {
   expect(elements(tree).some(element => element.type === "option" && element.props.value === handle)).toBe(false);
 }
 
-function retryButton(tree: ReactNode): Element {
-  return required(tree, element => element.type === "button" && element.props.children === "重试模型目录");
+function retryButton(tree: ReactNode, catalogName: "模型" | "模式" = "模型"): Element {
+  return required(tree, element => element.type === "button" && element.props.children === `重试${catalogName}目录`);
 }
 
 async function flushMicrotasks() {
@@ -198,35 +205,155 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe("desktop settings model catalog", () => {
-  test("shows a fixed timeout error and recovers after manual retry", async () => {
+describe("desktop settings catalogs", () => {
+  test("keeps model and mode catalogs independent across failure and retry", async () => {
     let tree = renderSettings();
-    expect(catalogCalls()).toHaveLength(1);
-    expect(catalogCalls()[0].request).toEqual({ sessionId: "session-fixture", projectHandle: null, kind: "models", query: "", cursor: null });
+    expect(catalogCalls()).toHaveLength(2);
+    expect(catalogCalls().map(call => call.request)).toEqual([
+      { sessionId: "session-fixture", projectHandle: null, kind: "models", query: "", cursor: null },
+      { sessionId: "session-fixture", projectHandle: null, kind: "modes", query: "", cursor: null }
+    ]);
     expectLoadingControlsDisabled(tree);
     expect(elements(tree).some(element => element.props.role === "alert")).toBe(false);
 
     catalogCalls()[0].pending.reject(new Error("模型列表暂不可用"));
     await flushMicrotasks();
     tree = renderSettings();
-    expect(required(tree, element => element.props.role === "alert").props.children).toBe("模型列表暂不可用");
+    expect(elements(tree).filter(element => element.props.role === "alert").map(element => renderedText(element.props.children))).toContain("模型：模型列表暂不可用");
     expect(retryButton(tree)).toBeTruthy();
+
+    const defaultMode = catalogItem("default", "默认", "mode", []);
+    const planMode = catalogItem("plan", "Plan", "mode", []);
+    catalogCalls()[1].pending.resolve({ items: [defaultMode, planMode], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(elements(tree).filter(element => element.props.role === "alert").map(element => renderedText(element.props.children))).toContain("模型：模型列表暂不可用");
 
     retryButton(tree).props.onClick();
     tree = renderSettings();
-    expect(catalogCalls()).toHaveLength(2);
-    expect(catalogCalls()[1].request).toEqual(catalogCalls()[0].request);
+    expect(catalogCalls()).toHaveLength(3);
+    expect(catalogCalls()[2].request).toEqual({ sessionId: "session-fixture", projectHandle: null, kind: "models", query: "", cursor: null, forceRefetch: true });
     expectLoadingControlsDisabled(tree);
     expect(elements(tree).some(element => element.props.role === "alert")).toBe(false);
 
     const recovered = catalogItem("model-fixture", "Fixture Model");
-    catalogCalls()[1].pending.resolve({ items: [recovered], nextCursor: null });
+    catalogCalls()[2].pending.resolve({ items: [recovered], nextCursor: null });
     await flushMicrotasks();
     tree = renderSettings();
     expect(select(tree, "模型").props).toMatchObject({ value: recovered.handle, disabled: false });
     expect(select(tree, "思考强度").props).toMatchObject({ value: "high", disabled: false });
     expect(select(tree, "协作模式").props).toMatchObject({ value: "default", disabled: false });
+    expect(elements(tree).some(element => element.type === "option" && element.props.value === "plan")).toBe(true);
     expect(elements(tree).some(element => element.props.role === "alert")).toBe(false);
+  });
+
+  test("keeps the model selected when the mode catalog fails and force-refetches only modes", async () => {
+    let tree = renderSettings();
+    const model = catalogItem("model-fixture", "Fixture Model");
+    catalogCalls()[0].pending.resolve({ items: [model], nextCursor: null });
+    catalogCalls()[1].pending.reject(new Error("模式列表暂不可用"));
+    await flushMicrotasks();
+    tree = renderSettings();
+
+    expect(select(tree, "模型").props).toMatchObject({ value: model.handle, disabled: false });
+    expect(select(tree, "协作模式").props.disabled).toBe(true);
+    expect(elements(tree).filter(element => element.props.role === "alert").map(element => renderedText(element.props.children))).toContain("模式：模式列表暂不可用");
+
+    retryButton(tree, "模式").props.onClick();
+    tree = renderSettings();
+    expect(catalogCalls()).toHaveLength(3);
+    expect(catalogCalls()[2].request).toEqual({ sessionId: "session-fixture", projectHandle: null, kind: "modes", query: "", cursor: null, forceRefetch: true });
+    expect(select(tree, "模型").props.value).toBe(model.handle);
+    expect(select(tree, "模型").props.disabled).toBe(false);
+
+    const plan = catalogItem("plan", "Plan", "mode", []);
+    catalogCalls()[2].pending.resolve({ items: [catalogItem("default", "默认", "mode", []), plan], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(select(tree, "协作模式").props.disabled).toBe(false);
+    expect(elements(tree).some(element => element.props.role === "alert")).toBe(false);
+  });
+
+  test("offers a catalog-supported max effort and preserves or clears it on mode changes", async () => {
+    setDesktopView("session-fixture", "model-fixture", "high", "default");
+    let tree = renderSettings();
+    const model = catalogItem("model-fixture", "Fixture Model", "model", ["low", "high", "max", "ultra", "custom"]);
+    catalogCalls()[0].pending.resolve({ items: [model], nextCursor: null });
+    catalogCalls()[1].pending.resolve({ items: [catalogItem("default", "默认", "mode", []), catalogItem("plan", "Plan", "mode", [])], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+
+    const effort = select(tree, "思考强度");
+    expect(elements(effort).some(element => element.type === "option" && element.props.value === "max")).toBe(true);
+    expect(elements(effort).some(element => element.type === "option" && element.props.value === "ultra")).toBe(true);
+    expect(elements(effort).some(element => element.type === "option" && element.props.value === "custom")).toBe(true);
+    effort.props.onChange({ target: { value: "max" } });
+    expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: "max", mode: "default" });
+
+    setDesktopView("session-fixture", "model-fixture", "max", "default");
+    tree = renderSettings();
+    select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
+    expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: "max", mode: "plan" });
+
+    setDesktopView("session-fixture", "model-fixture", "xhigh", "default");
+    tree = renderSettings();
+    select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
+    expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: null, mode: "plan" });
+    tree = renderSettings();
+    expect(elements(tree).some(element => element.props.role === "status" && element.props.children === "当前思考强度不可用，将继承原生默认")).toBe(true);
+  });
+
+  test("shows a failed setting action and keeps the controlled view until the next view arrives", async () => {
+    let tree = renderSettings();
+    catalogCalls()[0].pending.resolve({ items: [catalogItem("model-fixture", "Fixture Model")], nextCursor: null });
+    catalogCalls()[1].pending.resolve({ items: [catalogItem("default", "默认", "mode", []), catalogItem("plan", "Plan", "mode", [])], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+    hooks.desktop.act = vi.fn(async () => { throw new Error("设置未应用"); });
+    tree = renderSettings();
+
+    select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(hooks.desktop.act).toHaveBeenCalledWith({ type: "settings", model: "model-fixture", reasoningEffort: "high", mode: "plan" });
+
+    expect(elements(tree).filter(element => element.props.role === "alert").map(element => renderedText(element.props.children))).toContain("设置未应用");
+    expect(select(tree, "模型").props.value).toBe("model-fixture");
+    expect(select(tree, "思考强度").props.value).toBe("high");
+    expect(select(tree, "协作模式").props.value).toBe("default");
+  });
+
+  test("clears a setting error after success and on a session change", async () => {
+    let tree = renderSettings();
+    catalogCalls()[0].pending.resolve({ items: [catalogItem("model-fixture", "Fixture Model")], nextCursor: null });
+    catalogCalls()[1].pending.resolve({ items: [catalogItem("default", "默认", "mode", []), catalogItem("plan", "Plan", "mode", [])], nextCursor: null });
+    await flushMicrotasks();
+    tree = renderSettings();
+    hooks.desktop.act = vi.fn(async () => { throw new Error("设置未应用"); });
+    tree = renderSettings();
+    select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children) === "设置未应用")).toBe(true);
+
+    hooks.desktop.act = vi.fn(async () => undefined);
+    tree = renderSettings();
+    select(tree, "模型").props.onChange({ target: { value: "model-fixture" } });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children) === "设置未应用")).toBe(false);
+
+    hooks.desktop.act = vi.fn(async () => { throw new Error("再次失败"); });
+    tree = renderSettings();
+    select(tree, "协作模式").props.onChange({ target: { value: "plan" } });
+    await flushMicrotasks();
+    tree = renderSettings();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children) === "再次失败")).toBe(true);
+
+    setDesktopView("session-next", "model-next");
+    tree = renderSettings();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children) === "再次失败")).toBe(false);
+    expect(catalogCalls().slice(-2).map(call => call.request.kind)).toEqual(["models", "modes"]);
   });
 
   test("discards late catalog results and errors after session changes", async () => {
@@ -235,7 +362,7 @@ describe("desktop settings model catalog", () => {
 
     setDesktopView("session-next", "model-next");
     tree = renderSettings();
-    const second = catalogCalls()[1];
+    const second = catalogCalls()[2];
     expect(second.request.sessionId).toBe("session-next");
     expectLoadingControlsDisabled(tree);
 
@@ -248,7 +375,7 @@ describe("desktop settings model catalog", () => {
 
     setDesktopView("session-current", "model-current");
     tree = renderSettings();
-    const third = catalogCalls()[2];
+    const third = catalogCalls()[4];
     expect(third.request.sessionId).toBe("session-current");
     expectLoadingControlsDisabled(tree);
 
@@ -272,6 +399,7 @@ describe("desktop settings model catalog", () => {
     let tree = renderSettings();
     const previous = catalogItem("model-previous", "Previous Model");
     catalogCalls()[0].pending.resolve({ items: [previous], nextCursor: null });
+    catalogCalls()[1].pending.resolve({ items: [catalogItem("default", "默认", "mode", [])], nextCursor: null });
     await flushMicrotasks();
     tree = renderSettings();
     expect(select(tree, "模型").props.value).toBe(previous.handle);
@@ -281,7 +409,7 @@ describe("desktop settings model catalog", () => {
     expectLoadingControlsDisabled(tree);
     expectNoModelOption(tree, previous.handle);
 
-    catalogCalls()[1].pending.reject(new Error("模型列表暂不可用"));
+    catalogCalls()[2].pending.reject(new Error("模型列表暂不可用"));
     await flushMicrotasks();
     tree = renderSettings();
     expect(retryButton(tree)).toBeTruthy();
@@ -289,13 +417,13 @@ describe("desktop settings model catalog", () => {
 
     retryButton(tree).props.onClick();
     tree = renderSettings();
-    expect(catalogCalls()).toHaveLength(3);
-    expect(catalogCalls()[2].request.sessionId).toBe("session-new");
+    expect(catalogCalls()).toHaveLength(5);
+    expect(catalogCalls()[4].request.sessionId).toBe("session-new");
     expectLoadingControlsDisabled(tree);
     expectNoModelOption(tree, previous.handle);
 
     const next = catalogItem("model-new", "New Model");
-    catalogCalls()[2].pending.resolve({ items: [next], nextCursor: null });
+    catalogCalls()[4].pending.resolve({ items: [next], nextCursor: null });
     await flushMicrotasks();
     tree = renderSettings();
     expect(select(tree, "模型").props.value).toBe(next.handle);
