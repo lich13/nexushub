@@ -47,6 +47,7 @@ let fakeWindow: {
 };
 let fakeDocument: {
   hidden: boolean;
+  hasFocus: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
 };
@@ -80,6 +81,7 @@ function installBrowserGlobals() {
   };
   fakeDocument = {
     hidden: false,
+    hasFocus: vi.fn(() => true),
     addEventListener: vi.fn((type: string, listener: Listener) => add(documentListeners, type, listener)),
     removeEventListener: vi.fn((type: string, listener: Listener) => remove(documentListeners, type, listener))
   };
@@ -240,6 +242,118 @@ describe("useDesktopAttachments", () => {
     await flushMicrotasks();
     expect(image.preventDefault).toHaveBeenCalledOnce();
     expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  test("skips background binding and rebinds a fresh receiver after focus returns", async () => {
+    const firstBinding = createBinding();
+    const nextBinding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockResolvedValueOnce(firstBinding).mockResolvedValueOnce(nextBinding);
+    fakeDocument.hasFocus.mockReturnValue(false);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const receive = vi.fn();
+    const fail = vi.fn();
+
+    render("session-fixture", region, [], receive, fail);
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
+
+    fakeDocument.hasFocus.mockReturnValue(true);
+    fire(windowListeners, "focus");
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+    const oldCallback = vi.mocked(bindDesktopAttachments).mock.calls[0][3];
+
+    fakeDocument.hasFocus.mockReturnValue(false);
+    fire(windowListeners, "blur");
+    await flushMicrotasks();
+    expect(firstBinding.close).toHaveBeenCalledOnce();
+
+    fakeDocument.hasFocus.mockReturnValue(true);
+    fire(windowListeners, "focus");
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).toHaveBeenCalledTimes(2);
+
+    oldCallback(attachmentEvent());
+    expect(receive).not.toHaveBeenCalled();
+    const newCallback = vi.mocked(bindDesktopAttachments).mock.calls[1][3];
+    newCallback(attachmentEvent());
+    expect(receive).toHaveBeenCalledExactlyOnceWith(attachmentEvent().items);
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("suppresses a bind failure that arrives after blur", async () => {
+    const delayed = deferred<Binding>();
+    vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+
+    render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+
+    fakeDocument.hasFocus.mockReturnValue(false);
+    fire(windowListeners, "blur");
+    delayed.reject(new Error("blurred bind fixture failed"));
+    await flushMicrotasks();
+
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("suppresses an update failure that arrives after blur", async () => {
+    const delayed = deferred<void>();
+    const binding = createBinding();
+    binding.update.mockReturnValueOnce(delayed.promise);
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+
+    render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+    expect(binding.update).toHaveBeenCalledOnce();
+
+    fakeDocument.hasFocus.mockReturnValue(false);
+    fire(windowListeners, "blur");
+    delayed.reject(new Error("blurred update fixture failed"));
+    await flushMicrotasks();
+
+    expect(binding.close).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("keeps the active image paste prompt while the binding is pending", async () => {
+    const delayed = deferred<Binding>();
+    vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    const image = clipboardEvent([{ kind: "file", type: "image/png" }]);
+
+    attachments.paste(image);
+
+    expect(image.preventDefault).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledExactlyOnceWith("附件接收区尚未就绪，请重试粘贴");
+    delayed.resolve(createBinding());
+    await flushMicrotasks();
+  });
+
+  test("does not update native bounds when handles are recreated with the same contents", async () => {
+    const binding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 10, top: 20, right: 400, bottom: 180 });
+    const receive = vi.fn();
+    const fail = vi.fn();
+
+    render("session-fixture", region, ["file-handle-fixture"], receive, fail);
+    await flushMicrotasks();
+    expect(binding.update).toHaveBeenCalledOnce();
+    binding.update.mockClear();
+
+    render("session-fixture", region, ["file-handle-fixture"], receive, fail);
+    await flushMicrotasks();
+
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+    expect(binding.update).not.toHaveBeenCalled();
   });
 
   test("closes on hide and unmount, and drops callbacks from both bindings", async () => {

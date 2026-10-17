@@ -6,6 +6,7 @@ export function useDesktopAttachments(sessionId: string | undefined, region: Ref
   const binding = useRef<Binding | null>(null);
   const latest = useRef({ handles, receive, fail });
   latest.current = { handles, receive, fail };
+  const handleKey = JSON.stringify(handles);
   const update = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!sessionId) return;
@@ -13,6 +14,7 @@ export function useDesktopAttachments(sessionId: string | undefined, region: Ref
     let generation = 0;
     let updating = false;
     let dirty = false;
+    const active = () => !disposed && !document.hidden && document.hasFocus();
     const bounds = (): DesktopAttachmentBounds | null => {
       const rect = region.current?.getBoundingClientRect();
       if (!rect) return null;
@@ -20,32 +22,35 @@ export function useDesktopAttachments(sessionId: string | undefined, region: Ref
       const width = Math.min(window.innerWidth, rect.right) - x, height = Math.min(window.innerHeight, rect.bottom) - y;
       return width > 0 && height > 0 ? { x, y, width, height } : null;
     };
-    const error = (reason: unknown) => { if (!disposed && !document.hidden) latest.current.fail(reason instanceof Error ? reason.message : "无法添加附件"); };
+    const error = (reason: unknown) => { if (active()) latest.current.fail(reason instanceof Error ? reason.message : "无法添加附件"); };
     const refresh = async () => {
       dirty = true;
       if (updating) return;
       updating = true;
       try {
-        while (dirty && !disposed && !document.hidden) {
+        while (dirty && active()) {
           dirty = false;
           const current = binding.current;
           const rect = bounds();
-          if (current && rect) await current.update(rect, latest.current.handles);
+          if (current && rect) {
+            try { await current.update(rect, latest.current.handles); }
+            catch (reason) { if (binding.current === current) error(reason); }
+          }
         }
-      } catch (reason) { error(reason); }
+      }
       finally { updating = false; }
     };
     const connect = async () => {
       const captured = ++generation;
       const rect = bounds();
-      if (disposed || document.hidden || !rect) return;
+      if (!active() || !rect) return;
       try {
         const next = await bindDesktopAttachments(sessionId, rect, latest.current.handles, event => {
-          if (disposed || document.hidden || captured !== generation) return;
+          if (!active() || captured !== generation) return;
           if (event.error) latest.current.fail(event.error);
           else latest.current.receive(event.items);
         });
-        if (disposed || document.hidden || captured !== generation) { await next.close(); return; }
+        if (!active() || captured !== generation) { await next.close(); return; }
         binding.current = next;
         void refresh();
       } catch (reason) { if (captured === generation) error(reason); }
@@ -55,22 +60,28 @@ export function useDesktopAttachments(sessionId: string | undefined, region: Ref
       const current = binding.current; binding.current = null;
       if (current) void current.close().catch(() => {});
     };
-    const visibility = () => { close(); if (!document.hidden) void connect(); };
+    // A visible WKWebView may belong to an unfocused window. Passive geometry
+    // work must not become a failed user paste, nor retain an old receiver.
+    const visibility = () => { close(); if (active()) void connect(); };
+    const focus = () => { if (!binding.current) void connect(); };
     update.current = () => { void refresh(); };
     const observer = new ResizeObserver(() => { void refresh(); });
     if (region.current) observer.observe(region.current);
     const geometry = () => { void refresh(); };
     window.addEventListener("resize", geometry);
     window.addEventListener("scroll", geometry, true);
+    window.addEventListener("blur", close);
+    window.addEventListener("focus", focus);
     document.addEventListener("visibilitychange", visibility);
     void connect();
     return () => {
       disposed = true; close(); update.current = null; observer.disconnect();
       window.removeEventListener("resize", geometry); window.removeEventListener("scroll", geometry, true);
+      window.removeEventListener("blur", close); window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", visibility);
     };
   }, [sessionId, region]);
-  useEffect(() => { update.current?.(); }, [handles]);
+  useEffect(() => { update.current?.(); }, [handleKey]);
   return {
     paste: (event: ClipboardEvent<HTMLTextAreaElement>) => {
       // Inspect only clipboard MIME metadata; native bytes/paths stay in Rust.
