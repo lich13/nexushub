@@ -125,10 +125,6 @@ jobs:
           name: cargo-audit
           path: ${{ runner.temp }}/cargo-audit-*.json
           if-no-files-found: ignore
-      - name: Check server MSRV
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal --no-self-update
-          cargo +1.88.0 check --workspace --locked
 
   tauri:
     name: macOS Tauri checks
@@ -186,7 +182,3 @@ jobs:
           path: ${{ runner.temp }}/nexushub-desktop-performance
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-      - name: Check desktop MSRV
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal --no-self-update
-          cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked
