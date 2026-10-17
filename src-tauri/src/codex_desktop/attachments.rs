@@ -326,9 +326,9 @@ fn capture_drop(paths: Vec<PathBuf>, remaining: usize) -> Result<Vec<NativeRefer
     }
     paths
         .into_iter()
-        .map(NativeReference::selected_file)
+        .map(NativeReference::selected_file_detailed)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "附件无效或超出限制，本次附件未添加".into())
+        .map_err(|(_, message)| message.into())
 }
 
 pub(super) fn drop_files(

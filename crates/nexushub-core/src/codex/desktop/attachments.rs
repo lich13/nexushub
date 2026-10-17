@@ -238,8 +238,11 @@ impl AttachmentStore {
     }
 
     pub fn import_png(&mut self, bytes: &[u8], now: u64) -> Result<NativeReference> {
-        if bytes.len() > MAX_IMAGE_BYTES || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err("粘贴图片无效或超过 20MiB");
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err("粘贴图片超过 20MiB");
+        }
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err("粘贴图片格式无效");
         }
         self.expire(now)?;
         let size = self.validate_inventory()?;
