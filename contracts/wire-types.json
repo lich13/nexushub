@@ -5645,6 +5645,13 @@
             "name": "revision",
             "serde": [],
             "type": "u64"
+          },
+          {
+            "name": "copy",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < bool >"
           }
         ],
         "kind": "struct",
@@ -9858,7 +9865,7 @@
     "src-tauri/src/codex_desktop.rs": {
       "json": [],
       "signatures": [
-        "async fn diagnostics (remote : State < '_ , RemoteConnections > , request : DesktopDiagnosticsRequest ,) -> Result < DesktopDiagnostics , String >",
+        "async fn diagnostics (window : tauri :: WebviewWindow , remote : State < '_ , RemoteConnections > , request : DesktopDiagnosticsRequest ,) -> Result < DesktopDiagnostics , String >",
         "fn session_token (subscription : & str , epoch : & str) -> String",
         "fn desktop_error (error : DesktopError) -> String",
         "async fn verify_thread (state : & DesktopState , thread_id : & str) -> Result < () , String >",
@@ -9912,6 +9919,8 @@
     "src-tauri/src/codex_desktop/clipboard.rs": {
       "json": [],
       "signatures": [
+        "fn copy_diagnostics (diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
+        "fn write_diagnostics (pasteboard : & NSPasteboard , diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
         "fn paste_png () -> Result < Vec < u8 > , & 'static str >",
         "fn read_png (pasteboard : & NSPasteboard) -> Result < Vec < u8 > , & 'static str >",
         "fn read_png_using (pasteboard : & NSPasteboard , convert : impl FnOnce (& [u8] , bool) -> Result < Vec < u8 > , & 'static str > ,) -> Result < Vec < u8 > , & 'static str >",
@@ -10197,7 +10206,7 @@
         "invokeNative<DesktopAck>(\"codex.desktop.detach\",{request})",
         "runtimeRpc<DesktopView>(\"codex.desktop.action\",{request:{revision:localRevision(),sessionId,action}satisfiesDesktopActionRequest},true)",
         "runtimeRpc<DesktopAck>(\"codex.desktop.open\",{request:{revision:localRevision(),threadId}satisfiesDesktopThreadRequest},true)",
-        "runtimeRpc<DesktopDiagnostics>(\"codex.desktop.diagnostics\",{request:{revision:localRevision()}satisfiesDesktopDiagnosticsRequest},true)",
+        "runtimeRpc<DesktopDiagnostics>(\"codex.desktop.diagnostics\",{request:{revision:localRevision(),...(copy?{copy:true}:{})}satisfiesDesktopDiagnosticsRequest},true)",
         "runtimeRpc<DesktopCatalog>(\"codex.desktop.catalog\",{request:{...request,revision:localRevision()}satisfiesDesktopCatalogRequest},true)",
         "runtimeRpc<DesktopChoice>(\"codex.desktop.choose\",{request:{revision:localRevision(),sessionId,kind}satisfiesDesktopChooseRequest},true)",
         "runtimeRpc<DesktopCreatedThread>(\"codex.desktop.create\",{request:{revision:localRevision(),projectHandle}satisfiesDesktopCreateRequest},true)",
@@ -10225,7 +10234,7 @@
         "DesktopCreatedThread": "exporttypeDesktopCreatedThread={threadId:string};",
         "DesktopDiagnostic": "exporttypeDesktopDiagnostic={timestamp:number;source:string;method:string;version:number|null;code:number|null;category:string;hint:string};",
         "DesktopDiagnostics": "exporttypeDesktopDiagnostics={records:DesktopDiagnostic[];desktopBuild:string|null;bundledCliVersion:string|null};",
-        "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number};",
+        "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number;copy?:boolean|null};",
         "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
         "DesktopGoal": "exporttypeDesktopGoal={objective:string;status:string;truncated:boolean};",
         "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",

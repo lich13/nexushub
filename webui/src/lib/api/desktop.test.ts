@@ -172,6 +172,21 @@ describe("Codex desktop transport", () => {
     expect(requests.map(request => request.sessionId)).toEqual(["session-fixture", "session-fixture"]);
   });
 
+  test("requests a native diagnostics copy with only the fixed copy flag", async () => {
+    const bridge = installBridge();
+    const { desktopDiagnostics } = await import("./desktop");
+
+    await desktopDiagnostics(true);
+
+    const call = bridge.invoke.mock.calls.find(([command]) => command === "codex.desktop.diagnostics");
+    expect(call).toBeDefined();
+    expect(call).toEqual(["codex.desktop.diagnostics", { request: { revision: 0, copy: true } }]);
+    const request = (call?.[1] as { request: Record<string, unknown> }).request;
+    expect(Object.keys(request).sort()).toEqual(["copy", "revision"]);
+    expect(request).not.toHaveProperty("text");
+    expect(request).not.toHaveProperty("clipboardText");
+  });
+
   test("sends only bounds and opaque handles through a dedicated attachment channel", async () => {
     const bridge = installBridge();
     const { bindDesktopAttachments } = await import("./desktop");
