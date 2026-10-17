@@ -127,6 +127,91 @@ describe("useHistoryScroll contract", () => {
     expect(controller.follow.current).toBe(true);
   });
 
+  test("keeps bottom following without scanning timeline nodes on repeated renders", () => {
+    const recent = item("message:recent", 800, 80);
+    const next = stream([recent], { scrollHeight: 1000 });
+    const querySelectorAll = vi.spyOn(next, "querySelectorAll");
+    const controller = createHistoryScrollCoordinator();
+    controller.update(optionsFor(next));
+
+    controller.onRendered();
+    controller.onRendered();
+    controller.capture();
+
+    expect(next.scrollTop).toBe(600);
+    expect(controller.follow.current).toBe(true);
+    expect(querySelectorAll).not.toHaveBeenCalled();
+
+    const appended = item("message:appended", 1000, 80);
+    next.items.push(appended);
+    connect(next, appended);
+    next.scrollHeight = 1200;
+    controller.onRendered();
+
+    expect(next.scrollTop).toBe(800);
+    expect(controller.follow.current).toBe(true);
+    expect(querySelectorAll).not.toHaveBeenCalled();
+  });
+
+  test("preserves the reader's visible offset after scrolling up from the bottom", async () => {
+    const oldest = item("message:oldest", 200, 80);
+    const recent = item("message:recent", 800, 80);
+    const next = stream([oldest, recent], { scrollHeight: 1200 });
+    const querySelectorAll = vi.spyOn(next, "querySelectorAll");
+    const pending = deferred<{ cursor: string; hasMore: boolean }>();
+    const loadPage = vi.fn(() => pending.promise);
+    const initial = optionsFor(next, { loadPage });
+    const controller = createHistoryScrollCoordinator();
+    controller.update(initial);
+    controller.onRendered();
+
+    expect(next.scrollTop).toBe(800);
+    expect(controller.follow.current).toBe(true);
+    expect(querySelectorAll).not.toHaveBeenCalled();
+
+    // Match the user's upward wheel intent, then the resulting scroll events.
+    controller.upwardIntent();
+    next.scrollTop = 650;
+    controller.onScroll(next);
+    expect(recent.getBoundingClientRect().top).toBe(150);
+
+    next.scrollTop = 180;
+    controller.onScroll(next);
+    const request = controller.loadOlder("scroll");
+    await Promise.resolve();
+    expect(controller.follow.current).toBe(false);
+    expect(oldest.getBoundingClientRect().top).toBe(20);
+    expect(querySelectorAll).toHaveBeenCalled();
+    expect(loadPage).toHaveBeenCalledTimes(1);
+
+    pending.resolve({ cursor: "cursor-b", hasMore: true });
+    await expect(request).resolves.toBe(true);
+    controller.update({ ...initial, cursor: "cursor-b", hasMore: true });
+
+    // Prepending a page moves the anchored message down by 300px in content.
+    const prepended = item("message:prepended", 200, 80);
+    oldest.top = 500;
+    recent.top = 1100;
+    next.items = [prepended, oldest, recent];
+    for (const message of next.items) connect(next, message);
+    next.scrollHeight = 1500;
+    controller.onRendered();
+
+    expect(oldest.getBoundingClientRect().top).toBe(20);
+    expect(next.scrollTop).toBe(480);
+
+    // A later poll appends at the tail without shifting the reader's anchor.
+    const polled = item("message:polled", 1420, 80);
+    next.items.push(polled);
+    connect(next, polled);
+    next.scrollHeight = 1700;
+    controller.onRendered();
+
+    expect(oldest.getBoundingClientRect().top).toBe(20);
+    expect(next.scrollTop).toBe(480);
+    expect(controller.follow.current).toBe(false);
+  });
+
   test("shares one in-flight request between search and scroll triggers", async () => {
     const next = stream([], { scrollTop: 180 });
     const pending = deferred<{ cursor: string; hasMore: boolean }>();
