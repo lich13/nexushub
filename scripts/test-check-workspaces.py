@@ -71,7 +71,7 @@ def make_fixture(root, desktop_versions=None, extra_desktop_packages=()):
 members = ["crates/nexushub-core", "crates/nexushub-webd"]
 
 [workspace.package]
-rust-version = "1.88"
+rust-version = "1.99"
 
 [workspace.dependencies]
 {workspace_deps}
@@ -79,7 +79,7 @@ rust-version = "1.88"
     write(root / "src-tauri/Cargo.toml", f'''\
 [package]
 name = "nexushub-desktop"
-rust-version = "1.88"
+rust-version = "1.99"
 
 [dependencies]
 {desktop_deps}
@@ -139,7 +139,20 @@ class WorkspaceCheckTests(unittest.TestCase):
 
     def test_msrv_must_match_between_workspace_and_tauri(self):
         manifest = self.root / "src-tauri/Cargo.toml"
-        manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.88"', 'rust-version = "1.85"'), encoding="utf-8")
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.99"', 'rust-version = "1.98"'), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check_workspaces.check(self.root)
+
+    def test_matching_older_minimum_does_not_restore_another_toolchain(self):
+        for relative in ("Cargo.toml", "src-tauri/Cargo.toml"):
+            manifest = self.root / relative
+            manifest.write_text(manifest.read_text(encoding="utf-8").replace('rust-version = "1.99"', 'rust-version = "1.98"'), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check_workspaces.check(self.root)
+
+    def test_unpinned_rust_channel_is_rejected(self):
+        toolchain = self.root / "rust-toolchain.toml"
+        toolchain.write_text('[toolchain]\nchannel = "stable"\n', encoding="utf-8")
         with self.assertRaises(ValueError):
             check_workspaces.check(self.root)
 

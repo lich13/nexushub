@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check shared declarations and direct dependency resolutions of both workspaces."""
 from pathlib import Path
+import re
 import tomllib
 
 # Existing intentional lock difference. Upgrades review this exact pair rather
@@ -28,8 +29,12 @@ def check(root):
     workspace = load(root, "Cargo.toml")["workspace"]
     desktop = load(root, "src-tauri/Cargo.toml")
     toolchain = load(root, "rust-toolchain.toml")["toolchain"]
-    if toolchain["channel"] != "1.99.0" or workspace["package"]["rust-version"] != "1.88":
-        raise ValueError("expected pinned Rust 1.99.0 and validated MSRV 1.88")
+    pinned = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", toolchain["channel"])
+    if pinned is None:
+        raise ValueError("expected an exact stable Rust toolchain")
+    minimum = ".".join(pinned.groups()[:2])
+    if workspace["package"]["rust-version"] != minimum:
+        raise ValueError("minimum Rust must match the pinned development toolchain")
     if desktop["package"]["rust-version"] != workspace["package"]["rust-version"]:
         raise ValueError("Tauri and core must declare the same MSRV")
     core_lock = load(root, "Cargo.lock")["package"]
