@@ -245,6 +245,27 @@ impl NativeReference {
         }
     }
 
+    /// Build 20586's composer dG/uG serializes resolved mentions as Markdown
+    /// links. Only catalog-authorized paths are used; no UI path is accepted.
+    pub(super) fn prompt_link(&self) -> Option<String> {
+        let (label, path) = match self {
+            Self::Skill { name, path, .. } => (format!("${name}"), path.to_str()?),
+            Self::App { name, path } => (format!("${name}"), path.as_str()),
+            Self::Plugin { name, path } => (format!("@{name}"), path.as_str()),
+            Self::File { .. } => return None,
+        };
+        // Match the native prompt-link serializer, including its label boundary
+        // escape. Paths retain spaces and opening parentheses as native identity;
+        // the native parser unescapes backslashes and the closing delimiter.
+        let label = label
+            .replace('\\', "\\\\")
+            .replace('[', "\\[")
+            .replace("](", "]\\(")
+            .replace(']', "\\]");
+        let destination = path.replace('\\', "\\\\").replace(')', "\\)");
+        Some(format!("[{label}]({destination})"))
+    }
+
     pub(super) fn attachment(&self) -> Option<Value> {
         if let Self::File {
             name, path, image, ..
