@@ -63,7 +63,7 @@ Pi、Gotify、网页版和自动 Goal 恢复已退役。迁移仅清理 NexusHub
 
 下载 macOS ARM64 DMG，安装后即可读取本机数据。App 更新和远程服务更新分开显示。
 
-当前 macOS 发行包没有 Developer ID 签名或 Apple 公证；updater 的 Minisign 签名用于验证更新归档来源，不能替代系统代码签名。覆盖安装后若 macOS 请求重新授权钥匙串访问，请在系统对话框完成验证，无需重建已保存的远程连接。
+当前 macOS 发行包使用 ad-hoc 代码签名，没有 Developer ID 签名或 Apple 公证；updater 的 Minisign 签名用于验证更新归档来源，不能替代系统代码签名。覆盖安装后若 macOS 请求重新授权钥匙串访问，请在系统对话框完成验证，无需重建已保存的远程连接。
 
 ### 远程 API
 
