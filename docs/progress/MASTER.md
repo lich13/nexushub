@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前源码版本为 1.3.3 候选，正式维护版本仍为 1.3.2；基线为 `f74d32a / v1.3.2`。用户反馈后的修订候选 `479acbd` 已覆盖安装，通过签名、产物隐私和必要启动检查，真实功能仍待用户验收。同提交 CI 前端、后端通过，macOS WebKit 线程切换性能复核仍超出 100ms 门槛，后续 Tauri 测试未执行。返回实现后已减少底部跟随时的重复锚点扫描，本机原样本通过；新提交的 CI 结论尚待核实，不能据此声称解决了 CI 超标。正式 1.3.3 未发布。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
+当前源码版本为 1.3.3 候选，正式维护版本仍为 1.3.2；基线为 `f74d32a / v1.3.2`。用户反馈后的修订候选 `479acbd` 已覆盖安装，通过签名、产物隐私和必要启动检查，真实功能仍待用户验收。返回实现后减少了底部跟随时的重复锚点扫描，产品提交 `0874a48` 的三项 CI 全部通过，WebKit 线程切换 p95 为 85ms，满足原有 100ms 门槛；该增量尚未打入已安装候选。正式 1.3.3 未发布。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
 
 ## 当前改动与证据
 
@@ -134,6 +134,10 @@
 `corepack pnpm@12.11.2 --dir webui build:tauri` 包含类型检查，退出 0。随后复用生产构建执行 README 的串行 headed、trace-off 性能命令，两项均退出 0：Chromium/WebKit 展开 p95 为 30.8/33ms、滚动 30.5/30ms、线程切换 31.8/45ms，分别使用原有 60/20/20 次样本。该修复尚未打入已安装候选；本机测量不能替代新提交 CI 或真实滚动验收。
 
 既有 `activity-timeline.pw.ts` 中的 `Codex earlier-page loading preserves all tool rows and the open group` 和 `native pagination inserts older activity while preserving the visible anchor` 两个模式分别在 Chromium/WebKit 运行，4 项通过、退出 0；覆盖工具组分页、折叠选择与可见锚点。只使用合成 fixture，预览和本轮测试输出已清理。
+
+产品提交 `0874a48440d9f2663618f55bfb5b21f0586aca09` 已推送，[CI 39060232192](https://github.com/lich13/nexushub/actions/runs/39060232192) 的 Frontend、Backend、macOS Tauri 三项全部成功，watch 退出 0。锁定依赖的 workspace 测试汇总为 960 通过、10 忽略、0 失败，Tauri 测试 121 通过、0 失败；两套 all-targets Clippy 均实际执行并通过。CI Chromium/WebKit 展开 p95 为 43.1/36ms、滚动 39.3/32ms、切换 49.9/85ms；WebKit 切换最大值为 91ms。与上一提交复核的 114ms 相比，WebKit p95 下降 29ms；不同 CI 运行仍存在环境波动，不能把全部差值视为单项代码改动的严格因果收益。门槛、样本和浏览器配置保持不变。
+
+提交前 `python3 scripts/privacy-check.py --git-objects` 检查 3,099 项、无发现、退出 0，`git diff --check` 退出 0。本节仅同步实际证据，不改变已验证产品源码；候选更新和用户十项验收按原定阶段继续。
 
 ## 保留边界与交付条件
 
