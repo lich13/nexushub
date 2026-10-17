@@ -1,7 +1,7 @@
 use super::review::{self, Params, BODY_LIMIT, PARAMS_LIMIT};
 use super::state::{NativeState, RuntimeState};
 use crate::services::codex_desktop::{
-    DesktopMode, DesktopPendingRequest, DesktopQuestion, DesktopQuestionOption,
+    DesktopGoal, DesktopMode, DesktopPendingRequest, DesktopQuestion, DesktopQuestionOption,
     DesktopQueuedMessage, DesktopView,
 };
 use serde_json::Value;
@@ -71,6 +71,7 @@ pub fn view(
     DesktopView {
         connection_phase: None,
         desktop_build: None,
+        goal: project_goal(value),
         session_id: session_id.into(),
         thread_id: state.thread_id().into(),
         revision: state.revision().unwrap_or(0),
@@ -102,6 +103,33 @@ pub fn view(
         queue,
         error: None,
     }
+}
+
+fn project_goal(value: &Value) -> Option<DesktopGoal> {
+    // Build 20586 exposes these fields in the existing conversation snapshot
+    // (native Jg projection). Its goal panel uses objective and these statuses.
+    // No goal/get request or inferred follower mutation is issued here.
+    let goal = value
+        .get("threadGoal")
+        .filter(|goal| !goal.is_null())
+        .or_else(|| value.get("completedThreadGoal"))?;
+    let objective = goal["objective"]
+        .as_str()
+        .filter(|text| !text.trim().is_empty())?;
+    let status = goal["status"]
+        .as_str()
+        .filter(|status| {
+            matches!(
+                *status,
+                "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete"
+            )
+        })
+        .unwrap_or("unknown");
+    Some(DesktopGoal {
+        objective: bounded(objective, if objective.len() > 4096 { 4093 } else { 4096 }),
+        status: status.into(),
+        truncated: objective.len() > 4096,
+    })
 }
 
 fn project_request(state: &NativeState, request: &Value) -> DesktopPendingRequest {

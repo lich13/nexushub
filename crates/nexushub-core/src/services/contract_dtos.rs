@@ -7,6 +7,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "DesktopMode",
     "DesktopAnswer",
     "DesktopView",
+    "DesktopGoal",
     "DesktopQueuedMessage",
     "DesktopPendingRequest",
     "DesktopReview",

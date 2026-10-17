@@ -5,6 +5,6 @@ export {
   desktopCatalog, openDesktopThread, desktopDiagnostics,
   bindDesktopAttachments,
   type DesktopAction, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode,
-  type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview,
+  type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview, type DesktopGoal,
   type DesktopAttachmentBounds, type DesktopAttachmentEvent
 } from "../api/desktop";

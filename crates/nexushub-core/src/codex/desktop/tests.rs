@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use super::framing::{FrameReader, FrameWriter};
-use super::{socket, DesktopError, DesktopEvent, DesktopReadSession};
+use super::{socket, state::NativeState, DesktopError, DesktopEvent, DesktopReadSession};
 use crate::resource_limits::CODEX_DESKTOP_FRAME_BYTES;
 use serde_json::{json, Value};
 use std::{
@@ -20,6 +20,136 @@ const THREAD_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CLIENT_ID: &str = "nexushub-test-client";
 const OWNER_ID: &str = "codex-desktop-owner";
 const WAIT: Duration = Duration::from_secs(2);
+
+fn goal_replica(state: Value) -> NativeState {
+    let mut replica = NativeState::new(THREAD_ID).expect("fixture thread ID is valid");
+    replica
+        .apply(DesktopEvent::Snapshot { revision: 1, state })
+        .expect("fixture snapshot is accepted");
+    replica
+}
+
+fn projected_goal(replica: &NativeState) -> Option<crate::services::codex_desktop::DesktopGoal> {
+    super::projection::view(replica, "fixture-session", Vec::new()).goal
+}
+
+#[test]
+fn goal_projection_tracks_updates_clearing_and_completed_goal() {
+    let mut replica = goal_replica(json!({
+        "id": THREAD_ID,
+        "threadGoal": {"objective": "first fixture", "status": "active"}
+    }));
+    let active = projected_goal(&replica).expect("active goal is projected");
+    assert_eq!(active.objective, "first fixture");
+    assert_eq!(active.status, "active");
+    assert!(!active.truncated);
+
+    replica
+        .apply(DesktopEvent::Patches {
+            revision: 2,
+            change: json!({
+                "baseRevision": 1,
+                "patches": [{
+                    "op": "replace",
+                    "path": ["threadGoal"],
+                    "value": {"objective": "updated fixture", "status": "paused"}
+                }]
+            }),
+        })
+        .expect("goal update patch is accepted");
+    let updated = projected_goal(&replica).expect("updated goal is projected");
+    assert_eq!(updated.objective, "updated fixture");
+    assert_eq!(updated.status, "paused");
+
+    replica
+        .apply(DesktopEvent::Patches {
+            revision: 3,
+            change: json!({
+                "baseRevision": 2,
+                "patches": [{"op": "remove", "path": ["threadGoal"]}]
+            }),
+        })
+        .expect("goal removal patch is accepted");
+    assert!(projected_goal(&replica).is_none());
+
+    replica
+        .apply(DesktopEvent::Patches {
+            revision: 4,
+            change: json!({
+                "baseRevision": 3,
+                "patches": [{
+                    "op": "add",
+                    "path": ["completedThreadGoal"],
+                    "value": {"objective": "completed fixture", "status": "complete"}
+                }]
+            }),
+        })
+        .expect("completed goal patch is accepted");
+    let completed = projected_goal(&replica).expect("completed goal is projected");
+    assert_eq!(completed.objective, "completed fixture");
+    assert_eq!(completed.status, "complete");
+}
+
+#[test]
+fn goal_projection_handles_missing_and_unknown_status() {
+    let missing = goal_replica(json!({"id": THREAD_ID}));
+    assert!(projected_goal(&missing).is_none());
+
+    let unknown = goal_replica(json!({
+        "id": THREAD_ID,
+        "threadGoal": {"objective": "fixture", "status": "futureStatus"}
+    }));
+    assert_eq!(projected_goal(&unknown).unwrap().status, "unknown");
+}
+
+#[test]
+fn goal_objective_respects_byte_cap_at_utf8_boundaries() {
+    let at_limit = format!("{}中", "a".repeat(4093));
+    let replica = goal_replica(json!({
+        "id": THREAD_ID,
+        "threadGoal": {"objective": at_limit, "status": "active"}
+    }));
+    let goal = projected_goal(&replica).unwrap();
+    assert_eq!(goal.objective.len(), 4096);
+    assert!(!goal.truncated);
+
+    let over_limit = format!("{}中", "a".repeat(4094));
+    let replica = goal_replica(json!({
+        "id": THREAD_ID,
+        "threadGoal": {"objective": over_limit, "status": "active"}
+    }));
+    let goal = projected_goal(&replica).unwrap();
+    assert!(goal.truncated);
+    assert!(goal.objective.is_char_boundary(goal.objective.len()));
+    assert!(goal.objective.ends_with('…'));
+    assert!(
+        goal.objective.len() <= 4096,
+        "{} bytes",
+        goal.objective.len()
+    );
+}
+
+#[test]
+fn legacy_desktop_view_without_goal_deserializes() {
+    let view: crate::services::codex_desktop::DesktopView = serde_json::from_value(json!({
+        "sessionId": "fixture-session",
+        "threadId": THREAD_ID,
+        "revision": 1,
+        "connected": true,
+        "writable": false,
+        "runtime": "idle",
+        "activeTurnId": null,
+        "model": null,
+        "reasoningEffort": null,
+        "mode": null,
+        "requests": [],
+        "queue": [],
+        "error": null
+    }))
+    .expect("legacy DTO without goal remains readable");
+
+    assert!(view.goal.is_none());
+}
 
 struct Fixture {
     root: PathBuf,
