@@ -11,7 +11,8 @@ use std::ffi::c_void;
 
 const CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 const PIXEL_BYTES: u64 = 128 * 1024 * 1024;
-const INVALID: &str = "剪贴板图片无效或超出安全大小限制";
+const INVALID: &str = "剪贴板图片格式无效或不受支持";
+const TOO_LARGE: &str = "剪贴板图片超出安全大小限制";
 
 pub(super) fn paste_png() -> Result<Vec<u8>, &'static str> {
     autoreleasepool(|_| read_png(&NSPasteboard::generalPasteboard()))
@@ -40,7 +41,7 @@ fn read_png_using(
         }
     };
     if data.len() > CAPTURE_BYTES {
-        return Err(INVALID);
+        return Err(TOO_LARGE);
     }
     let bytes = data.to_vec();
     if before != pasteboard.changeCount() {
@@ -54,12 +55,18 @@ fn read_png_using(
 }
 
 fn normalize(bytes: &[u8], png: bool) -> Result<Vec<u8>, &'static str> {
-    if bytes.len() > CAPTURE_BYTES || bytes.is_empty() {
+    if bytes.len() > CAPTURE_BYTES {
+        return Err(TOO_LARGE);
+    }
+    if bytes.is_empty() {
         return Err(INVALID);
     }
     check_dimensions(bytes)?;
     if png {
-        if bytes.len() > MAX_IMAGE_BYTES || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err("粘贴图片超过 20MiB");
+        }
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Err(INVALID);
         }
         return Ok(bytes.to_vec());
@@ -76,7 +83,7 @@ fn normalize(bytes: &[u8], png: bool) -> Result<Vec<u8>, &'static str> {
     }
     .ok_or(INVALID)?;
     if png.len() > MAX_IMAGE_BYTES {
-        return Err(INVALID);
+        return Err("粘贴图片超过 20MiB");
     }
     Ok(png.to_vec())
 }
@@ -159,7 +166,7 @@ fn check_dimensions(bytes: &[u8]) -> Result<(), &'static str> {
             .and_then(|pixels| pixels.checked_mul(16))
             .is_none_or(|bytes| bytes > PIXEL_BYTES)
         {
-            return Err(INVALID);
+            return Err(TOO_LARGE);
         }
     }
     Ok(())
@@ -219,6 +226,6 @@ mod tests {
     #[test]
     fn oversized_capture_is_rejected_before_image_decoding() {
         let bytes = vec![0; CAPTURE_BYTES + 1];
-        assert_eq!(normalize(&bytes, true).unwrap_err(), INVALID);
+        assert_eq!(normalize(&bytes, true).unwrap_err(), TOO_LARGE);
     }
 }

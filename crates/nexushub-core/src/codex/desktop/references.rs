@@ -78,26 +78,36 @@ pub enum NativeReference {
 
 impl NativeReference {
     pub fn selected_file(path: PathBuf) -> Result<Self> {
+        Self::selected_file_detailed(path).map_err(|(error, _)| error)
+    }
+
+    pub fn selected_file_detailed(
+        path: PathBuf,
+    ) -> std::result::Result<Self, (DesktopError, &'static str)> {
         let path = path
             .canonicalize()
-            .map_err(|_| DesktopError::InvalidInput)?;
-        safe_path(&path)?;
+            .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?;
+        safe_path(&path).map_err(|error| (error, "文件名或路径格式无效"))?;
         let name = path
             .file_name()
             .and_then(|value| value.to_str())
-            .ok_or(DesktopError::InvalidInput)?
+            .ok_or((DesktopError::InvalidInput, "文件名或路径格式无效"))?
             .to_owned();
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&path)
-            .map_err(|_| DesktopError::InvalidInput)?;
-        let identity =
-            FileIdentity::read(&file.metadata().map_err(|_| DesktopError::InvalidInput)?)?;
+            .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?;
+        let identity = FileIdentity::read(
+            &file
+                .metadata()
+                .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?,
+        )
+        .map_err(|error| (error, "仅支持普通文件，不能添加目录"))?;
         let mut header = [0_u8; 16];
         let read = file
             .read(&mut header)
-            .map_err(|_| DesktopError::InvalidInput)?;
+            .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?;
         let header = &header[..read];
         let image = header.starts_with(b"\x89PNG\r\n\x1a\n")
             || header.starts_with(b"\xff\xd8\xff")
@@ -105,7 +115,10 @@ impl NativeReference {
             || header.starts_with(b"GIF89a")
             || (header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WEBP"));
         if image && identity.size > 20 * 1024 * 1024 {
-            return Err(DesktopError::InvalidInput);
+            return Err((
+                DesktopError::InvalidInput,
+                "图片超过 20MiB，请选择较小的图片",
+            ));
         }
         let reference = Self::File {
             name,
@@ -113,7 +126,9 @@ impl NativeReference {
             identity,
             image,
         };
-        reference.validate()?;
+        reference
+            .validate()
+            .map_err(|error| (error, "所选文件已变化，请重新选择"))?;
         Ok(reference)
     }
 

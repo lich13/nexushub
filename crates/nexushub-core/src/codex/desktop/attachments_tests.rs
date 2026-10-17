@@ -181,7 +181,10 @@ fn import_accepts_exactly_twenty_mib_and_rejects_invalid_or_oversized_pngs() {
     let fixture = Fixture::new();
     let mut store = fixture.open(100);
 
-    assert!(store.import_png(b"not a PNG", 100).is_err());
+    assert_eq!(
+        store.import_png(b"not a PNG", 100).err(),
+        Some("粘贴图片格式无效")
+    );
     let mut exact_limit = vec![b'x'; MAX_IMAGE_BYTES];
     exact_limit[..PNG_SIGNATURE.len()].copy_from_slice(PNG_SIGNATURE);
     let accepted = store
@@ -196,7 +199,10 @@ fn import_accepts_exactly_twenty_mib_and_rejects_invalid_or_oversized_pngs() {
 
     let mut over_limit = vec![b'x'; MAX_IMAGE_BYTES + 1];
     over_limit[..PNG_SIGNATURE.len()].copy_from_slice(PNG_SIGNATURE);
-    assert!(store.import_png(&over_limit, 100).is_err());
+    assert_eq!(
+        store.import_png(&over_limit, 100).err(),
+        Some("粘贴图片超过 20MiB")
+    );
     assert_eq!(store.index.entries.len(), 1);
     assert_eq!(
         fs::read_dir(&store.root)
@@ -220,7 +226,10 @@ fn import_stops_at_the_256_image_limit() {
             .expect("PNG within the image-count boundary is accepted");
     }
     assert_eq!(store.index.entries.len(), MAX_IMAGES);
-    assert!(store.import_png(SMALL_PNG, 100).is_err());
+    assert_eq!(
+        store.import_png(SMALL_PNG, 100).err(),
+        Some("粘贴附件存储已满，请使用文件选择器添加图片")
+    );
     assert_eq!(store.index.entries.len(), MAX_IMAGES);
 }
 
@@ -528,7 +537,10 @@ fn sparse_private_fixture_reaches_the_exact_512_mib_store_limit() {
         MAX_STORE_BYTES
     );
     let entry_count = store.index.entries.len();
-    assert!(store.import_png(PNG_SIGNATURE, 100).is_err());
+    assert_eq!(
+        store.import_png(PNG_SIGNATURE, 100).err(),
+        Some("粘贴附件存储已满，请使用文件选择器添加图片")
+    );
     assert_eq!(store.index.entries.len(), entry_count);
     assert!(reference_path(&exact_boundary).exists());
 }
