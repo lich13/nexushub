@@ -31,7 +31,7 @@ export type DesktopView = {
   runtime: string; activeTurnId: string | null; model: string | null; reasoningEffort: string | null;
   mode: DesktopMode | null; requests: DesktopPendingRequest[]; queue: DesktopQueuedMessage[]; error: string | null;
 };
-export type DesktopCatalogRequest = { revision: number; sessionId: string | null; projectHandle: string | null; kind: string; query: string; cursor: string | null };
+export type DesktopCatalogRequest = { forceRefetch?: boolean; revision: number; sessionId: string | null; projectHandle: string | null; kind: string; query: string; cursor: string | null };
 export type DesktopCatalogItem = { handle: string; kind: string; name: string; description: string; reasoningEfforts: string[]; defaultReasoningEffort: string | null };
 export type DesktopCatalog = { items: DesktopCatalogItem[]; nextCursor: string | null };
 export type DesktopChooseRequest = { revision: number; sessionId: string | null; kind: string };

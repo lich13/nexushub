@@ -45,6 +45,7 @@ fn snapshot(items: Vec<Item>, modes: &[&str]) -> Snapshot {
 
 fn request(query: &str, cursor: Option<String>) -> DesktopCatalogRequest {
     DesktopCatalogRequest {
+        force_refetch: None,
         revision: 9,
         session_id: None,
         project_handle: None,
@@ -140,9 +141,19 @@ fn page_rejects_malformed_misaligned_and_filtered_out_offsets() {
 
 #[test]
 fn model_settings_require_current_catalog_identity_and_allowlisted_choices() {
-    let item = model_item(1, "Fixture model", "");
+    let mut item = model_item(1, "Fixture model", "");
+    item.efforts = vec![
+        "low".into(),
+        "high".into(),
+        "max".into(),
+        "ultra".into(),
+        "fixture-custom".into(),
+    ];
     let mut cache = CatalogCache::default();
     cache.entries.push(snapshot(vec![item], &["plan"]));
+    let mut modes = snapshot(vec![], &["plan"]);
+    modes.kind = "modes".into();
+    cache.entries.push(modes);
 
     assert!(cache
         .validate_settings(
@@ -183,9 +194,91 @@ fn model_settings_require_current_catalog_identity_and_allowlisted_choices() {
             DesktopMode::Plan,
         )
         .is_err());
+    for effort in ["max", "ultra", "fixture-custom"] {
+        assert!(cache
+            .validate_settings(
+                9,
+                "fixture-thread",
+                "model-1",
+                Some(effort),
+                DesktopMode::Plan,
+            )
+            .is_ok());
+    }
     assert!(cache
         .validate_settings(9, "fixture-thread", "model-1", None, DesktopMode::Default)
         .is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_refetch_bypasses_cache_and_rejects_a_cursor() {
+    let catalogs = Catalogs::default();
+    let cached_request = request("", None);
+    catalogs
+        .cache
+        .lock()
+        .await
+        .insert(
+            "fixture-thread",
+            &cached_request,
+            vec![model_item(1, "cached model", "")],
+            vec![],
+        )
+        .unwrap();
+
+    let mut forced_request = request("", None);
+    forced_request.force_refetch = Some(true);
+    let fetch_count = Arc::new(AtomicUsize::new(0));
+    let forced_count = Arc::clone(&fetch_count);
+    let page = catalogs
+        .read_with("fixture-thread", &forced_request, || Ok(()), async move {
+            forced_count.fetch_add(1, Ordering::SeqCst);
+            Ok((vec![model_item(2, "refetched model", "")], vec![]))
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].id, "model-2");
+    assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+
+    let mut cursor_request = forced_request;
+    cursor_request.cursor = Some("fixture-cursor".into());
+    let rejected = catalogs
+        .read_with("fixture-thread", &cursor_request, || Ok(()), async {
+            panic!("forced refresh with a cursor must not fetch")
+        })
+        .await;
+    assert!(matches!(rejected, Err(error) if error.contains("首页")));
+    assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_modes_read_keeps_the_model_catalog_cached() {
+    let catalogs = Catalogs::default();
+    let models_request = request("", None);
+    catalogs
+        .read_with("fixture-thread", &models_request, || Ok(()), async {
+            Ok((vec![model_item(1, "fixture model", "")], vec![]))
+        })
+        .await
+        .unwrap();
+
+    let mut modes_request = request("", None);
+    modes_request.kind = "modes".into();
+    let failed = catalogs
+        .read_with("fixture-thread", &modes_request, || Ok(()), async {
+            Err("fixture modes failure".into())
+        })
+        .await;
+    assert!(matches!(failed, Err(error) if error == "fixture modes failure"));
+
+    let mut cache = catalogs.cache.lock().await;
+    let models = cache
+        .cached("fixture-thread", &models_request)
+        .unwrap()
+        .expect("model snapshot survives a separate modes failure");
+    assert_eq!(models.items[0].id, "model-1");
+    assert_eq!(cache.entries.len(), 1);
+    assert_eq!(cache.entries[0].kind, "models");
 }
 
 #[test]
@@ -661,4 +754,59 @@ fn helper_pagination_rejects_duplicate_invalid_and_over_budget_cursors() {
         );
     }
     assert!(next(&json!({"nextCursor":"cursor-over-budget"}), &mut bounded).is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn invalidated_selection_drops_pending_fetch_and_never_caches_it() {
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let catalogs = Catalogs::default();
+    let current = Arc::new(AtomicBool::new(true));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let changed = current.clone();
+    let guard = Dropped(dropped.clone());
+    let started = tokio::time::Instant::now();
+    let result = catalogs
+        .read_with(
+            "fixture-thread",
+            &request("", None),
+            || {
+                if current.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    Err("selection changed fixture".into())
+                }
+            },
+            async move {
+                let _guard = guard;
+                changed.store(false, Ordering::SeqCst);
+                std::future::pending::<Result<(Vec<Item>, Vec<String>), String>>().await
+            },
+        )
+        .await;
+    assert!(matches!(result, Err(error) if error == "selection changed fixture"));
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(tokio::time::Instant::now() - started <= Duration::from_millis(100));
+    assert!(catalogs.cache.lock().await.entries.is_empty());
+}
+
+#[tokio::test]
+async fn forced_refresh_still_rejects_invalid_context_before_fetch() {
+    let catalogs = Catalogs::default();
+    let mut request = request("", None);
+    request.force_refetch = Some(true);
+    request.project_handle = Some("unselected-fixture".into());
+    let fetched = AtomicBool::new(false);
+    let result = catalogs
+        .read_with("fixture-thread", &request, || Ok(()), async {
+            fetched.store(true, Ordering::SeqCst);
+            Ok((vec![], vec![]))
+        })
+        .await;
+    assert!(result.is_err());
+    assert!(!fetched.load(Ordering::SeqCst));
 }

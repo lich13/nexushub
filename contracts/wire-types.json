@@ -5437,6 +5437,13 @@
       "DesktopCatalogRequest": {
         "fields": [
           {
+            "name": "force_refetch",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < bool >"
+          },
+          {
             "name": "revision",
             "serde": [],
             "type": "u64"
@@ -9832,8 +9839,8 @@
       "signatures": [
         "fn catalog_key (thread : & str , request : & DesktopCatalogRequest) -> String",
         "fn catalog_error (error : DesktopError) -> String",
-        "async fn fetch (helper : & DesktopHelper , cwd : & Path , thread : & str , kind : & str ,) -> Result < (Vec < Item > , Vec < String >) , String >",
-        "async fn apps (helper : & DesktopHelper , thread : & str) -> Result < Vec < Item > , String >",
+        "async fn fetch (helper : & DesktopHelper , cwd : & Path , kind : & str , force_refetch : bool ,) -> Result < (Vec < Item > , Vec < String >) , String >",
+        "async fn apps (reader : & mut CatalogReader , force_refetch : bool) -> Result < Vec < Item > , String >",
         "fn app_reference (id : & str , name : & str) -> Result < NativeReference , String >",
         "fn plugin_item (plugin : & Value , marketplace : & str) -> Result < Item , String >",
         "fn append_skills (items : & mut Vec < Item > , skills : & [Value]) -> Result < () , String >",
@@ -10153,7 +10160,7 @@
         "DesktopAttachmentResult": "exporttypeDesktopAttachmentResult={bindingId:string};",
         "DesktopCatalog": "exporttypeDesktopCatalog={items:DesktopCatalogItem[];nextCursor:string|null};",
         "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
-        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
+        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={forceRefetch?:boolean;revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
         "DesktopChoice": "exporttypeDesktopChoice={item:DesktopChosenItem|null};",
         "DesktopChooseRequest": "exporttypeDesktopChooseRequest={revision:number;sessionId:string|null;kind:string};",
         "DesktopChosenItem": "exporttypeDesktopChosenItem={handle:string;name:string;kind:string};",

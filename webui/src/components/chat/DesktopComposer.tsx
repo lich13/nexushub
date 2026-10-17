@@ -159,27 +159,56 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   </section>;
 }
 
-function DesktopSettings({ sessionId, viewModel, viewEffort, viewMode, busy, act }: { sessionId: string; viewModel: string | null; viewEffort: string | null; viewMode: DesktopMode | null; busy: boolean; act: ReturnType<typeof useCodexDesktop>["act"] }) {
+function useSettingsCatalog(sessionId: string, kind: string) {
   const [items, setItems] = useState<DesktopCatalogItem[]>([]);
   const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
+  const [retryRequest, setRetryRequest] = useState({ sessionId: "", attempt: 0 });
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let current = true; setLoading(true); setError(""); setItems([]);
-    void desktopCatalog({ sessionId, projectHandle: null, kind: "models", query: "", cursor: null }).then(result => { if (current) { setItems(result.items); setError(""); } }).catch(reason => { if (current) setError(reason instanceof Error ? reason.message : "模型列表暂不可用"); }).finally(() => { if (current) setLoading(false); });
+    void desktopCatalog({ sessionId, projectHandle: null, kind, query: "", cursor: null, ...(retryRequest.sessionId === sessionId && retryRequest.attempt > 0 ? { forceRefetch: true } : {}) })
+      .then(result => { if (current) { setItems(result.items); setError(""); } })
+      .catch(reason => { if (current) setError(reason instanceof Error ? reason.message : "目录暂不可用"); })
+      .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [sessionId, viewModel, attempt]);
-  const selected = items.find(item => item.handle === viewModel);
-  const update = (model: string, reasoningEffort: string | null, mode: DesktopMode) => { void act({ type: "settings", model, reasoningEffort, mode }).catch(() => {}); };
+  }, [sessionId, kind, retryRequest]);
+  return { items, error, loading, retry: () => setRetryRequest(value => ({ sessionId, attempt: value.attempt + 1 })) };
+}
+
+function DesktopSettings({ sessionId, viewModel, viewEffort, viewMode, busy, act }: { sessionId: string; viewModel: string | null; viewEffort: string | null; viewMode: DesktopMode | null; busy: boolean; act: ReturnType<typeof useCodexDesktop>["act"] }) {
+  const models = useSettingsCatalog(sessionId, "models");
+  const modes = useSettingsCatalog(sessionId, "modes");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const currentSession = useRef(sessionId); currentSession.current = sessionId;
+  useEffect(() => { setError(""); setNotice(""); }, [sessionId]);
+  const selected = models.items.find(item => item.handle === viewModel);
+  const availableModes = modes.items.filter(item => item.handle === "default" || item.handle === "plan");
+  const update = (model: string, reasoningEffort: string | null, mode: DesktopMode) => {
+    setError("");
+    void act({ type: "settings", model, reasoningEffort, mode }).then(() => {
+      if (currentSession.current === sessionId) setError("");
+    }).catch(reason => {
+      if (currentSession.current === sessionId) setError(reason instanceof Error ? reason.message : "设置未应用，请重试");
+    });
+  };
   return <div className="desktop-model-settings">
-    {error && <><span role="alert" className="form-error">{error}</span><button type="button" disabled={busy || loading} onClick={() => setAttempt(value => value + 1)}>重试模型目录</button></>}
-    <select aria-label="模型" disabled={busy || loading || !items.length} value={selected?.handle ?? ""} onChange={event => {
-      const item = items.find(item => item.handle === event.target.value); if (item) update(item.handle, item.defaultReasoningEffort, viewMode ?? "default");
-    }}><option value="" disabled>{viewModel || error || "读取模型…"}</option>{items.map(item => <option key={item.handle} value={item.handle}>{item.name}</option>)}</select>
-    {selected && <select aria-label="思考强度" disabled={busy || loading || !selected.reasoningEfforts.length} value={viewEffort ?? selected.defaultReasoningEffort ?? ""} onChange={event => update(selected.handle, event.target.value || null, viewMode ?? "default")}>
-      {!selected.reasoningEfforts.length && <option value="">默认</option>}{selected.reasoningEfforts.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+    {models.error && <><span role="alert" className="form-error">模型：{models.error}</span><button type="button" disabled={busy || models.loading} onClick={models.retry}>重试模型目录</button></>}
+    {modes.error && <><span role="alert" className="form-error">模式：{modes.error}</span><button type="button" disabled={busy || modes.loading} onClick={modes.retry}>重试模式目录</button></>}
+    {error && <span role="alert" className="form-error">{error}</span>}
+    {notice && <span role="status">{notice}</span>}
+    <select aria-label="模型" disabled={busy || models.loading || !models.items.length} value={selected?.handle ?? ""} onChange={event => {
+      const item = models.items.find(item => item.handle === event.target.value); if (item) { setNotice(""); update(item.handle, item.defaultReasoningEffort, viewMode ?? "default"); }
+    }}><option value="" disabled>{viewModel || (models.loading ? "读取模型…" : "没有可用模型")}</option>{models.items.map(item => <option key={item.handle} value={item.handle}>{item.name}</option>)}</select>
+    {selected && <select aria-label="思考强度" disabled={busy || models.loading || !selected.reasoningEfforts.length} value={viewEffort ?? ""} onChange={event => { setNotice(""); update(selected.handle, event.target.value || null, viewMode ?? "default"); }}>
+      <option value="">继承原生默认</option>{viewEffort && !selected.reasoningEfforts.includes(viewEffort) && <option value={viewEffort} disabled>{viewEffort}</option>}{selected.reasoningEfforts.map(effort => <option key={effort} value={effort}>{effort}</option>)}
     </select>}
-    <select aria-label="协作模式" disabled={busy || loading || !selected} value={viewMode ?? "default"} onChange={event => selected && update(selected.handle, viewEffort, event.target.value as DesktopMode)}><option value="default">默认</option><option value="plan">Plan</option></select>
+    <select aria-label="协作模式" disabled={busy || modes.loading || !selected || !availableModes.length} value={viewMode ?? ""} onChange={event => {
+      if (!selected) return;
+      const effort = viewEffort && selected.reasoningEfforts.includes(viewEffort) ? viewEffort : null;
+      setNotice(viewEffort && effort === null ? "当前思考强度不可用，将继承原生默认" : "");
+      update(selected.handle, effort, event.target.value as DesktopMode);
+    }}><option value="" disabled>{modes.loading ? "读取模式…" : "没有可用模式"}</option>{viewMode && !availableModes.some(item => item.handle === viewMode) && <option value={viewMode} disabled>{viewMode === "plan" ? "Plan" : "默认"}</option>}{availableModes.map(item => <option key={item.handle} value={item.handle}>{item.name}</option>)}</select>
   </div>;
 }
 
@@ -191,7 +220,7 @@ function ReferenceOptions({ catalog, option, onSelect, onMore }: { catalog: Retu
     <ul id="desktop-reference-options" role="listbox" aria-label="可用引用">
       {catalog.items.map((item, index) => <li id={`desktop-reference-option-${index}`} role="option" aria-selected={index === option} key={item.handle}><button type="button" onClick={() => onSelect(item)}><strong>{item.name}</strong><small>{item.kind === "plugin" ? "插件" : item.kind === "app" ? "应用" : "技能"}{item.description && ` · ${item.description}`}</small></button></li>)}
     </ul>
-    {!catalog.busy && !catalog.errors.length && !catalog.items.length && <p className="muted-text">没有可用引用</p>}
+    {!catalog.busy && !catalog.errors.length && !catalog.items.length && <p className="muted-text">{catalog.emptyLabel || "没有可用引用"}</p>}
     {catalog.hasMore && <button type="button" disabled={catalog.busy} onClick={onMore}>下一页</button>}
   </div>;
 }

@@ -10,9 +10,8 @@ const PAGE = 100;
 export function useDesktopReferenceCatalog(sessionId: string | undefined, kind: string, query: string) {
   const key = JSON.stringify([sessionId, kind, query]);
   const [state, setState] = useState<State>({ key: "", pages: [], busy: false, offset: 0 });
-  const [attempt, setAttempt] = useState(0);
   const epoch = useRef(0);
-  const fetcher = useRef<((next: boolean) => Promise<void>) | null>(null);
+  const fetcher = useRef<((next: boolean, retry?: boolean) => Promise<void>) | null>(null);
   useEffect(() => {
     const generation = ++epoch.current;
     fetcher.current = null;
@@ -23,15 +22,17 @@ export function useDesktopReferenceCatalog(sessionId: string | undefined, kind: 
     const publish = () => {
       if (epoch.current === generation) setState({ key, pages: [...pages], busy, offset: 0 });
     };
-    const read = async (next: boolean) => {
+    const read = async (next: boolean, retry = false) => {
       if (busy || epoch.current !== generation) return;
+      const retryKinds = new Set(pages.filter(page => page.error).map(page => page.kind));
       busy = true; publish();
       for (let index = 0; index < kinds.length; index++) {
         if (epoch.current !== generation) return;
+        if (retry && retryKinds.size && !retryKinds.has(kinds[index])) continue;
         const cursor = next ? pages[index].cursor : null;
         if (next && !cursor) { pages[index] = { ...pages[index], items: [] }; continue; }
         try {
-          const result = await desktopCatalog({ sessionId, projectHandle: null, kind: kinds[index], query, cursor });
+          const result = await desktopCatalog({ sessionId, projectHandle: null, kind: kinds[index], query, cursor, ...(retry ? { forceRefetch: true } : {}) });
           if (epoch.current !== generation) return;
           pages[index] = { kind: kinds[index], items: result.items, cursor: result.nextCursor, error: "" };
         } catch (reason) {
@@ -46,7 +47,7 @@ export function useDesktopReferenceCatalog(sessionId: string | undefined, kind: 
     setState({ key, pages, busy: true, offset: 0 });
     const timer = setTimeout(() => { void read(false); }, 250);
     return () => { clearTimeout(timer); ++epoch.current; fetcher.current = null; };
-  }, [sessionId, kind, query, key, attempt]);
+  }, [sessionId, kind, query, key]);
   const current = state.key === key ? state : { key, pages: [], busy: Boolean(kind), offset: 0 };
   const items = current.pages.flatMap(page => page.items);
   const more = () => {
@@ -55,9 +56,10 @@ export function useDesktopReferenceCatalog(sessionId: string | undefined, kind: 
     else void fetcher.current?.(true);
   };
   return {
+    emptyLabel: kind === "apps" ? "没有可用应用" : kind === "plugins" ? "没有可用插件" : kind === "skills" ? "没有可用技能" : "没有可用引用",
     items: items.slice(current.offset, current.offset + PAGE), busy: current.busy,
     errors: current.pages.filter(page => page.error).map(page => ({ kind: page.kind, message: page.error })),
     hasMore: current.offset + PAGE < items.length || current.pages.some(page => page.cursor),
-    more, retry: () => setAttempt(value => value + 1)
+    more, retry: () => { void fetcher.current?.(false, true); }
   };
 }
