@@ -121,6 +121,9 @@ assert_app_bundle_resources() {
     die "app bundle helper must be a macOS arm64 executable, got: ${helper_kind}"
 
   [[ ! -e "${bundled_webui}" ]] || die "app bundle contains retired duplicate LAN WebUI resources"
+  if [[ "${OS}" == "Darwin" ]]; then
+    codesign --verify --deep --strict "${app_bundle}"
+  fi
 }
 
 assert_helper_resource_placeholder() {
@@ -222,11 +225,6 @@ APP_ARCHIVE_ROOT="${TMP}/app-archive"
 mkdir -p "${APP_ARCHIVE_ROOT}"
 cp -a "${APP_BUNDLE}" "${APP_ARCHIVE_ROOT}/NexusHub.app"
 assert_app_bundle_resources "${APP_ARCHIVE_ROOT}/NexusHub.app"
-
-if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
-  codesign --force --deep --sign "${MACOS_CODESIGN_IDENTITY}" "${APP_ARCHIVE_ROOT}/NexusHub.app"
-  codesign --verify --deep --strict "${APP_ARCHIVE_ROOT}/NexusHub.app"
-fi
 
 assert_app_only_archive "${APP_ARCHIVE_ROOT}"
 if [[ -n "${TAURI_UPDATER_ARCHIVE}" && -n "${TAURI_UPDATER_SIGNATURE}" ]]; then

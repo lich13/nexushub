@@ -22,6 +22,12 @@ class AssetParser(HTMLParser):
 
 def prepare(source, output, webui, signed, skip):
     config = json.loads(Path(source).read_text())
+    # Sign the actual app before Tauri creates the DMG and updater archive.
+    # Preserve the existing packaging override; APPLE_SIGNING_IDENTITY remains
+    # Tauri's own higher-priority override. Updater signing is independent.
+    identity = os.environ.get("MACOS_CODESIGN_IDENTITY")
+    if identity:
+        config.setdefault("bundle", {}).setdefault("macOS", {})["signingIdentity"] = identity
     root = (Path(webui) / "dist").resolve()
     build = config.setdefault("build", {})
     # Keep the generated config relocatable.  An absolute frontendDist embeds
