@@ -138,6 +138,8 @@ pub struct DesktopView {
     pub connection_phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_build: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<DesktopGoal>,
     pub session_id: String,
     pub thread_id: String,
     pub revision: u64,
@@ -151,6 +153,16 @@ pub struct DesktopView {
     pub requests: Vec<DesktopPendingRequest>,
     pub queue: Vec<DesktopQueuedMessage>,
     pub error: Option<String>,
+}
+
+/// Read-only native goal projection. The retired NexusHub Goal commands and
+/// scheduler remain unavailable; mutations belong to the native desktop.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopGoal {
+    pub objective: String,
+    pub status: String,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

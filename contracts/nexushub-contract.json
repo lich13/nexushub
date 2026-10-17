@@ -1191,6 +1191,10 @@
     "DesktopDiagnostics": {
       "core": "DesktopDiagnostics",
       "webui": "DesktopDiagnostics"
+    },
+    "DesktopGoal": {
+      "core": "DesktopGoal",
+      "webui": "DesktopGoal"
     }
   },
   "retiredActions": [

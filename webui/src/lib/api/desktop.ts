@@ -26,8 +26,9 @@ export type DesktopFileReview = { path: string; kind: string; diff: string; trun
 export type DesktopPermissionsReview = { network: string | null; fileSystem: string | null };
 export type DesktopReview = { command: string | null; cwd: string | null; reason: string | null; changes: DesktopFileReview[]; permissions: DesktopPermissionsReview | null; extra: string | null; truncated: boolean };
 export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean; supportedDecisions?: string[]; review?: DesktopReview | null };
+export type DesktopGoal = { objective: string; status: string; truncated: boolean };
 export type DesktopView = {
-  connectionPhase?: string | null; desktopBuild?: string | null;
+  connectionPhase?: string | null; desktopBuild?: string | null; goal?: DesktopGoal | null;
   sessionId: string; threadId: string; revision: number; connected: boolean; writable: boolean;
   runtime: string; activeTurnId: string | null; model: string | null; reasoningEffort: string | null;
   mode: DesktopMode | null; requests: DesktopPendingRequest[]; queue: DesktopQueuedMessage[]; error: string | null;

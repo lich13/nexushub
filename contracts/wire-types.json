@@ -140,6 +140,10 @@
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopFileReview",
       "ts": "webui/src/lib/api/desktop.ts#DesktopFileReview"
     },
+    "DesktopGoal": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopGoal",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopGoal"
+    },
     "DesktopMode": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopMode",
       "ts": "webui/src/lib/api/desktop.ts#DesktopMode"
@@ -5676,6 +5680,29 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
+      "DesktopGoal": {
+        "fields": [
+          {
+            "name": "objective",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "truncated",
+            "serde": [],
+            "type": "bool"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
       "DesktopMode": {
         "kind": "enum",
         "serde": [
@@ -5977,6 +6004,13 @@
               "serde (default , skip_serializing_if = \"Option::is_none\")"
             ],
             "type": "Option < String >"
+          },
+          {
+            "name": "goal",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < DesktopGoal >"
           },
           {
             "name": "session_id",
@@ -10193,6 +10227,7 @@
         "DesktopDiagnostics": "exporttypeDesktopDiagnostics={records:DesktopDiagnostic[];desktopBuild:string|null;bundledCliVersion:string|null};",
         "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number};",
         "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
+        "DesktopGoal": "exporttypeDesktopGoal={objective:string;status:string;truncated:boolean};",
         "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
         "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",
         "DesktopPermissionsReview": "exporttypeDesktopPermissionsReview={network:string|null;fileSystem:string|null};",
@@ -10203,7 +10238,7 @@
         "DesktopReview": "exporttypeDesktopReview={command:string|null;cwd:string|null;reason:string|null;changes:DesktopFileReview[];permissions:DesktopPermissionsReview|null;extra:string|null;truncated:boolean};",
         "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
         "DesktopThreadRequest": "exporttypeDesktopThreadRequest={confirmOwner?:boolean;revision:number;threadId:string};",
-        "DesktopView": "exporttypeDesktopView={connectionPhase?:string|null;desktopBuild?:string|null;sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
+        "DesktopView": "exporttypeDesktopView={connectionPhase?:string|null;desktopBuild?:string|null;goal?:DesktopGoal|null;sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
       }
     },
     "webui/src/lib/api/filePaths.ts": {
