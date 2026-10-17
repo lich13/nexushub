@@ -26,12 +26,24 @@ use tokio::sync::Mutex;
 mod attachments;
 mod catalogs;
 mod clipboard;
+mod diagnostics;
 mod selection;
 use selection::{GrantValue, Grants};
 
 const KEY_SERVICE: &str = "com.lich13.nexushub.codex-desktop";
 const KEY_ACCOUNT: &str = "submission-encryption-v1";
 const MAX_WORKERS: usize = 4;
+
+#[tauri::command(rename = "codex.desktop.diagnostics")]
+pub async fn diagnostics(
+    remote: State<'_, RemoteConnections>,
+    request: DesktopDiagnosticsRequest,
+) -> Result<DesktopDiagnostics, String> {
+    remote.require_local(request.revision)?;
+    let result = diagnostics::metadata().await;
+    remote.require_local(request.revision)?;
+    Ok(result)
+}
 
 pub struct CodexDesktopBridge {
     runtime: Mutex<Option<Arc<BridgeRuntime>>>,

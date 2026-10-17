@@ -781,6 +781,18 @@
       "requestDto": "DesktopAttachmentRequest",
       "responseDto": "DesktopAttachmentResult",
       "hostOnlyReason": "Verified native OS clipboard/drop ingress in the local macOS main window; no client paths and no Linux or remote registration"
+    },
+    {
+      "id": "codex.desktop.diagnostics",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.diagnostics",
+      "tauriCommand": "codex_desktop::diagnostics",
+      "webuiWrapper": "desktopDiagnostics",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopDiagnosticsRequest",
+      "responseDto": "DesktopDiagnostics",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
     }
   ],
   "dtoCatalog": {
@@ -1167,6 +1179,18 @@
     "DesktopAttachmentResult": {
       "core": "DesktopAttachmentResult",
       "webui": "DesktopAttachmentResult"
+    },
+    "DesktopDiagnosticsRequest": {
+      "core": "DesktopDiagnosticsRequest",
+      "webui": "DesktopDiagnosticsRequest"
+    },
+    "DesktopDiagnostic": {
+      "core": "DesktopDiagnostic",
+      "webui": "DesktopDiagnostic"
+    },
+    "DesktopDiagnostics": {
+      "core": "DesktopDiagnostics",
+      "webui": "DesktopDiagnostics"
     }
   },
   "retiredActions": [

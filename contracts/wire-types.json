@@ -124,6 +124,18 @@
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCreatedThread",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCreatedThread"
     },
+    "DesktopDiagnostic": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnostic",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnostic"
+    },
+    "DesktopDiagnostics": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnostics",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnostics"
+    },
+    "DesktopDiagnosticsRequest": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopDiagnosticsRequest",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopDiagnosticsRequest"
+    },
     "DesktopFileReview": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopFileReview",
       "ts": "webui/src/lib/api/desktop.ts#DesktopFileReview"
@@ -5550,6 +5562,85 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
+      "DesktopDiagnostic": {
+        "fields": [
+          {
+            "name": "timestamp",
+            "serde": [],
+            "type": "i64"
+          },
+          {
+            "name": "source",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "method",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "version",
+            "serde": [],
+            "type": "Option < u64 >"
+          },
+          {
+            "name": "code",
+            "serde": [],
+            "type": "Option < i64 >"
+          },
+          {
+            "name": "category",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "hint",
+            "serde": [],
+            "type": "String"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "DesktopDiagnostics": {
+        "fields": [
+          {
+            "name": "records",
+            "serde": [],
+            "type": "Vec < DesktopDiagnostic >"
+          },
+          {
+            "name": "desktop_build",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "bundled_cli_version",
+            "serde": [],
+            "type": "Option < String >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "DesktopDiagnosticsRequest": {
+        "fields": [
+          {
+            "name": "revision",
+            "serde": [],
+            "type": "u64"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
+        ]
+      },
       "DesktopFileReview": {
         "fields": [
           {
@@ -9705,6 +9796,7 @@
     "src-tauri/src/codex_desktop.rs": {
       "json": [],
       "signatures": [
+        "async fn diagnostics (remote : State < '_ , RemoteConnections > , request : DesktopDiagnosticsRequest ,) -> Result < DesktopDiagnostics , String >",
         "fn desktop_error (error : DesktopError) -> String",
         "async fn verify_thread (state : & DesktopState , thread_id : & str) -> Result < () , String >",
         "async fn attach (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopThreadRequest , on_event : Channel < DesktopView > ,) -> Result < DesktopView , String >",
@@ -9761,6 +9853,14 @@
         "fn read_png_using (pasteboard : & NSPasteboard , convert : impl FnOnce (& [u8] , bool) -> Result < Vec < u8 > , & 'static str > ,) -> Result < Vec < u8 > , & 'static str >",
         "fn normalize (bytes : & [u8] , png : bool) -> Result < Vec < u8 > , & 'static str >",
         "fn check_dimensions (bytes : & [u8]) -> Result < () , & 'static str >"
+      ]
+    },
+    "src-tauri/src/codex_desktop/diagnostics.rs": {
+      "json": [],
+      "signatures": [
+        "async fn metadata () -> DesktopDiagnostics",
+        "async fn read_version (program : & str , args : & [& str] , build : bool) -> Option < String >",
+        "fn version_text (bytes : & [u8] , build : bool) -> Option < String >"
       ]
     },
     "src-tauri/src/codex_desktop/selection.rs": {
@@ -10033,6 +10133,7 @@
         "invokeNative<DesktopAck>(\"codex.desktop.detach\",{request})",
         "runtimeRpc<DesktopView>(\"codex.desktop.action\",{request:{revision:localRevision(),sessionId,action}satisfiesDesktopActionRequest},true)",
         "runtimeRpc<DesktopAck>(\"codex.desktop.open\",{request:{revision:localRevision(),threadId}satisfiesDesktopThreadRequest},true)",
+        "runtimeRpc<DesktopDiagnostics>(\"codex.desktop.diagnostics\",{request:{revision:localRevision()}satisfiesDesktopDiagnosticsRequest},true)",
         "runtimeRpc<DesktopCatalog>(\"codex.desktop.catalog\",{request:{...request,revision:localRevision()}satisfiesDesktopCatalogRequest},true)",
         "runtimeRpc<DesktopChoice>(\"codex.desktop.choose\",{request:{revision:localRevision(),sessionId,kind}satisfiesDesktopChooseRequest},true)",
         "runtimeRpc<DesktopCreatedThread>(\"codex.desktop.create\",{request:{revision:localRevision(),projectHandle}satisfiesDesktopCreateRequest},true)",
@@ -10058,6 +10159,9 @@
         "DesktopChosenItem": "exporttypeDesktopChosenItem={handle:string;name:string;kind:string};",
         "DesktopCreateRequest": "exporttypeDesktopCreateRequest={revision:number;projectHandle:string};",
         "DesktopCreatedThread": "exporttypeDesktopCreatedThread={threadId:string};",
+        "DesktopDiagnostic": "exporttypeDesktopDiagnostic={timestamp:number;source:string;method:string;version:number|null;code:number|null;category:string;hint:string};",
+        "DesktopDiagnostics": "exporttypeDesktopDiagnostics={records:DesktopDiagnostic[];desktopBuild:string|null;bundledCliVersion:string|null};",
+        "DesktopDiagnosticsRequest": "exporttypeDesktopDiagnosticsRequest={revision:number};",
         "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
         "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
         "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",

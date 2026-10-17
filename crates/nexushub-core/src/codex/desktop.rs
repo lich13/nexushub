@@ -6,6 +6,7 @@
 //! pass the dedicated native protocol checks before being exposed by Tauri.
 pub mod attachments;
 pub mod commands;
+pub mod diagnostics;
 mod framing;
 pub mod helper;
 pub mod projection;
@@ -281,6 +282,16 @@ impl DesktopReadSession {
             let response = self.receive().await?;
             if response["type"] != "response" || response["requestId"] != request_id {
                 continue;
+            }
+            if response["resultType"] == "error" {
+                diagnostics::record(
+                    diagnostics::Source::Ipc,
+                    method,
+                    Some(version),
+                    None,
+                    response["error"].as_str(),
+                    DesktopError::Rejected,
+                );
             }
             return match response["resultType"].as_str() {
                 Some("success") => Ok(response),
