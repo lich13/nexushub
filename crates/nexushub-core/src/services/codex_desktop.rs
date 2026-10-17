@@ -5,6 +5,32 @@ use serde_json::Value;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopDiagnosticsRequest {
+    pub revision: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDiagnostic {
+    pub timestamp: i64,
+    pub source: String,
+    pub method: String,
+    pub version: Option<u64>,
+    pub code: Option<i64>,
+    pub category: String,
+    pub hint: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDiagnostics {
+    pub records: Vec<DesktopDiagnostic>,
+    pub desktop_build: Option<String>,
+    pub bundled_cli_version: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopThreadRequest {
     pub revision: u64,
     pub thread_id: String,

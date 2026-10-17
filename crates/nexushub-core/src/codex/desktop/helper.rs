@@ -222,6 +222,14 @@ impl HelperProcess {
                 continue;
             }
             if value.get("error").is_some() {
+                super::diagnostics::record(
+                    super::diagnostics::Source::Helper,
+                    method,
+                    None,
+                    value["error"]["code"].as_i64(),
+                    value["error"]["message"].as_str(),
+                    DesktopError::Rejected,
+                );
                 return Err(DesktopError::Rejected);
             }
             return value

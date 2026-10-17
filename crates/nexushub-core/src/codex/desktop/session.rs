@@ -139,6 +139,16 @@ impl DesktopSession {
                     {
                         return Err(DesktopError::InvalidIdentity);
                     }
+                    if message["resultType"] == "error" {
+                        super::diagnostics::record(
+                            super::diagnostics::Source::Ipc,
+                            request.method,
+                            Some(request.version),
+                            None,
+                            message["error"].as_str(),
+                            DesktopError::Rejected,
+                        );
+                    }
                     return match message["resultType"].as_str() {
                         Some("success") => Ok(message),
                         Some("error") => Err(match message["error"].as_str() {

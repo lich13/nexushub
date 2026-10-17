@@ -21,6 +21,20 @@ pub(super) enum Method {
 }
 
 impl Method {
+    pub const ALL: [Self; 12] = [
+        Self::Initialize,
+        Self::DiscoverOwner,
+        Self::Follow,
+        Self::Start,
+        Self::Steer,
+        Self::Interrupt,
+        Self::Settings,
+        Self::CommandDecision,
+        Self::FileDecision,
+        Self::Permissions,
+        Self::Answers,
+        Self::Elicitation,
+    ];
     pub const fn wire(self) -> (&'static str, u64) {
         match self {
             Self::Initialize => ("initialize", 0),

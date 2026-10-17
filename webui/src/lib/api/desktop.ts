@@ -1,6 +1,9 @@
 import { connectionSnapshot, createNativeChannel, invokeNative, runtimeRpc } from "../runtime";
 
 export type DesktopMode = "default" | "plan";
+export type DesktopDiagnosticsRequest = { revision: number };
+export type DesktopDiagnostic = { timestamp: number; source: string; method: string; version: number | null; code: number | null; category: string; hint: string };
+export type DesktopDiagnostics = { records: DesktopDiagnostic[]; desktopBuild: string | null; bundledCliVersion: string | null };
 export type DesktopThreadRequest = { revision: number; threadId: string };
 export type DesktopSessionRequest = { revision: number; sessionId: string };
 export type DesktopAnswer = { questionId: string; answers: string[] };
@@ -78,6 +81,9 @@ export function actOnDesktopThread(sessionId: string, action: DesktopAction) {
 }
 export function openDesktopThread(threadId: string) {
   return runtimeRpc<DesktopAck>("codex.desktop.open", { request: { revision: localRevision(), threadId } satisfies DesktopThreadRequest }, true);
+}
+export function desktopDiagnostics() {
+  return runtimeRpc<DesktopDiagnostics>("codex.desktop.diagnostics", { request: { revision: localRevision() } satisfies DesktopDiagnosticsRequest }, true);
 }
 export function desktopCatalog(request: Omit<DesktopCatalogRequest, "revision">) {
   return runtimeRpc<DesktopCatalog>("codex.desktop.catalog", { request: { ...request, revision: localRevision() } satisfies DesktopCatalogRequest }, true);

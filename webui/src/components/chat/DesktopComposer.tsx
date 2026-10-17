@@ -1,6 +1,6 @@
 import { ArrowUp, FolderPlus, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { chooseDesktopItem, createDesktopThread, desktopCatalog, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode } from "../../lib/query/desktop";
+import { chooseDesktopItem, createDesktopThread, desktopCatalog, desktopDiagnostics, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode } from "../../lib/query/desktop";
 import { emptyReferenceDraft, editReferenceDraft, inlineReferenceQuery, insertDesktopReference, removeDesktopReference, toDesktopReferenceSpans } from "../../lib/desktopReferences";
 import { useDesktopReferenceCatalog } from "../../hooks/useDesktopReferenceCatalog";
 import { useCodexDesktop } from "../../hooks/useCodexDesktop";
@@ -100,8 +100,13 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
     finally { setChoosing(false); }
   };
+  const copyDiagnostics = async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(await desktopDiagnostics(), null, 2)); }
+    catch { setLocalError("无法复制诊断，请重试"); }
+  };
   const locked = busy || choosing;
   return <section className="desktop-composer" aria-label="与 Codex 协作">
+    <button type="button" className="desktop-diagnostics" onClick={() => { void copyDiagnostics(); }}>复制诊断</button>
     {!writable ? <div className="desktop-connect-row"><span role={desktop.error ? "alert" : undefined}>{desktop.error || (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
       <DesktopStatus view={view} />
       <DesktopRequests requests={view!.requests} busy={locked} act={desktop.act} open={desktop.open} />

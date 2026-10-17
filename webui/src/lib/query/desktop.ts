@@ -2,7 +2,7 @@
  * stay behind this module; presentation never constructs native commands. */
 export {
   actOnDesktopThread, attachDesktopThread, chooseDesktopItem, createDesktopThread,
-  desktopCatalog, openDesktopThread,
+  desktopCatalog, openDesktopThread, desktopDiagnostics,
   bindDesktopAttachments,
   type DesktopAction, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode,
   type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview,

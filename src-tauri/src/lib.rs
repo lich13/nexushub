@@ -16,6 +16,7 @@ pub use services::updates::desktop_update_status_with_state;
 pub fn run() {
     let active_handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
         codex_desktop::attach,
+        codex_desktop::diagnostics,
         codex_desktop::action,
         codex_desktop::detach,
         codex_desktop::open,
