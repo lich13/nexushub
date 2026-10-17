@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.3": [
+        "修复本机 Codex 应用目录、思考强度与提交等待，失败时提供安全诊断",
+        "增加有界连接恢复与 owner 确认，保留桌面执行、原生引用和结果不明不重发。",
+    ],
     "1.3.2": [
         "本机 Codex 协作支持拖入文件与粘贴图片，发送后保留图片供原生历史读取",
         "审批卡按命令和文件整理，补齐协作状态与连接提示，保持原生桌面执行和协议 2。",
@@ -175,6 +179,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.3":
+        sections = {
+            "版本概览": ["本版修复本机 Codex 桌面协作的目录、设置、提交和连接恢复问题；对话与工具仍由原生桌面执行。"],
+            "功能调整": [
+                "连接失败时可复制安全诊断，包含固定错误分类、方法与版本信息，不包含正文、路径或凭据。",
+                "打开或新建线程后等待原生 owner 并自动连接；普通浏览不会启动协作，桌面 owner 改变后须点击连接确认写入。",
+            ],
+            "问题修复": [
+                "应用目录使用无线程请求，同一 helper 完成分页；模型、模式、技能、插件和应用独立读取与重试。",
+                "思考强度以原生模型目录为准，支持目录中的 max 等值；模式失败保留模型结果，设置失败显示原生真实选择。",
+                "按方法设置提交等待期限，等待时继续处理进度；失步和断线有界恢复，丢弃旧连接动作与附件结果。",
+                "区分附件数量、大小、格式、身份和容量错误；成功或重连后清除过期提示，结果不明仍由队列保留。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增诊断和可选连接字段仅用于本机 macOS；Linux、远程、归档及子线程不开放发送。",
+                "保留原生引用、空 text_elements、旧加密队列正文、完整审批绑定及会话审批门控；不确定的 start/steer 结果不自动重发。",
+                "协议仍对照桌面 build 20586，其他 build 只提示未验证；方法版本不匹配时停止操作，不猜测新方法或决策。普通文件继续使用既有兼容编码。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "正式升级先远程 API、后 macOS App；保留配置、凭据、会话、暂停队列与私有附件，不回滚业务数据。",
+                "在原生桌面打开同一主线程，检查目录、模型与 effort、引用和附件、进度、两侧审批以及重启后的 owner 确认。未覆盖的桌面版本和使用场景不宣称已验证。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证正式归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.2":
         sections = {
