@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-正式维护版本仍为 1.3.2，本轮正在准备 1.3.3；基线为 `f74d32a / v1.3.2`。核心实现已完成，尚未生成或安装候选，也未发布正式 1.3.3。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
+当前源码版本为 1.3.3 候选，正式维护版本仍为 1.3.2；基线为 `f74d32a / v1.3.2`。核心实现已完成，收尾已同步版本，候选构建与安装尚待完成，正式 1.3.3 未发布。正式发布状态与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。历史由 Git 和 Release 保留。
 
 ## 当前改动与证据
 
@@ -25,7 +25,7 @@
 
 ## 本机必要检查
 
-下表针对上述提交组成的同一产品/测试源码执行；检查期间仅整理增量提交，没有继续修改被检查源码。版本仍为 1.3.2，收尾再同步 1.3.3。命令入口见 [README 开发](../../README.md#开发)。
+下表针对上述提交组成的同一产品/测试源码执行；检查期间仅整理增量提交，没有继续修改被检查源码。核心阶段版本为 1.3.2，收尾的版本、文档和候选构建检查另行记录。命令入口见 [README 开发](../../README.md#开发)。
 
 | 范围 | 命令与最终结果 |
 |---|---|
