@@ -129,35 +129,37 @@ describe("useDesktopReferenceCatalog", () => {
     });
   });
 
-  test("fetches app and plugin mentions in series and keeps a successful source after a partial failure", async () => {
+  test("starts plugin and app mention reads together and exposes plugin results before apps finish", async () => {
     const apps = deferred<DesktopCatalog>();
     const plugins = deferred<DesktopCatalog>();
-    vi.mocked(desktopCatalog).mockReturnValueOnce(apps.promise).mockReturnValueOnce(plugins.promise);
+    vi.mocked(desktopCatalog).mockImplementation(request => request.kind === "plugins" ? plugins.promise : apps.promise);
 
     render("session-fixture", "mentions", "review");
     await vi.advanceTimersByTimeAsync(250);
-    expect(desktopCatalog).toHaveBeenCalledOnce();
-    expect(desktopCatalog).toHaveBeenNthCalledWith(1, {
-      sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "review", cursor: null
-    });
-
-    apps.reject(new Error("apps fixture unavailable"));
-    await flushMicrotasks();
     expect(desktopCatalog).toHaveBeenCalledTimes(2);
-    expect(desktopCatalog).toHaveBeenNthCalledWith(2, {
+    expect(desktopCatalog).toHaveBeenNthCalledWith(1, {
       sessionId: "session-fixture", projectHandle: null, kind: "plugins", query: "review", cursor: null
     });
-    const partial = render("session-fixture", "mentions", "review");
-    expect(partial.errors).toEqual([{ kind: "apps", message: "apps fixture unavailable" }]);
-    expect(partial.busy).toBe(true);
+    expect(desktopCatalog).toHaveBeenNthCalledWith(2, {
+      sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "review", cursor: null
+    });
+    expect(render("session-fixture", "mentions", "review").loadingKinds).toEqual(["plugins", "apps"]);
 
     const plugin = item("plugin", "review-helper");
     plugins.resolve(catalog([plugin]));
     await flushMicrotasks();
-    const complete = render("session-fixture", "mentions", "review");
-    expect(complete.items).toEqual([plugin]);
-    expect(complete.errors).toEqual([{ kind: "apps", message: "apps fixture unavailable" }]);
-    expect(complete.busy).toBe(false);
+    const whileAppsLoad = render("session-fixture", "mentions", "review");
+    expect(whileAppsLoad.items).toEqual([plugin]);
+    expect(whileAppsLoad.busy).toBe(true);
+    expect(whileAppsLoad.loadingKinds).toEqual(["apps"]);
+    expect(whileAppsLoad.errors).toEqual([]);
+
+    apps.reject(new Error("apps fixture unavailable"));
+    await flushMicrotasks();
+    const partialFailure = render("session-fixture", "mentions", "review");
+    expect(partialFailure.items).toEqual([plugin]);
+    expect(partialFailure.errors).toEqual([{ kind: "apps", message: "apps fixture unavailable" }]);
+    expect(partialFailure.busy).toBe(false);
   });
 
   test("manual retry starts a fresh first-page request and clears the error on success", async () => {
@@ -188,26 +190,63 @@ describe("useDesktopReferenceCatalog", () => {
     expect(retried.errors).toEqual([]);
   });
 
-  test("retry refreshes only the failed source and later searches use the ordinary cache", async () => {
+  test("retry refreshes only the named failed source and later searches use the ordinary cache", async () => {
     const plugin = item("plugin", "ready");
     const app = item("app", "ready");
-    vi.mocked(desktopCatalog).mockRejectedValueOnce(new Error("app fixture failed"))
-      .mockResolvedValueOnce(catalog([plugin])).mockResolvedValueOnce(catalog([app]))
+    vi.mocked(desktopCatalog).mockResolvedValueOnce(catalog([plugin]))
+      .mockRejectedValueOnce(new Error("app fixture failed")).mockResolvedValueOnce(catalog([app]))
       .mockResolvedValue(catalog([]));
     render("session-fixture", "mentions", "ready");
     await vi.advanceTimersByTimeAsync(250);
     await flushMicrotasks();
     const failed = render("session-fixture", "mentions", "ready");
-    failed.retry();
+    expect(failed.items).toEqual([plugin]);
+    expect(failed.errors).toEqual([{ kind: "apps", message: "app fixture failed" }]);
+    failed.retry("apps");
     expect(render("session-fixture", "mentions", "ready").items).toEqual([plugin]);
     await flushMicrotasks();
     expect(desktopCatalog).toHaveBeenCalledTimes(3);
     expect(desktopCatalog).toHaveBeenLastCalledWith({ sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "ready", cursor: null, forceRefetch: true });
-    expect(render("session-fixture", "mentions", "ready").items).toEqual([app, plugin]);
+    expect(render("session-fixture", "mentions", "ready").items).toEqual([plugin, app]);
     render("session-fixture", "mentions", "changed");
     await vi.advanceTimersByTimeAsync(250);
     await flushMicrotasks();
     expect(vi.mocked(desktopCatalog).mock.calls.slice(3).every(([request]) => request.forceRefetch === undefined)).toBe(true);
+  });
+
+  test("can retry a failed plugin source while the app source is still loading", async () => {
+    const apps = deferred<DesktopCatalog>();
+    const plugin = item("plugin", "recovered-plugin");
+    vi.mocked(desktopCatalog)
+      .mockRejectedValueOnce(new Error("plugin fixture failed"))
+      .mockReturnValueOnce(apps.promise)
+      .mockResolvedValueOnce(catalog([plugin]));
+
+    render("session-fixture", "mentions", "recover");
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    const failed = render("session-fixture", "mentions", "recover");
+    expect(desktopCatalog).toHaveBeenCalledTimes(2);
+    expect(failed.errors).toEqual([{ kind: "plugins", message: "plugin fixture failed" }]);
+    expect(failed.loadingKinds).toEqual(["apps"]);
+    expect(failed.busy).toBe(true);
+
+    failed.retry("plugins");
+    expect(desktopCatalog).toHaveBeenNthCalledWith(3, {
+      sessionId: "session-fixture", projectHandle: null, kind: "plugins", query: "recover", cursor: null, forceRefetch: true
+    });
+    const retrying = render("session-fixture", "mentions", "recover");
+    expect(retrying.loadingKinds).toEqual(["plugins", "apps"]);
+    await flushMicrotasks();
+    const pluginRecovered = render("session-fixture", "mentions", "recover");
+    expect(pluginRecovered.items).toEqual([plugin]);
+    expect(pluginRecovered.loadingKinds).toEqual(["apps"]);
+    expect(pluginRecovered.busy).toBe(true);
+
+    const app = item("app", "late-app");
+    apps.resolve(catalog([app]));
+    await flushMicrotasks();
+    expect(render("session-fixture", "mentions", "recover").items).toEqual([plugin, app]);
   });
 
   test("retry after an expired cursor requests the first page again", async () => {
@@ -249,8 +288,8 @@ describe("useDesktopReferenceCatalog", () => {
     const plugins = Array.from({ length: 50 }, (_, index) => item("plugin", `plugin-${index}`));
     const nextPlugins = Array.from({ length: 20 }, (_, index) => item("plugin", `next-plugin-${index}`));
     vi.mocked(desktopCatalog)
-      .mockResolvedValueOnce(catalog(apps))
       .mockResolvedValueOnce(catalog(plugins, "plugin-next-fixture"))
+      .mockResolvedValueOnce(catalog(apps))
       .mockResolvedValueOnce(catalog(nextPlugins));
 
     render("session-fixture", "mentions", "all");
@@ -258,16 +297,16 @@ describe("useDesktopReferenceCatalog", () => {
     await flushMicrotasks();
     const firstWindow = render("session-fixture", "mentions", "all");
     expect(firstWindow.items).toHaveLength(100);
-    expect(firstWindow.items).toEqual(apps);
+    expect(firstWindow.items).toEqual([...plugins, ...apps.slice(0, 50)]);
     expect(firstWindow.hasMore).toBe(true);
 
     firstWindow.more();
-    const localPluginWindow = render("session-fixture", "mentions", "all");
-    expect(localPluginWindow.items).toHaveLength(50);
-    expect(localPluginWindow.items).toEqual(plugins);
+    const localRemainder = render("session-fixture", "mentions", "all");
+    expect(localRemainder.items).toHaveLength(50);
+    expect(localRemainder.items).toEqual(apps.slice(50));
     expect(desktopCatalog).toHaveBeenCalledTimes(2);
 
-    localPluginWindow.more();
+    localRemainder.more();
     await flushMicrotasks();
     const nextCursorWindow = render("session-fixture", "mentions", "all");
     expect(desktopCatalog).toHaveBeenNthCalledWith(3, {
@@ -287,10 +326,10 @@ describe("useDesktopReferenceCatalog", () => {
     const plugins = Array.from({ length: 50 }, (_, index) => item("plugin", `timeout-plugin-${index}`));
     const nextPlugins = Array.from({ length: 20 }, (_, index) => item("plugin", `fresh-plugin-${index}`));
     vi.mocked(desktopCatalog)
-      .mockResolvedValueOnce(catalog(apps, "apps-next-fixture"))
       .mockResolvedValueOnce(catalog(plugins, "plugins-next-fixture"))
-      .mockRejectedValueOnce(new Error("apps page timed out"))
+      .mockResolvedValueOnce(catalog(apps, "apps-next-fixture"))
       .mockResolvedValueOnce(catalog(nextPlugins));
+    vi.mocked(desktopCatalog).mockRejectedValueOnce(new Error("apps page timed out"));
 
     render("session-fixture", "mentions", "timeout");
     await vi.advanceTimersByTimeAsync(250);
@@ -298,26 +337,22 @@ describe("useDesktopReferenceCatalog", () => {
     const firstWindow = render("session-fixture", "mentions", "timeout");
     expect(firstWindow.items).toHaveLength(100);
     firstWindow.more();
-    const pluginWindow = render("session-fixture", "mentions", "timeout");
-    expect(pluginWindow.items).toEqual(plugins);
+    const localWindow = render("session-fixture", "mentions", "timeout");
+    expect(localWindow.items).toEqual(apps.slice(50));
 
-    pluginWindow.more();
+    localWindow.more();
     await flushMicrotasks();
     const afterPaging = render("session-fixture", "mentions", "timeout");
     expect(desktopCatalog).toHaveBeenNthCalledWith(3, {
-      sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "timeout", cursor: "apps-next-fixture"
+      sessionId: "session-fixture", projectHandle: null, kind: "plugins", query: "timeout", cursor: "plugins-next-fixture"
     });
     expect(desktopCatalog).toHaveBeenNthCalledWith(4, {
-      sessionId: "session-fixture", projectHandle: null, kind: "plugins", query: "timeout", cursor: "plugins-next-fixture"
+      sessionId: "session-fixture", projectHandle: null, kind: "apps", query: "timeout", cursor: "apps-next-fixture"
     });
     expect(afterPaging.errors).toEqual([{ kind: "apps", message: "apps page timed out" }]);
     expect(afterPaging.hasMore).toBe(true);
-
-    afterPaging.more();
-    const successfulPluginWindow = render("session-fixture", "mentions", "timeout");
-    expect(successfulPluginWindow.items).toEqual(nextPlugins);
-    expect(successfulPluginWindow.items).toHaveLength(20);
-    expect(successfulPluginWindow.errors).toEqual([{ kind: "apps", message: "apps page timed out" }]);
+    expect(afterPaging.items).toEqual([...nextPlugins, ...apps.slice(0, 80)]);
+    expect(afterPaging.items.slice(0, nextPlugins.length)).toEqual(nextPlugins);
   });
 
   test("a session switch cancels the old debounce timer", async () => {
@@ -337,6 +372,32 @@ describe("useDesktopReferenceCatalog", () => {
     expect(desktopCatalog).toHaveBeenCalledWith({
       sessionId: "session-new", projectHandle: null, kind: "skills", query: "fixture", cursor: null
     });
+  });
+
+  test("a session switch drops a late response from the previous catalog request", async () => {
+    const oldRequest = deferred<DesktopCatalog>();
+    const freshItem = item("skill", "fresh-session-result");
+    vi.mocked(desktopCatalog).mockReturnValueOnce(oldRequest.promise).mockResolvedValueOnce(catalog([freshItem]));
+
+    render("session-old", "skills", "fixture");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(desktopCatalog).toHaveBeenCalledOnce();
+
+    render("session-new", "skills", "fixture");
+    oldRequest.resolve(catalog([item("skill", "stale-session-result")]));
+    await flushMicrotasks();
+    const whileFreshDebounces = render("session-new", "skills", "fixture");
+    expect(whileFreshDebounces.items).toEqual([]);
+    expect(whileFreshDebounces.busy).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    const fresh = render("session-new", "skills", "fixture");
+    expect(desktopCatalog).toHaveBeenCalledTimes(2);
+    expect(desktopCatalog).toHaveBeenLastCalledWith({
+      sessionId: "session-new", projectHandle: null, kind: "skills", query: "fixture", cursor: null
+    });
+    expect(fresh.items).toEqual([freshItem]);
   });
 
   test("a query switch drops a late response from the previous request", async () => {
