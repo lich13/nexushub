@@ -36,12 +36,24 @@ const MAX_WORKERS: usize = 4;
 
 #[tauri::command(rename = "codex.desktop.diagnostics")]
 pub async fn diagnostics(
+    window: tauri::WebviewWindow,
     remote: State<'_, RemoteConnections>,
     request: DesktopDiagnosticsRequest,
 ) -> Result<DesktopDiagnostics, String> {
+    let _guard = if request.copy == Some(true) {
+        Some(remote.begin_local_write(request.revision)?)
+    } else {
+        None
+    };
     remote.require_local(request.revision)?;
     let result = diagnostics::metadata().await;
     remote.require_local(request.revision)?;
+    if request.copy == Some(true) {
+        if window.label() != "main" || !window.is_focused().unwrap_or(false) {
+            return Err("请在 NexusHub 中重试复制诊断".into());
+        }
+        clipboard::copy_diagnostics(&result).map_err(str::to_owned)?;
+    }
     Ok(result)
 }
 
