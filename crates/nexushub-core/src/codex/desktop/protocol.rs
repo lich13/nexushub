@@ -1,5 +1,6 @@
-//! Read-only source comparison: native desktop build 20586. This is a fixed
-//! allowlist, not negotiation. Unknown versions fail closed; never probe a new
+//! Read-only source comparison: builds 20586 and 20770 share this method table.
+//! Build numbers are diagnostic metadata, not compatibility gates. This fixed
+//! allowlist is not negotiation. Unknown protocol versions fail closed; never probe a new
 //! mutation or fall back to an independent turn executor.
 pub(super) const STREAM_VERSION: u64 = 11;
 pub(super) const QUEUE_VERSION: u64 = 2;
@@ -27,7 +28,7 @@ pub(super) fn response_error(native: Option<&str>) -> super::DesktopError {
             | "unsupported-version"
             | "method-not-found",
         ) => UnsupportedProtocol,
-        Some("timeout") => Timeout,
+        Some("timeout" | "request-timeout") => Timeout,
         Some("ipc-connection-reset" | "client-disconnected" | "server-closed") => Disconnected,
         _ => Rejected,
     }
