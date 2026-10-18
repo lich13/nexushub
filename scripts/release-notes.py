@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.4": [
+        "按实际协议判断桌面兼容性，移除无意义的 build 提示，修复附件仅元数据变化时被误拒",
+        "支持 Finder 文件、完整路径文本和 PNG/TIFF/JPEG 粘贴，保留文件安全校验与原生桌面执行。",
+    ],
     "1.3.3": [
         "修复本机 Codex 应用目录、思考强度与提交等待，失败时提供安全诊断",
         "整理协作输入区，修复引用和附件提示，同步只读原生目标，保留桌面执行与结果不明不重发。",
@@ -179,6 +183,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.4":
+        sections = {
+            "版本概览": ["本版修复本机 Codex 协作的兼容提示、附件身份误判与剪贴板输入，对话和工具仍由原生桌面执行。"],
+            "功能调整": [
+                "从 Finder 复制文件或粘贴完整路径可自动添加附件，支持多文件、中文、空格与成对引号；整段无法识别为有效文件时保留文字。",
+                "补齐 JPEG 和 WebKit 缺少图片 MIME 时的原生粘贴入口；Finder 文件优先于预览缩略图。",
+            ],
+            "问题修复": [
+                "移除按 build 号显示的常驻警告，连接与发送按实际协议和 owner 校验；补齐原生超时分类。",
+                "新选择的小文件仅 ctime 变化时以内容摘要再次核验，避免扩展属性变化被误判；内容改写、文件替换、权限和符号链接变化仍拒绝。",
+                "修复恢复焦点与关闭选择器后的附件绑定竞争，去除重复导入并丢弃旧线程结果；失败保留草稿，重新选择或移除附件后清除对应操作错误。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，复用现有本机附件命令并增加可选粘贴结果；客户端不能提交原生路径或图片字节，Linux 与远程不开放发送。",
+                "旧引用和大文件仍严格核验；加密身份新增可选摘要，不迁移或改写旧队列。Keychain、私有附件与结果不明不重发保持。",
+                "现用方法已对照桌面 build 20586 与 20770；build 号不作为发送限制，未来破坏性协议升级仍可能需要适配。普通文件保持已有原生兼容编码。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "正式升级先远程 API、后 macOS App；保留配置、凭据、会话、暂停队列与私有附件，不回滚业务数据。",
+                "在原生桌面打开同一主线程并连接，分别通过加号、Finder 复制、路径文本和截图粘贴发送附件；检查普通文本编辑及窗口切换后立即粘贴。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证正式归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.3":
         sections = {
