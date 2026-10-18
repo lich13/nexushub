@@ -57,6 +57,8 @@
 
 修复前 `ee57644` 的 CI 39104232687 首次 Frontend/Backend 通过，macOS WebKit 性能切换 p95 为 116ms，超过 100ms；同提交仅重跑 macOS 后三项均通过，WebKit 83ms、Chromium 53ms。该结果不代表本次原生修复已完成全量 CI，新提交仍使用既有 workflow。
 
+修复提交 `d37d9ef` 已推送 `main`。本次三项 CI run `39110412690` 全部成功：Backend `117625157756`、macOS Tauri `117625157842`、Frontend `117625157967`。候选由该提交的 Tauri 原生 App 构建，主程序 SHA-256 为 `8d0310ee01acb7715341c3de0912a7d45b7466ae54cd1433928ae8b277b26778`，helper 沿用 `898ee4f7b12a8a2e55187cb2632c6bbc1ec48abbbb3be06219fe7177350f1cc7`；1.3.4、`com.lich13.nexushub`、arm64、深度签名检查和 payload 隐私检查（529 项、零发现）均通过。旧候选已精确替换并启动，PID 与安装路径身份匹配且连续存活；没有操作真实剪贴板或发送回合。正式 1.3.3 回退 App 保留，用户验收重新等待纯图片粘贴结果。
+
 前提：在 Codex 原生桌面打开同一本机主线程，再在候选 NexusHub 中连接。远程、归档和子线程继续只读。
 
 | 项目 | 操作与预期 | 本轮结果 |
