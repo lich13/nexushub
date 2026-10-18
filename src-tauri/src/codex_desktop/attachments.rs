@@ -123,7 +123,7 @@ pub(super) async fn handle(
     remote: &RemoteConnections,
     bridge: &CodexDesktopBridge,
     request: DesktopAttachmentRequest,
-    channel: Channel<DesktopAttachmentEvent>,
+    channel: JavaScriptChannelId,
 ) -> Result<DesktopAttachmentResult, String> {
     if window.label() != "main" {
         return Err("附件仅可从主窗口添加".into());
@@ -157,6 +157,11 @@ pub(super) async fn handle(
         if !valid_bounds(&bounds) {
             return Err("附件接收区域无效".into());
         }
+        // Repeated commands carry the same JS callback ID. Deserializing each
+        // one as Channel would create a new owner whose Drop sends `end` and
+        // closes the live receiver during its first bounds update. Only Bind
+        // owns a channel; other actions keep using the stored receiver.
+        let channel = channel.channel_on(window.as_ref().clone());
         let receiver = Receiver {
             id: nexushub_core::security::hash_token(&SecretBox::random_key_material()),
             revision: request.revision,
