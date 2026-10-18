@@ -39,7 +39,13 @@
 
 收尾检查：`check-versions.py`、`check-workspaces.py`、两套 workspace 的 `cargo metadata --locked --no-deps`、`check-wire-types.mjs` 均退出 0；版本、workspace、Tauri 构建配置与 wire 工具测试分别为 8、7、2、8 项通过。`test-install-script.sh` 初次因 1.3.4 尚未登记中文六节说明而退出 1，补齐发布元数据后复验退出 0，其中安装安全 13 项、Minisign 验证 9 项通过。随后隐私扫描检查 3,151 项、零发现，`git diff --check` 退出 0。未因版本同步重复核心阶段已通过的功能测试，也未把这些检查记作完整回归。
 
-候选沿用原 bundle 身份、生产参数及增量缓存；保持 updater 配置，但不生成或发布正式签名归档。对应源码提交、候选哈希、签名及启动结果完成后在此补记。
+候选由 `0466d15` 构建，沿用原 bundle 身份、生产参数及增量缓存；保持 updater 配置，但不生成或发布正式签名归档。helper 的 `cargo build --release --package nexushub-webd --locked` 与 Tauri 的 app-only `build --bundles app -- --locked` 均退出 0，复用核心阶段的有效 WebUI 生产产物。App 版本 1.3.4、标识 `com.lich13.nexushub`、架构 arm64；`codesign --verify --deep --strict` 退出 0。这是本机 ad-hoc 候选签名，不能代替正式更新归档的 Minisign 验证。
+
+候选主程序 SHA-256 为 `f94055ada004a1e673fe42b0b1107b12bcda80bf5a1c2b434cabffd3bb07419a`，内置 helper 为 `898ee4f7b12a8a2e55187cb2632c6bbc1ec48abbbb3be06219fe7177350f1cc7`；构建包隐私检查 529 项、零发现、退出 0。同卷原子交换已完成，安装后的版本、架构、主程序/helper 哈希及签名完整性与候选一致。
+
+启动命令退出 0，首次进程检查未在检查窗口内捕获 App 而退出 1；未再次启动或回滚。随后只读核对已运行 App 的可执行文件身份、版本及连续存活，退出 0，确认候选已启动。没有把启动检查当作真实剪贴板、发送或视觉验收。
+
+唯一 App 回退材料为 `dist/candidates/1.3.4/rollback/NexusHub.app`，保留安装前正式 1.3.3，其主程序 SHA-256 为 `4fb2fb4b50ff27c97d7c70f902518524d92e1d62c14fb5492464e7b20e5ceac7`，签名完整性通过。旧候选回退和交换暂存已精确清理，移除文件的逻辑大小为 79,798,810 字节、分配大小为 79,822,848 字节；未把这两个数值当作磁盘净空闲增量。正式发布资产、依赖与构建缓存、业务数据均保留。资源占位已恢复，临时构建配置和目录已清理，无运行中的构建任务。本记录后的完整 CI 结果以对应提交的三项检查为准，用户验收仍待完成。
 
 ## 候选与待用户验收
 
