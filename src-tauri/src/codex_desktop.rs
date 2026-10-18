@@ -453,9 +453,9 @@ pub async fn action(
         let mut store = attachments.lock().map_err(|_| "无法核对粘贴附件")?;
         let references = references
             .into_iter()
-            .map(|reference| reference.capture())
+            .map(|reference| reference.capture_detailed())
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "所选引用已变化，请重新选择")?;
+            .map_err(|(_, message)| message)?;
         store.retain_before_send(&references)?;
         Ok::<_, &'static str>(references)
     })

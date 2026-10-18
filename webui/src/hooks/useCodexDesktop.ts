@@ -10,6 +10,7 @@ export function useCodexDesktop(threadId: string) {
   const cache = useThreadCacheActions();
   const [view, setView] = useState<DesktopView | null>(null);
   const [error, setError] = useState("");
+  const actionError = useRef(false);
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [visible, setVisible] = useState(() => !document.hidden);
@@ -30,7 +31,7 @@ export function useCodexDesktop(threadId: string) {
     const generation = ++lifetime.current;
     const switched = previousThread.current !== threadId;
     if (switched) { previousThread.current = threadId; setAttempt(0); }
-    current.current = null; setView(null); setError(""); setBusy(false);
+    current.current = null; setView(null); setError(""); actionError.current = false; setBusy(false);
     if (switched || !attempt || connection.target !== "local" || !visible) return;
     let disposed = false;
     let detach: (() => Promise<void>) | undefined;
@@ -78,7 +79,7 @@ export function useCodexDesktop(threadId: string) {
     void attachDesktopThread(threadId, receive, confirm).then(async attached => {
       if (!valid()) { await attached.detach(); return; }
       detach = attached.detach; receive(attached.initial);
-    }).catch(reason => { if (valid()) setError(reason instanceof Error ? reason.message : "无法连接 Codex 桌面"); })
+    }).catch(reason => { if (valid()) { actionError.current = false; setError(reason instanceof Error ? reason.message : "无法连接 Codex 桌面"); } })
       .finally(() => { if (valid()) setBusy(false); });
     return () => { unregister(); void cleanup(); };
   }, [threadId, connection.revision, connection.target, attempt, visible, cache]);
@@ -92,7 +93,7 @@ export function useCodexDesktop(threadId: string) {
     if (!captured?.connected || !captured.writable) throw new Error("请先连接 Codex 桌面");
     const generation = lifetime.current;
     const sequence = events.current;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); actionError.current = false;
     try {
       const result = await actOnDesktopThread(captured.sessionId, action);
       if (generation !== lifetime.current || current.current?.sessionId !== captured.sessionId) throw new Error("所选线程已变化，旧操作结果已丢弃");
@@ -104,13 +105,15 @@ export function useCodexDesktop(threadId: string) {
       refreshThread.current?.();
       void cache.invalidateThreads();
     } catch (reason) {
-      if (generation === lifetime.current && current.current?.sessionId === captured.sessionId) setError(reason instanceof Error ? reason.message : "操作失败");
+      if (generation === lifetime.current && current.current?.sessionId === captured.sessionId) {
+        actionError.current = true; setError(reason instanceof Error ? reason.message : "操作失败");
+      }
       throw reason;
     } finally { if (generation === lifetime.current && current.current?.sessionId === captured.sessionId) setBusy(false); }
   }, [cache, threadId]);
 
   const open = useCallback(async () => {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); actionError.current = false;
     const generation = lifetime.current;
     try {
       await openDesktopThread(threadId);
@@ -120,5 +123,10 @@ export function useCodexDesktop(threadId: string) {
     finally { if (generation === lifetime.current) setBusy(false); }
   }, [threadId]);
 
-  return { view, error: error || view?.error || "", busy, act, open, connect: () => { confirmOwner.current = true; setAttempt(value => value + 1); } };
+  const clearActionError = useCallback(() => {
+    // Editing a reference only dismisses the last action's local feedback.
+    // Native view errors and unknown queue entries remain authoritative.
+    if (actionError.current) { actionError.current = false; setError(""); }
+  }, []);
+  return { view, error: error || view?.error || "", busy, act, open, clearActionError, connect: () => { confirmOwner.current = true; setAttempt(value => value + 1); } };
 }

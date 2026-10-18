@@ -166,6 +166,7 @@ fn imports_use_private_random_names_and_keep_the_existing_file_reference_shape()
             BTreeSet::from([
                 "changed".to_owned(),
                 "changed_ns".to_owned(),
+                "content_proof".to_owned(),
                 "device".to_owned(),
                 "inode".to_owned(),
                 "modified".to_owned(),

@@ -136,7 +136,9 @@ beforeEach(() => {
   hooks.desktop = {
     view: view(), busy: false, error: "",
     act: vi.fn(async () => undefined),
-    open: vi.fn(async () => undefined), connect: vi.fn()
+    open: vi.fn(async () => undefined), connect: vi.fn(), clearActionError: vi.fn(() => {
+      hooks.desktop.error = "";
+    })
   };
   hooks.catalog = {
     items: [
@@ -243,6 +245,75 @@ describe("desktop composer reference interactions", () => {
       expect(required(tree, element => element.type === "button" && element.props.children === label).props.disabled).toBe(true);
     }
     expect(elements(tree).some(element => element.type === "textarea")).toBe(false);
+  });
+
+  test("keeps a failed draft and clears its action error when a reference is selected", async () => {
+    hooks.desktop.view = view({ queue: [
+      { id: "unknown-fixture", kind: "queue", status: "outcome_unknown", preview: "unknown fixture" }
+    ] });
+    hooks.desktop.act = vi.fn(async () => {
+      hooks.desktop.error = "fixture action failure";
+      throw new Error("fixture action failure");
+    });
+    hooks.catalog.items = [{
+      handle: "skill-alpha-fixture", kind: "skill", name: "alpha", description: "",
+      reasoningEfforts: [], defaultReasoningEffort: null
+    }];
+
+    let tree = render();
+    textarea(tree).props.onChange({ target: { value: "fixture request", selectionStart: 15, selectionEnd: 15 } });
+    tree = render();
+    required(tree, element => element.type === "form").props.onSubmit({ preventDefault: vi.fn() });
+    await flushMicrotasks();
+    tree = render();
+
+    expect(textarea(tree).props.value).toBe("fixture request");
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children).includes("fixture action failure"))).toBe(true);
+    expect(required(tree, element => element.type === "small" && element.props.children === "结果待核对")).toBeTruthy();
+
+    tree = typeText("$a");
+    textarea(tree).props.onKeyDown(keyEvent("ArrowDown"));
+    tree = render();
+    textarea(tree).props.onKeyDown(keyEvent("Enter"));
+    tree = render();
+
+    expect(hooks.desktop.clearActionError).toHaveBeenCalledOnce();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children).includes("fixture action failure"))).toBe(false);
+    expect(required(tree, element => element.type === "small" && element.props.children === "结果待核对")).toBeTruthy();
+  });
+
+  test("keeps a failed draft and clears its action error when an attachment is removed", async () => {
+    hooks.desktop.view = view({ queue: [
+      { id: "unknown-fixture", kind: "queue", status: "outcome_unknown", preview: "unknown fixture" }
+    ] });
+    hooks.desktop.act = vi.fn(async () => {
+      hooks.desktop.error = "fixture action failure";
+      throw new Error("fixture action failure");
+    });
+
+    render();
+    const item = attachmentItem(0);
+    receiveAttachments([item]);
+    render();
+    hooks.desktop.clearActionError.mockClear();
+
+    let tree = render();
+    textarea(tree).props.onChange({ target: { value: "fixture request", selectionStart: 15, selectionEnd: 15 } });
+    tree = render();
+    required(tree, element => element.type === "form").props.onSubmit({ preventDefault: vi.fn() });
+    await flushMicrotasks();
+    tree = render();
+    expect(textarea(tree).props.value).toBe("fixture request");
+    expect(required(tree, element => element.type === "button" && element.props["aria-label"] === `移除 ${item.name}`)).toBeTruthy();
+    expect(required(tree, element => element.type === "small" && element.props.children === "结果待核对")).toBeTruthy();
+
+    required(tree, element => element.type === "button" && element.props["aria-label"] === `移除 ${item.name}`).props.onClick();
+    tree = render();
+
+    expect(hooks.desktop.clearActionError).toHaveBeenCalledOnce();
+    expect(elements(tree).some(element => element.props.role === "alert" && renderedText(element.props.children).includes("fixture action failure"))).toBe(false);
+    expect(elements(tree).some(element => element.props.className === "desktop-reference-chips")).toBe(false);
+    expect(required(tree, element => element.type === "small" && element.props.children === "结果待核对")).toBeTruthy();
   });
 
   test.each([
