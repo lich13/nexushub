@@ -792,6 +792,29 @@ async fn request_timeout_ms_matches_start_steer_and_default_waits() {
     }
 }
 
+#[tokio::test]
+async fn request_timeout_is_classified_as_timeout_and_is_not_retried() {
+    let (mut session, mut broker) = session_pair_with_state(idle_state());
+    let broker_task = tokio::spawn(async move {
+        let mutation =
+            verified_mutation(&mut broker, "thread-follower-update-thread-settings").await;
+        send_native_error(&mut broker, &mutation, "request-timeout").await;
+        let closed = timeout(Duration::from_secs(2), read_frame(&mut broker))
+            .await
+            .expect("request-timeout closes the session without a retry")
+            .expect_err("request-timeout does not send a second mutation");
+        assert_eq!(closed, DesktopError::Disconnected);
+    });
+
+    let result = session.execute(&settings_command()).await;
+    assert!(matches!(result, Err(DesktopError::Timeout)));
+    assert!(
+        !session.is_connected(),
+        "request-timeout closes the connection"
+    );
+    broker_task.await.expect("fixture broker assertions pass");
+}
+
 #[tokio::test(start_paused = true)]
 async fn start_succeeds_after_fifteen_virtual_seconds_within_owner_deadline() {
     let (mut session, mut broker) = session_pair();

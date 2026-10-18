@@ -134,7 +134,6 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   };
   const locked = busy || choosing;
   return <section className="desktop-composer" aria-label="与 Codex 协作">
-    {view?.desktopBuild && view.desktopBuild !== "20586" && <p className="muted-text">此 Codex 桌面 build 尚未验证；当前实现对照 build 20586。</p>}
     <div className="desktop-composer-heading">
       <DesktopStatus view={view} />
       <span className="desktop-composer-spacer" />

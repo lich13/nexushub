@@ -224,6 +224,14 @@ describe("desktop composer reference interactions", () => {
     expect(required(tree, element => element.type === "button" && element.props.children === "连接")).toBeTruthy();
   });
 
+  test.each(["20586", "20770", "fixture-build"]) ("uses the desktop protocol without a build warning for build %s", desktopBuild => {
+    hooks.desktop.view = view({ desktopBuild });
+    const tree = render();
+
+    expect(elements(tree).some(element => renderedText(element.props.children).includes("尚未验证"))).toBe(false);
+    expect(elements(tree).some(element => renderedText(element.props.children).includes("对照 build 20586"))).toBe(false);
+  });
+
   test("keeps unknown and paused queue entries visible without authorizing a new owner", () => {
     hooks.desktop.view = view({ writable: false, connectionPhase: "owner_confirmation_required", queue: [
       { id: "unknown-fixture", kind: "queue", status: "outcome_unknown", preview: "unknown fixture" },
