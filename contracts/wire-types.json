@@ -148,6 +148,10 @@
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopMode",
       "ts": "webui/src/lib/api/desktop.ts#DesktopMode"
     },
+    "DesktopPasteDisposition": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPasteDisposition",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopPasteDisposition"
+    },
     "DesktopPendingRequest": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPendingRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopPendingRequest"
@@ -5410,6 +5414,13 @@
             "name": "binding_id",
             "serde": [],
             "type": "String"
+          },
+          {
+            "name": "paste_disposition",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < DesktopPasteDisposition >"
           }
         ],
         "kind": "struct",
@@ -5759,6 +5770,29 @@
           {
             "fields": [],
             "name": "Plan",
+            "serde": []
+          }
+        ]
+      },
+      "DesktopPasteDisposition": {
+        "kind": "enum",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ],
+        "variants": [
+          {
+            "fields": [],
+            "name": "Attachments",
+            "serde": []
+          },
+          {
+            "fields": [],
+            "name": "Text",
+            "serde": []
+          },
+          {
+            "fields": [],
+            "name": "Unsupported",
             "serde": []
           }
         ]
@@ -9954,9 +9988,15 @@
     "src-tauri/src/codex_desktop/clipboard.rs": {
       "json": [],
       "signatures": [
+        "fn capture () -> Result < PasteCapture , & 'static str >",
+        "fn unchanged (change_count : isize) -> bool",
+        "fn read_paste (board : & NSPasteboard , home_dir : Option < & Path >) -> Result < PasteCapture , & 'static str >",
+        "fn read_content (board : & NSPasteboard , home_dir : Option < & Path > ,) -> Result < PasteContent , & 'static str >",
+        "fn local_file_url (value : & str) -> Option < PathBuf >",
+        "fn text_paths (text : & str , home_dir : Option < & Path >) -> Option < Vec < PathBuf > >",
+        "fn selected_files (paths : Vec < PathBuf >) -> Result < Vec < NativeReference > , & 'static str >",
         "fn copy_diagnostics (diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
         "fn write_diagnostics (pasteboard : & NSPasteboard , diagnostics : & nexushub_core :: services :: codex_desktop :: DesktopDiagnostics ,) -> Result < () , & 'static str >",
-        "fn paste_png () -> Result < Vec < u8 > , & 'static str >",
         "fn read_png (pasteboard : & NSPasteboard) -> Result < Vec < u8 > , & 'static str >",
         "fn read_png_using (pasteboard : & NSPasteboard , convert : impl FnOnce (& [u8] , bool) -> Result < Vec < u8 > , & 'static str > ,) -> Result < Vec < u8 > , & 'static str >",
         "fn normalize (bytes : & [u8] , png : bool) -> Result < Vec < u8 > , & 'static str >",
@@ -10258,7 +10298,7 @@
         "DesktopAttachmentBounds": "exporttypeDesktopAttachmentBounds={x:number;y:number;width:number;height:number};",
         "DesktopAttachmentEvent": "exporttypeDesktopAttachmentEvent={bindingId:string;items:DesktopChosenItem[];error:string|null};",
         "DesktopAttachmentRequest": "exporttypeDesktopAttachmentRequest=DesktopSessionRequest&{action:DesktopAttachmentAction};",
-        "DesktopAttachmentResult": "exporttypeDesktopAttachmentResult={bindingId:string};",
+        "DesktopAttachmentResult": "exporttypeDesktopAttachmentResult={bindingId:string;pasteDisposition?:DesktopPasteDisposition|null};",
         "DesktopCatalog": "exporttypeDesktopCatalog={items:DesktopCatalogItem[];nextCursor:string|null};",
         "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
         "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={forceRefetch?:boolean;revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
@@ -10273,6 +10313,7 @@
         "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
         "DesktopGoal": "exporttypeDesktopGoal={objective:string;status:string;truncated:boolean};",
         "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
+        "DesktopPasteDisposition": "exporttypeDesktopPasteDisposition=\"attachments\"|\"text\"|\"unsupported\";",
         "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",
         "DesktopPermissionsReview": "exporttypeDesktopPermissionsReview={network:string|null;fileSystem:string|null};",
         "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",

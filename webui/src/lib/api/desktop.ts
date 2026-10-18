@@ -48,7 +48,8 @@ export type DesktopAttachmentAction =
   | { type: "unbind"; bindingId: string };
 export type DesktopAttachmentRequest = DesktopSessionRequest & { action: DesktopAttachmentAction };
 export type DesktopAttachmentEvent = { bindingId: string; items: DesktopChosenItem[]; error: string | null };
-export type DesktopAttachmentResult = { bindingId: string };
+export type DesktopPasteDisposition = "attachments" | "text" | "unsupported";
+export type DesktopAttachmentResult = { bindingId: string; pasteDisposition?: DesktopPasteDisposition | null };
 export type DesktopCreateRequest = { revision: number; projectHandle: string };
 export type DesktopCreatedThread = { threadId: string };
 export type DesktopAck = { ok: boolean };

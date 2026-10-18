@@ -351,6 +351,16 @@ pub struct DesktopAttachmentEvent {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopAttachmentResult {
     pub binding_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_disposition: Option<DesktopPasteDisposition>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopPasteDisposition {
+    Attachments,
+    Text,
+    Unsupported,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

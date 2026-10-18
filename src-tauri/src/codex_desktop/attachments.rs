@@ -13,6 +13,7 @@ pub(super) struct Receiver {
     thread: String,
     bounds: DesktopAttachmentBounds,
     handles: Vec<String>,
+    last_paste: Option<isize>,
     channel: Channel<DesktopAttachmentEvent>,
 }
 impl Receiver {
@@ -131,6 +132,7 @@ pub(super) async fn handle(
         unbind(bridge, binding_id).await;
         return Ok(DesktopAttachmentResult {
             binding_id: binding_id.clone(),
+            paste_disposition: None,
         });
     }
     let _guard = remote.begin_local_write(request.revision)?;
@@ -163,6 +165,7 @@ pub(super) async fn handle(
             thread: view.thread_id,
             bounds,
             handles,
+            last_paste: None,
             channel,
         };
         references(bridge, &receiver, &receiver.handles).await?;
@@ -170,7 +173,10 @@ pub(super) async fn handle(
         runtime.worker(&request.session_id).await?;
         let id = receiver.id.clone();
         *bridge.receiver.lock().await = Some(receiver);
-        return Ok(DesktopAttachmentResult { binding_id: id });
+        return Ok(DesktopAttachmentResult {
+            binding_id: id,
+            paste_disposition: None,
+        });
     }
     let receiver = bridge
         .receiver
@@ -192,6 +198,7 @@ pub(super) async fn handle(
         return Err("附件接收区已变化".into());
     }
     context(&window, bridge, remote, &runtime, &receiver).await?;
+    let mut paste_disposition = None;
     match request.action {
         DesktopAttachmentAction::Bounds {
             bounds, handles, ..
@@ -205,25 +212,66 @@ pub(super) async fn handle(
                 .as_mut()
                 .filter(|current| current.id == receiver.id)
                 .ok_or("附件接收区已变化")?;
+            if current
+                .handles
+                .iter()
+                .any(|handle| !handles.contains(handle))
+            {
+                current.last_paste = None;
+            }
             current.bounds = bounds;
             current.handles = handles;
         }
         DesktopAttachmentAction::Paste { .. } => {
             let _serial = bridge.importing.lock().await;
             context(&window, bridge, remote, &runtime, &receiver).await?;
-            if receiver.handles.len() >= 32 {
-                return Err("引用数量超出限制".into());
+            let last = bridge
+                .receiver
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|current| current.last_paste);
+            if last.is_some_and(super::clipboard::unchanged) {
+                return Ok(DesktopAttachmentResult {
+                    binding_id: receiver.id,
+                    paste_disposition: Some(DesktopPasteDisposition::Attachments),
+                });
             }
             let store = runtime.attachments.clone();
-            let reference = nexushub_core::read_tasks::spawn_blocking(move || {
-                let png = super::clipboard::paste_png()?;
-                store
-                    .lock()
-                    .map_err(|_| "无法保存粘贴图片")?
-                    .import_png(&png, chrono::Utc::now().timestamp().max(0) as u64)
-            })
-            .await
-            .map_err(|_| "无法读取剪贴板图片")??;
+            let (count, disposition, values) =
+                nexushub_core::read_tasks::spawn_blocking(move || {
+                    let capture = super::clipboard::capture()?;
+                    use super::clipboard::PasteContent;
+                    let (disposition, values) = match capture.content {
+                        PasteContent::Files(files) => (DesktopPasteDisposition::Attachments, files),
+                        PasteContent::Image(png) => {
+                            let file = store
+                                .lock()
+                                .map_err(|_| "无法保存粘贴图片")?
+                                .import_png(&png, chrono::Utc::now().timestamp().max(0) as u64)?;
+                            (DesktopPasteDisposition::Attachments, vec![file])
+                        }
+                        PasteContent::Text => (DesktopPasteDisposition::Text, Vec::new()),
+                        PasteContent::Unsupported => {
+                            (DesktopPasteDisposition::Unsupported, Vec::new())
+                        }
+                    };
+                    Ok::<_, &'static str>((capture.change_count, disposition, values))
+                })
+                .await
+                .map_err(|_| "无法读取剪贴板附件")??;
+            paste_disposition = Some(disposition);
+            if !super::clipboard::unchanged(count) {
+                let _ = release(&runtime, values).await;
+                return Err("剪贴板已变化，请重新粘贴".into());
+            }
+            if values.is_empty() {
+                context(&window, bridge, remote, &runtime, &receiver).await?;
+                return Ok(DesktopAttachmentResult {
+                    binding_id: receiver.id,
+                    paste_disposition,
+                });
+            }
             if let Err(error) = deliver(
                 &window,
                 state,
@@ -231,12 +279,21 @@ pub(super) async fn handle(
                 bridge,
                 &runtime,
                 &receiver,
-                vec![reference.clone()],
+                values.clone(),
             )
             .await
             {
-                let _ = release(&runtime, vec![reference]).await;
+                let _ = release(&runtime, values).await;
                 return Err(error);
+            }
+            if let Some(current) = bridge
+                .receiver
+                .lock()
+                .await
+                .as_mut()
+                .filter(|current| current.id == receiver.id)
+            {
+                current.last_paste = Some(count);
             }
         }
         DesktopAttachmentAction::Release { handles, .. } => {
@@ -256,12 +313,14 @@ pub(super) async fn handle(
                 .filter(|current| current.id == receiver.id)
             {
                 current.handles.retain(|handle| !handles.contains(handle));
+                current.last_paste = None;
             }
         }
         _ => unreachable!(),
     }
     Ok(DesktopAttachmentResult {
         binding_id: receiver.id,
+        paste_disposition,
     })
 }
 
@@ -284,10 +343,27 @@ async fn deliver(
         .ok_or("附件接收区已变化")?;
     // Validate the entire batch before issuing a single grant. Never silently
     // truncate a drop or admit only the valid prefix of an invalid batch.
+    let mut grants = bridge.grants.lock().await;
+    let existing = current
+        .handles
+        .iter()
+        .filter_map(|handle| {
+            match grants
+                .resolve(receiver.revision, Some(&receiver.thread), handle)
+                .ok()?
+            {
+                GrantValue::Reference(reference) => Some(reference),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    let values = values
+        .into_iter()
+        .filter(|value| !existing.iter().any(|old| old.same_selected_file(value)))
+        .collect::<Vec<_>>();
     if current.handles.len() + values.len() > 32 {
         return Err("引用数量超出限制，本次附件未添加".into());
     }
-    let mut grants = bridge.grants.lock().await;
     let items = values
         .into_iter()
         .map(|reference| {
@@ -324,11 +400,7 @@ fn capture_drop(paths: Vec<PathBuf>, remaining: usize) -> Result<Vec<NativeRefer
     if paths.is_empty() || paths.len() > remaining.min(32) {
         return Err("引用数量超出限制，本次附件未添加".into());
     }
-    paths
-        .into_iter()
-        .map(NativeReference::selected_file_detailed)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|(_, message)| message.into())
+    super::clipboard::selected_files(paths).map_err(str::to_owned)
 }
 
 pub(super) fn drop_files(
