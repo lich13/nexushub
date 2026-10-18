@@ -97,7 +97,7 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 
 ## 发布资产
 
-当前源码版本为 1.3.3 候选，正式发布须完成本轮真机验收；[查看正式发布](https://github.com/lich13/nexushub/releases)。正式发布页包含八项资产：
+当前源码版本为 1.3.3；[查看正式发布](https://github.com/lich13/nexushub/releases)。正式发布页包含八项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；
