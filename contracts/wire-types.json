@@ -1231,6 +1231,34 @@
       }
     },
     "crates/nexushub-core/src/codex/desktop/references.rs": {
+      "FileContentProof": {
+        "fields": [
+          {
+            "name": "sha256",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "uid",
+            "serde": [],
+            "type": "u32"
+          },
+          {
+            "name": "gid",
+            "serde": [],
+            "type": "u32"
+          },
+          {
+            "name": "mode",
+            "serde": [],
+            "type": "u32"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (deny_unknown_fields)"
+        ]
+      },
       "FileIdentity": {
         "fields": [
           {
@@ -1267,6 +1295,13 @@
             "name": "changed_ns",
             "serde": [],
             "type": "i64"
+          },
+          {
+            "name": "content_proof",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < FileContentProof >"
           }
         ],
         "kind": "struct",

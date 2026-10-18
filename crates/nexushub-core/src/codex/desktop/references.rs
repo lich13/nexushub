@@ -3,9 +3,10 @@
 use super::{DesktopError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::{
-    io::Read,
+    io::{Read, Seek},
     path::{Path, PathBuf},
 };
 
@@ -50,7 +51,25 @@ pub struct FileIdentity {
     modified_ns: i64,
     changed: i64,
     changed_ns: i64,
+    // Nested in the existing identity: old readers ignore this optional field,
+    // and old queue entries serialize exactly as before. Only native file
+    // selection may establish a proof; validation never blesses new content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_proof: Option<FileContentProof>,
 }
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FileContentProof {
+    sha256: String,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+}
+
+type ReferenceResult<T> = std::result::Result<T, (DesktopError, &'static str)>;
+const UNREADABLE: &str = "无法读取所选文件，请重新选择";
+const CHANGED: &str = "所选文件内容或身份已变化，请重新选择";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -81,9 +100,7 @@ impl NativeReference {
         Self::selected_file_detailed(path).map_err(|(error, _)| error)
     }
 
-    pub fn selected_file_detailed(
-        path: PathBuf,
-    ) -> std::result::Result<Self, (DesktopError, &'static str)> {
+    pub fn selected_file_detailed(path: PathBuf) -> ReferenceResult<Self> {
         let path = path
             .canonicalize()
             .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?;
@@ -98,12 +115,11 @@ impl NativeReference {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&path)
             .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?;
-        let identity = FileIdentity::read(
-            &file
-                .metadata()
-                .map_err(|_| (DesktopError::InvalidInput, "无法读取所选文件，请重新选择"))?,
-        )
-        .map_err(|error| (error, "仅支持普通文件，不能添加目录"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| (DesktopError::InvalidInput, UNREADABLE))?;
+        let mut identity = FileIdentity::read(&metadata)
+            .map_err(|error| (error, "仅支持普通文件，不能添加目录"))?;
         let mut header = [0_u8; 16];
         let read = file
             .read(&mut header)
@@ -114,11 +130,32 @@ impl NativeReference {
             || header.starts_with(b"GIF87a")
             || header.starts_with(b"GIF89a")
             || (header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WEBP"));
-        if image && identity.size > 20 * 1024 * 1024 {
+        if image && identity.size > super::attachments::MAX_IMAGE_BYTES as u64 {
             return Err((
                 DesktopError::InvalidInput,
                 "图片超过 20MiB，请选择较小的图片",
             ));
+        }
+        // Every supported image fits this budget; small ordinary files benefit
+        // too. Large files retain the original metadata-only strict policy.
+        if identity.size <= super::attachments::MAX_IMAGE_BYTES as u64 {
+            let sha256 = content_digest(&mut file, identity.size)?;
+            let after = file
+                .metadata()
+                .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+            if FileIdentity::read(&after).map_err(|e| (e, CHANGED))? != identity
+                || metadata.uid() != after.uid()
+                || metadata.gid() != after.gid()
+                || metadata.mode() != after.mode()
+            {
+                return Err((DesktopError::RequestExpired, CHANGED));
+            }
+            identity.content_proof = Some(FileContentProof {
+                sha256,
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                mode: metadata.mode(),
+            });
         }
         let reference = Self::File {
             name,
@@ -126,9 +163,7 @@ impl NativeReference {
             identity,
             image,
         };
-        reference
-            .validate()
-            .map_err(|error| (error, "所选文件已变化，请重新选择"))?;
+        reference.validate_detailed()?;
         Ok(reference)
     }
 
@@ -161,17 +196,38 @@ impl NativeReference {
 
     /// Catalog references are stamped only after the user selects them. Already
     /// selected files keep their original identity; capture cannot bless a swap.
-    pub fn capture(mut self) -> Result<Self> {
+    pub fn capture(self) -> Result<Self> {
+        self.capture_detailed().map_err(|(error, _)| error)
+    }
+
+    pub fn capture_detailed(mut self) -> ReferenceResult<Self> {
         if let Self::Skill { path, identity, .. } = &mut self {
             if identity.is_none() {
                 *path = path
                     .canonicalize()
-                    .map_err(|_| DesktopError::InvalidInput)?;
-                *identity = Some(file_identity(path)?);
+                    .map_err(|_| (DesktopError::InvalidInput, "无法读取所选技能，请重新选择"))?;
+                *identity = Some(
+                    file_identity(path).map_err(|error| (error, "所选技能已失效，请重新选择"))?,
+                );
             }
         }
-        self.validate()?;
+        self.validate_detailed()?;
         Ok(self)
+    }
+
+    pub fn validate_detailed(&self) -> ReferenceResult<()> {
+        if let Self::File {
+            name,
+            path,
+            identity,
+            ..
+        } = self
+        {
+            safe_name(name).map_err(|error| (error, "文件名或路径格式无效"))?;
+            return verify_file_detailed(path, identity);
+        }
+        self.validate()
+            .map_err(|error| (error, "所选技能或应用引用已失效，请重新选择"))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -221,6 +277,28 @@ impl NativeReference {
             Self::Skill { .. } => "skill",
             Self::App { .. } => "app",
             Self::Plugin { .. } => "plugin",
+        }
+    }
+
+    /// Deduplicate only native-selected files, never names or caller paths.
+    pub fn same_selected_file(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::File { path, identity, .. },
+                Self::File {
+                    path: other_path,
+                    identity: other_identity,
+                    ..
+                },
+            ) => {
+                path == other_path
+                    && identity.same_content_metadata(other_identity)
+                    && match (&identity.content_proof, &other_identity.content_proof) {
+                        (Some(left), Some(right)) => left == right,
+                        _ => identity.same_metadata(other_identity),
+                    }
+            }
+            _ => false,
         }
     }
 
@@ -314,7 +392,22 @@ impl FileIdentity {
             modified_ns: metadata.mtime_nsec(),
             changed: metadata.ctime(),
             changed_ns: metadata.ctime_nsec(),
+            content_proof: None,
         })
+    }
+
+    fn same_content_metadata(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.size == other.size
+            && self.modified == other.modified
+            && self.modified_ns == other.modified_ns
+    }
+
+    fn same_metadata(&self, other: &Self) -> bool {
+        self.same_content_metadata(other)
+            && self.changed == other.changed
+            && self.changed_ns == other.changed_ns
     }
 }
 
@@ -352,10 +445,85 @@ fn file_identity(path: &Path) -> Result<FileIdentity> {
     FileIdentity::read(&metadata)
 }
 fn verify_file(path: &Path, expected: &FileIdentity) -> Result<()> {
-    if &file_identity(path)? != expected {
-        return Err(DesktopError::RequestExpired);
+    verify_file_detailed(path, expected).map_err(|(error, _)| error)
+}
+
+fn verify_file_detailed(path: &Path, expected: &FileIdentity) -> ReferenceResult<()> {
+    let current = file_identity(path).map_err(|error| {
+        (
+            error,
+            if path.try_exists().unwrap_or(false) {
+                CHANGED
+            } else {
+                UNREADABLE
+            },
+        )
+    })?;
+    if !current.same_content_metadata(expected) {
+        return Err((DesktopError::RequestExpired, CHANGED));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+    let before = file
+        .metadata()
+        .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+    if FileIdentity::read(&before).map_err(|e| (e, CHANGED))? != current {
+        return Err((DesktopError::RequestExpired, CHANGED));
+    }
+    if let Some(proof) = &expected.content_proof {
+        if proof.uid != before.uid() || proof.gid != before.gid() || proof.mode != before.mode() {
+            return Err((DesktopError::RequestExpired, CHANGED));
+        }
+    }
+    if !current.same_metadata(expected) {
+        let proof = expected
+            .content_proof
+            .as_ref()
+            .ok_or((DesktopError::RequestExpired, CHANGED))?;
+        if current.size > super::attachments::MAX_IMAGE_BYTES as u64
+            || content_digest(&mut file, current.size)? != proof.sha256
+        {
+            return Err((DesktopError::RequestExpired, CHANGED));
+        }
+    }
+    let after = file
+        .metadata()
+        .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+    if FileIdentity::read(&after).map_err(|e| (e, CHANGED))? != current
+        || before.uid() != after.uid()
+        || before.gid() != after.gid()
+        || before.mode() != after.mode()
+        || file_identity(path).map_err(|e| (e, CHANGED))? != current
+    {
+        return Err((DesktopError::RequestExpired, CHANGED));
     }
     Ok(())
+}
+
+fn content_digest(file: &mut std::fs::File, size: u64) -> ReferenceResult<String> {
+    file.rewind()
+        .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+    let mut bounded = file.take(size + 1);
+    let mut hash = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = bounded
+            .read(&mut buffer)
+            .map_err(|_| (DesktopError::RequestExpired, UNREADABLE))?;
+        if count == 0 {
+            break;
+        }
+        bytes += count as u64;
+        hash.update(&buffer[..count]);
+    }
+    if bytes != size {
+        return Err((DesktopError::RequestExpired, CHANGED));
+    }
+    Ok(hex::encode(hash.finalize()))
 }
 
 #[cfg(test)]

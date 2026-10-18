@@ -65,7 +65,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   const writable = Boolean(view?.connected && view.writable);
   useEffect(() => { setLocalError(""); setCatalogKind(""); setDiscard(null); setChoosing(false); setCopyState("idle"); if (addMenu.current) addMenu.current.open = false; }, [threadId, view?.sessionId]);
   const attachments = useDesktopAttachments(writable && !busy && !choosing ? view?.sessionId : undefined, attachmentRegion, references.map(item => item.handle), items => {
-    setLocalError("");
+    setLocalError(""); desktop.clearActionError();
     setDraft(value => {
       const additions = items.filter(item => !value.references.some(reference => reference.handle === item.handle));
       if (value.references.length + additions.length > 32) {
@@ -87,7 +87,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     try {
       const { draft: next, caret } = insertDesktopReference(draft, item, inline?.start ?? selection.start, inline?.end ?? selection.end);
       setDraft(next); setSelection({ start: caret, end: caret, focused: true });
-      setCatalogKind(""); setLocalError(""); setDismissed("");
+      setCatalogKind(""); setLocalError(""); desktop.clearActionError(); setDismissed("");
       queueMicrotask(() => { textarea.current?.focus(); textarea.current?.setSelectionRange(caret, caret); });
     } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法插入所选引用"); }
   };
@@ -111,11 +111,11 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     setChoosing(true); setLocalError("");
     try {
       const { item } = await chooseDesktopItem("file", view.sessionId);
-      if (item && currentSession.current === session) setDraft(value => {
+      if (item && currentSession.current === session) { desktop.clearActionError(); setDraft(value => {
         if (value.references.some(reference => reference.handle === item.handle)) return value;
         if (value.references.length >= 32) { setLocalError("引用数量超出限制，本次附件未添加"); return value; }
         return { ...value, references: [...value.references, item] };
-      });
+      }); }
     } catch (reason) { if (currentSession.current === session) setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
     finally { if (currentSession.current === session) setChoosing(false); }
   };
@@ -154,7 +154,7 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
     {!writable ? <div className="desktop-connect-row"><span role={desktop.error ? "alert" : undefined}>{view?.connectionPhase === "owner_confirmation_required" ? "Codex owner 已变化，已恢复阅读；点击连接确认后继续协作" : view?.connectionPhase === "resyncing" ? "正在重新同步 Codex…" : view?.connectionPhase === "reconnecting" ? "正在恢复 Codex 连接…" : desktop.error || (busy ? "正在连接 Codex…" : "连接本机 Codex 后继续此线程")}</span><button disabled={locked} onClick={() => { void desktop.open(); }}>在 Codex 中打开</button><button disabled={locked} onClick={desktop.connect}>连接</button></div> : <>
       <DesktopRequests requests={view!.requests} busy={locked} act={desktop.act} open={desktop.open} />
       <form ref={attachmentRegion} onSubmit={event => { event.preventDefault(); void send(); }}>
-        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.kind === "skill" ? <WandSparkles size={13} /> : item.kind === "plugin" || item.kind === "app" ? <AtSign size={13} /> : <Paperclip size={13} />}<span>{item.name}</span><button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => { attachments.release([item.handle]); setDraft(value => removeDesktopReference(value, item.handle)); }}><X size={12} /></button></span>)}</div>}
+        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.kind === "skill" ? <WandSparkles size={13} /> : item.kind === "plugin" || item.kind === "app" ? <AtSign size={13} /> : <Paperclip size={13} />}<span>{item.name}</span><button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => { attachments.release([item.handle]); setDraft(value => removeDesktopReference(value, item.handle)); setLocalError(""); desktop.clearActionError(); }}><X size={12} /></button></span>)}</div>}
         <textarea ref={textarea} aria-label="发送给 Codex" aria-autocomplete="list" aria-controls={inline ? "desktop-reference-options" : undefined} aria-expanded={Boolean(inline)} aria-activedescendant={inline && catalog.items[option] ? `desktop-reference-option-${option}` : undefined}
           placeholder={active ? "添加下一条消息，或补充当前回合…" : "与 Codex 协作…"} rows={2} maxLength={131072} value={text} disabled={locked}
           onPaste={attachments.paste}

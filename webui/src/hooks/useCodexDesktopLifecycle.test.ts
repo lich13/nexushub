@@ -460,6 +460,54 @@ describe("Codex desktop hook lifecycle", () => {
     expect(render("thread-error").error).toBe("");
   });
 
+  test("clearActionError clears only a rejected action and preserves view errors and unknown queue entries", async () => {
+    const connected = await connect("thread-clear-action-error");
+    const viewError = "fixture view error";
+    connected.attachment.receive({
+      ...desktopView("thread-clear-action-error"),
+      error: viewError,
+      queue: [{ id: "unknown-fixture", status: "outcome_unknown", kind: "queue", preview: "fixture unknown", createdAt: 1 }]
+    });
+    let desktop = render("thread-clear-action-error");
+    expect(desktop.error).toBe(viewError);
+    expect(desktop.view?.queue[0]?.status).toBe("outcome_unknown");
+
+    const action = { type: "stop" as const, turnId: "turn-fixture" };
+    vi.mocked(actOnDesktopThread).mockRejectedValueOnce(new Error("fixture action error"));
+    await expect(desktop.act(action)).rejects.toThrow("fixture action error");
+    desktop = render("thread-clear-action-error");
+    expect(desktop.error).toBe("fixture action error");
+
+    desktop.clearActionError();
+    desktop = render("thread-clear-action-error");
+    expect(desktop.error).toBe(viewError);
+    expect(desktop.view?.queue[0]?.status).toBe("outcome_unknown");
+  });
+
+  test("clearActionError does not clear a connection failure", async () => {
+    let desktop = render("thread-connect-error");
+    desktop.connect();
+    render("thread-connect-error");
+    const attachment = attachmentList()[0];
+    attachment.pending.reject(new Error("fixture connect error"));
+    await flushMicrotasks();
+
+    desktop = render("thread-connect-error");
+    expect(desktop.error).toBe("fixture connect error");
+    desktop.clearActionError();
+    expect(render("thread-connect-error").error).toBe("fixture connect error");
+  });
+
+  test("clearActionError does not clear an Open failure", async () => {
+    vi.mocked(openDesktopThread).mockRejectedValueOnce(new Error("fixture open error"));
+    const desktop = render("thread-open-error");
+    await desktop.open();
+
+    expect(render("thread-open-error").error).toBe("fixture open error");
+    desktop.clearActionError();
+    expect(render("thread-open-error").error).toBe("fixture open error");
+  });
+
   test("manual actions request a coalesced thread detail refresh", async () => {
     vi.useFakeTimers();
     const connected = await connect("thread-action");
