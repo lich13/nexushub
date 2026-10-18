@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.4，基线为 `cfb1be1 / v1.3.3`。本轮修复发送兼容提示、文件身份误判与剪贴板附件。核心实现已完成，进入收尾与候选阶段；尚未发布 1.3.4 或取得本轮用户验收结果。历史版本的构建、候选和实机结果由 Git 与 [Release](https://github.com/lich13/nexushub/releases) 保留，不能代替本轮证据。完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
+当前维护源码版本为 1.3.4，基线为 `cfb1be1 / v1.3.3`。本轮修复发送兼容提示、文件身份误判与剪贴板附件。当前处于候选修复阶段：用户报告 Control＋系统截图复制后粘贴无反应、没有附件标签，已定位附件通知通道提前关闭；尚未发布 1.3.4。历史版本的构建、候选和实机结果由 Git 与 [Release](https://github.com/lich13/nexushub/releases) 保留，不能代替本轮证据。完整回归以对应提交的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
 ## 核实与实现
 
@@ -49,6 +49,14 @@
 
 ## 候选与待用户验收
 
+首轮候选的纯图片粘贴验收失败。只读元数据确认系统剪贴板提供有效单帧 PNG/TIFF、处于现有大小和解码预算内；已安装候选哈希与构建相符。独立 WKWebView 的一次有界复现收到 `Files` / `image/png` paste 事件，未读取图片正文、改写真实剪贴板或发送回合。现有 15 项原生剪贴板测试复验退出 0；这些结果不能替代 NexusHub 内的附件显示验收。
+
+锁定的 Tauri 实现每次解析 Channel 参数都会创建独立生命周期；原附件入口把同一个回调反复传为 Channel，首次 bounds 完成时的临时实例就发送结束帧并注销前端回调。修复改为只解析 JavaScriptChannelId，仅 bind 创建通道，其他操作使用已有接收区。线上 onEvent 字符串、DTO、协议 2、身份及容量校验均不变；已知原生参数类型变化同步到 wire 结构清单。
+
+此次修复的本机检查：`cargo test --manifest-path src-tauri/Cargo.toml --locked --test attachment_channel` 的入口生命周期守卫 1 项、同命令过滤 `codex_desktop::attachments` 的边界测试 4 项、WebUI 的 `api/desktop.test.ts` 与 `useDesktopAttachments.test.ts` 共 36 项均通过、退出 0。新增用例覆盖连续 bounds 后粘贴事件仍可达、关闭/切换后的迟到事件隔离，并以旧结束帧和旧原生签名作负面对照；没有把 mock 或源码守卫记成真实 App 发送。WebUI typecheck、两套 fmt、Tauri `clippy --all-targets --locked -- -D warnings`、Rust wire 单项与 TypeScript wire 检查均退出 0。新增测试初次 fmt 退出 1，格式修正后通过；一轮隐私扫描未取得退出码，补跑确认检查 3,169 项、零发现、退出 0。
+
+修复前 `ee57644` 的 CI 39104232687 首次 Frontend/Backend 通过，macOS WebKit 性能切换 p95 为 116ms，超过 100ms；同提交仅重跑 macOS 后三项均通过，WebKit 83ms、Chromium 53ms。该结果不代表本次原生修复已完成全量 CI，新提交仍使用既有 workflow。
+
 前提：在 Codex 原生桌面打开同一本机主线程，再在候选 NexusHub 中连接。远程、归档和子线程继续只读。
 
 | 项目 | 操作与预期 | 本轮结果 |
@@ -57,7 +65,7 @@
 | 原生选择器 | 用“＋”添加图片和普通文件后发送，原生桌面实际可读附件。 | 待用户验收 |
 | Finder 文件 | 在 Finder 复制单个/多个文件并粘贴；得到文件标签，预览缩略图不替代原文件。 | 待用户验收 |
 | 完整路径 | 粘贴每行一个绝对路径、~/ 路径或本机 file URL，含中文、空格或成对引号；整批有效才附加，无效路径保留文字。 | 待用户验收 |
-| 图片 | 粘贴截图以及 PNG/TIFF/JPEG 来源；发送后确认图片实际可用，重复事件不产生重复附件。 | 待用户验收 |
+| 图片 | 粘贴截图以及 PNG/TIFF/JPEG 来源；发送后确认图片实际可用，重复事件不产生重复附件。 | 首轮系统截图粘贴失败；修复候选待用户复验 |
 | 文本与焦点 | 普通多行正文保持换行、光标、撤销/重做；切换窗口或关闭文件选择器后立即粘贴可用。 | 待用户验收 |
 | 错误与草稿 | 文件真正变化时拒绝发送并保留草稿；重新选择或移除附件后相应错误消失，队列结果不明项仍保留。 | 待用户验收 |
 

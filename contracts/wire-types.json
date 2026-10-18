@@ -9942,7 +9942,7 @@
         "async fn attach (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopThreadRequest , on_event : Channel < DesktopView > ,) -> Result < DesktopView , String >",
         "async fn action (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopActionRequest ,) -> Result < DesktopView , String >",
         "async fn detach (bridge : State < '_ , CodexDesktopBridge > , request : DesktopSessionRequest ,) -> Result < DesktopAck , String >",
-        "async fn attachments (window : tauri :: WebviewWindow , state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopAttachmentRequest , on_event : Channel < DesktopAttachmentEvent > ,) -> Result < DesktopAttachmentResult , String >",
+        "async fn attachments (window : tauri :: WebviewWindow , state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopAttachmentRequest , on_event : JavaScriptChannelId ,) -> Result < DesktopAttachmentResult , String >",
         "fn native_drop (window : tauri :: WebviewWindow , paths : Vec < PathBuf > , position : tauri :: PhysicalPosition < f64 > ,)",
         "async fn open (app : tauri :: AppHandle , state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , request : DesktopThreadRequest ,) -> Result < DesktopAck , String >",
         "async fn choose (remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopChooseRequest ,) -> Result < DesktopChoice , String >",
@@ -9961,7 +9961,7 @@
         "async fn references (bridge : & CodexDesktopBridge , receiver : & Receiver , handles : & [String] ,) -> Result < Vec < NativeReference > , String >",
         "async fn release (runtime : & BridgeRuntime , references : Vec < NativeReference >) -> Result < () , String >",
         "async fn unbind (bridge : & CodexDesktopBridge , id : & str)",
-        "async fn handle (window : WebviewWindow , state : & DesktopState , remote : & RemoteConnections , bridge : & CodexDesktopBridge , request : DesktopAttachmentRequest , channel : Channel < DesktopAttachmentEvent > ,) -> Result < DesktopAttachmentResult , String >",
+        "async fn handle (window : WebviewWindow , state : & DesktopState , remote : & RemoteConnections , bridge : & CodexDesktopBridge , request : DesktopAttachmentRequest , channel : JavaScriptChannelId ,) -> Result < DesktopAttachmentResult , String >",
         "async fn deliver (window : & WebviewWindow , state : & DesktopState , remote : & RemoteConnections , bridge : & CodexDesktopBridge , runtime : & BridgeRuntime , receiver : & Receiver , values : Vec < NativeReference > ,) -> Result < () , String >",
         "fn capture_drop (paths : Vec < PathBuf > , remaining : usize) -> Result < Vec < NativeReference > , String >",
         "fn drop_files (window : WebviewWindow , paths : Vec < PathBuf > , position : tauri :: PhysicalPosition < f64 > ,)"

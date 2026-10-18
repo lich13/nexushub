@@ -19,7 +19,10 @@ use std::{
         Arc, Weak,
     },
 };
-use tauri::{ipc::Channel, State};
+use tauri::{
+    ipc::{Channel, JavaScriptChannelId},
+    State,
+};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
@@ -557,7 +560,7 @@ pub async fn attachments(
     remote: State<'_, RemoteConnections>,
     bridge: State<'_, CodexDesktopBridge>,
     request: DesktopAttachmentRequest,
-    on_event: Channel<DesktopAttachmentEvent>,
+    on_event: JavaScriptChannelId,
 ) -> Result<DesktopAttachmentResult, String> {
     attachments::handle(window, &state, &remote, &bridge, request, on_event).await
 }
