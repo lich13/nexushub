@@ -48,6 +48,8 @@ let fakeWindow: {
 let fakeDocument: {
   hidden: boolean;
   hasFocus: ReturnType<typeof vi.fn>;
+  activeElement: unknown;
+  execCommand: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
 };
@@ -82,6 +84,8 @@ function installBrowserGlobals() {
   fakeDocument = {
     hidden: false,
     hasFocus: vi.fn(() => true),
+    activeElement: null,
+    execCommand: vi.fn(() => true),
     addEventListener: vi.fn((type: string, listener: Listener) => add(documentListeners, type, listener)),
     removeEventListener: vi.fn((type: string, listener: Listener) => remove(documentListeners, type, listener))
   };
@@ -157,9 +161,18 @@ function attachmentEvent(overrides: Partial<DesktopAttachmentEvent> = {}): Deskt
   };
 }
 
-function clipboardEvent(items: Array<{ kind: string; type: string }>) {
+function clipboardEvent(
+  items: Array<{ kind: string; type: string }>,
+  options: { text?: string; types?: string[]; target?: { value: string; selectionStart: number; selectionEnd: number } } = {}
+) {
+  const target = options.target ?? { value: "", selectionStart: 0, selectionEnd: 0 };
   return {
-    clipboardData: { items },
+    currentTarget: target,
+    clipboardData: {
+      items,
+      types: options.types ?? items.map(item => item.type).filter(Boolean),
+      getData: vi.fn((type: string) => type === "text/plain" ? options.text ?? "" : "")
+    },
     preventDefault: vi.fn()
   } as unknown as ClipboardEvent<HTMLTextAreaElement>;
 }
@@ -229,9 +242,9 @@ describe("useDesktopAttachments", () => {
     const attachments = render("session-fixture", region, [], receive, fail);
     await flushMicrotasks();
 
-    const text = clipboardEvent([{ kind: "string", type: "text/plain" }]);
+    const text = clipboardEvent([{ kind: "string", type: "text/plain" }], { text: "ordinary text" });
     attachments.paste(text);
-    const html = clipboardEvent([{ kind: "string", type: "text/html" }]);
+    const html = clipboardEvent([{ kind: "string", type: "text/html" }], { text: "<p>ordinary HTML</p>" });
     attachments.paste(html);
     expect(text.preventDefault).not.toHaveBeenCalled();
     expect(html.preventDefault).not.toHaveBeenCalled();
@@ -242,6 +255,204 @@ describe("useDesktopAttachments", () => {
     await flushMicrotasks();
     expect(image.preventDefault).toHaveBeenCalledOnce();
     expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  test.each([
+    {
+      label: "Finder multiple files",
+      items: [{ kind: "file", type: "" }, { kind: "file", type: "" }],
+      types: ["Files"], text: ""
+    },
+    {
+      label: "a file without MIME metadata",
+      items: [{ kind: "file", type: "" }],
+      types: [], text: ""
+    },
+    {
+      label: "a JPEG",
+      items: [{ kind: "file", type: "image/jpeg" }],
+      types: ["image/jpeg"], text: ""
+    }
+  ])("routes $label to native paste without sending clipboard data", async ({ items, types, text }) => {
+    const binding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+
+    const event = clipboardEvent(items, { types, text });
+    attachments.paste(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    "/tmp/image-fixture.jpg",
+    "~/Pictures/image-fixture.jpg\n~/Pictures/notes-fixture.txt"
+  ])("routes complete path text %s to native paste and falls back to browser text on a text disposition", async text => {
+    const binding = createBinding();
+    binding.paste.mockResolvedValue({ bindingId: "binding-fixture", pasteDisposition: "text" });
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+    const target = { value: "draft-fixture", selectionStart: 13, selectionEnd: 13 };
+    fakeDocument.activeElement = target;
+    const event = clipboardEvent([{ kind: "string", type: "text/plain" }], { text, types: ["text/plain"], target });
+
+    attachments.paste(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+    expect(fakeDocument.execCommand).toHaveBeenCalledOnce();
+    expect(fakeDocument.execCommand).toHaveBeenCalledWith("insertText", false, text);
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("keeps candidate path text on the browser paste path while unbound, but still reports an unbound image", async () => {
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render(undefined, region, [], vi.fn(), fail);
+    await flushMicrotasks();
+
+    const pathText = clipboardEvent([{ kind: "string", type: "text/plain" }], {
+      text: "/tmp/image-fixture.jpg",
+      types: ["text/plain"]
+    });
+    attachments.paste(pathText);
+
+    expect(pathText.preventDefault).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
+
+    const image = clipboardEvent([{ kind: "file", type: "image/png" }], { types: ["image/png"] });
+    attachments.paste(image);
+
+    expect(image.preventDefault).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledExactlyOnceWith("请先连接当前线程再添加附件");
+  });
+
+  test("drops a late text disposition after the attachment binding loses focus", async () => {
+    const binding = createBinding();
+    const delayed = deferred<{ bindingId: string; pasteDisposition: "text" }>();
+    binding.paste.mockReturnValueOnce(delayed.promise);
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+    const target = { value: "draft-fixture", selectionStart: 14, selectionEnd: 14 };
+    fakeDocument.activeElement = target;
+    const event = clipboardEvent([{ kind: "string", type: "text/plain" }], {
+      text: "/tmp/image-fixture.jpg", types: ["text/plain"], target
+    });
+
+    attachments.paste(event);
+    await flushMicrotasks();
+    expect(binding.paste).toHaveBeenCalledOnce();
+
+    fakeDocument.hasFocus.mockReturnValue(false);
+    fire(windowListeners, "blur");
+    delayed.resolve({ bindingId: "binding-fixture", pasteDisposition: "text" });
+    await flushMicrotasks();
+
+    expect(binding.close).toHaveBeenCalledOnce();
+    expect(fakeDocument.execCommand).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("pastes immediately after focus reconnect starts and shares that binding", async () => {
+    const delayed = deferred<Binding>();
+    const binding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
+    fakeDocument.hasFocus.mockReturnValue(false);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+
+    fakeDocument.hasFocus.mockReturnValue(true);
+    fire(windowListeners, "focus");
+    const image = clipboardEvent([{ kind: "file", type: "image/png" }]);
+    attachments.paste(image);
+    expect(image.preventDefault).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
+
+    delayed.resolve(binding);
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  test("pastes immediately after the chooser returns and the session binding starts", async () => {
+    const delayed = deferred<Binding>();
+    const binding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const receive = vi.fn();
+    const fail = vi.fn();
+    const attachments = render(undefined, region, [], receive, fail);
+    await flushMicrotasks();
+
+    render("session-fixture", region, [], receive, fail);
+    const image = clipboardEvent([{ kind: "file", type: "image/png" }]);
+    attachments.paste(image);
+    expect(image.preventDefault).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
+
+    delayed.resolve(binding);
+    await flushMicrotasks();
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  test("waits for the in-flight binding and imports only once for duplicate paste gestures", async () => {
+    const delayed = deferred<Binding>();
+    const binding = createBinding();
+    vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+
+    const first = clipboardEvent([{ kind: "file", type: "image/png" }]);
+    const duplicate = clipboardEvent([{ kind: "file", type: "image/png" }]);
+    attachments.paste(first);
+    attachments.paste(duplicate);
+
+    expect(first.preventDefault).toHaveBeenCalledOnce();
+    expect(duplicate.preventDefault).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
+    expect(binding.paste).not.toHaveBeenCalled();
+
+    delayed.resolve(binding);
+    await flushMicrotasks();
+
+    expect(bindDesktopAttachments).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  test("treats a legacy paste response without pasteDisposition as a successful attachment import", async () => {
+    const binding = createBinding();
+    binding.paste.mockResolvedValue({ bindingId: "binding-fixture" });
+    vi.mocked(bindDesktopAttachments).mockResolvedValue(binding);
+    const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
+    const fail = vi.fn();
+    const attachments = render("session-fixture", region, [], vi.fn(), fail);
+    await flushMicrotasks();
+
+    const image = clipboardEvent([{ kind: "file", type: "image/png" }]);
+    attachments.paste(image);
+    await flushMicrotasks();
+
+    expect(image.preventDefault).toHaveBeenCalledOnce();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
+    expect(fail).not.toHaveBeenCalled();
   });
 
   test("skips background binding and rebinds a fresh receiver after focus returns", async () => {
@@ -321,8 +532,9 @@ describe("useDesktopAttachments", () => {
     expect(fail).not.toHaveBeenCalled();
   });
 
-  test("keeps the active image paste prompt while the binding is pending", async () => {
+  test("waits for an active image paste while the binding is pending", async () => {
     const delayed = deferred<Binding>();
+    const binding = createBinding();
     vi.mocked(bindDesktopAttachments).mockReturnValueOnce(delayed.promise);
     const { region } = createRegion({ left: 0, top: 0, right: 300, bottom: 120 });
     const fail = vi.fn();
@@ -332,9 +544,10 @@ describe("useDesktopAttachments", () => {
     attachments.paste(image);
 
     expect(image.preventDefault).toHaveBeenCalledOnce();
-    expect(fail).toHaveBeenCalledExactlyOnceWith("附件接收区尚未就绪，请重试粘贴");
-    delayed.resolve(createBinding());
+    expect(fail).not.toHaveBeenCalled();
+    delayed.resolve(binding);
     await flushMicrotasks();
+    expect(binding.paste).toHaveBeenCalledExactlyOnceWith();
   });
 
   test("does not update native bounds when handles are recreated with the same contents", async () => {

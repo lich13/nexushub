@@ -1,19 +1,180 @@
-//! Explicit image paste and generated safe diagnostic copy only. Never inspect
-//! clipboard text, HTML, file URLs or remote content.
-//! ImageIO metadata bounds decoding before AppKit converts a TIFF to PNG.
+//! Explicit user paste and generated safe diagnostic copy only. Native file
+//! URLs and complete path text are resolved here, never accepted from WebUI.
+//! Never read HTML, fetch remote content, or evaluate shell syntax.
+//! ImageIO metadata bounds decoding before AppKit converts TIFF/JPEG to PNG.
 use nexushub_core::codex::desktop::attachments::MAX_IMAGE_BYTES;
+use nexushub_core::codex::desktop::references::NativeReference;
 use objc2::{rc::autoreleasepool, runtime::AnyObject};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypePNG,
-    NSPasteboardTypeString, NSPasteboardTypeTIFF,
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL,
+    NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
 };
 use objc2_foundation::{NSData, NSDictionary, NSString};
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 
 const CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 const PIXEL_BYTES: u64 = 128 * 1024 * 1024;
 const INVALID: &str = "剪贴板图片格式无效或不受支持";
 const TOO_LARGE: &str = "剪贴板图片超出安全大小限制";
+const TEXT_BYTES: usize = 32 * 8192;
+
+#[cfg(test)]
+#[path = "clipboard_tests.rs"]
+mod ingress_tests;
+
+pub(super) enum PasteContent {
+    Files(Vec<NativeReference>),
+    Image(Vec<u8>),
+    Text,
+    Unsupported,
+}
+
+pub(super) struct PasteCapture {
+    pub change_count: isize,
+    pub content: PasteContent,
+}
+
+pub(super) fn capture() -> Result<PasteCapture, &'static str> {
+    autoreleasepool(|_| {
+        read_paste(
+            &NSPasteboard::generalPasteboard(),
+            dirs::home_dir().as_deref(),
+        )
+    })
+}
+
+pub(super) fn unchanged(change_count: isize) -> bool {
+    autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount() == change_count)
+}
+
+fn read_paste(board: &NSPasteboard, home_dir: Option<&Path>) -> Result<PasteCapture, &'static str> {
+    let before = board.changeCount();
+    let content = read_content(board, home_dir)?;
+    if before != board.changeCount() {
+        return Err("剪贴板已变化，请重新粘贴");
+    }
+    Ok(PasteCapture {
+        change_count: before,
+        content,
+    })
+}
+
+fn read_content(
+    board: &NSPasteboard,
+    home_dir: Option<&Path>,
+) -> Result<PasteContent, &'static str> {
+    // Finder may also advertise a TIFF preview. File identities take precedence
+    // so a copied document never turns into its icon or thumbnail.
+    let mut paths = Vec::new();
+    if let Some(items) = board.pasteboardItems() {
+        if items.len() > 32 {
+            return Err("引用数量超出限制，本次附件未添加");
+        }
+        for item in items.iter() {
+            // SAFETY: immutable AppKit pasteboard type constant.
+            if let Some(value) = unsafe { item.stringForType(NSPasteboardTypeFileURL) } {
+                if value.length() > 8192 {
+                    return Err("文件名或路径格式无效");
+                }
+                paths.push(
+                    local_file_url(&value.to_string())
+                        .ok_or("仅支持本机文件，无法添加此文件地址")?,
+                );
+            }
+        }
+    }
+    if !paths.is_empty() {
+        return selected_files(paths).map(PasteContent::Files);
+    }
+    match read_png(board) {
+        Ok(image) => return Ok(PasteContent::Image(image)),
+        Err("剪贴板没有可粘贴的图片") => {}
+        Err(error) => return Err(error),
+    }
+    // SAFETY: immutable AppKit text type. Text never crosses back to WebUI;
+    // the browser retains its original paste data for the ordinary text path.
+    if let Some(text) = unsafe { board.stringForType(NSPasteboardTypeString) } {
+        if text.length() <= TEXT_BYTES {
+            let text = text.to_string();
+            if let Some(paths) = text_paths(&text, home_dir) {
+                // Only an entirely valid set becomes attachments. Prose or an
+                // unavailable path remains text; never consume its valid prefix.
+                if let Ok(files) = selected_files(paths) {
+                    return Ok(PasteContent::Files(files));
+                }
+            }
+        }
+        return Ok(PasteContent::Text);
+    }
+    Ok(PasteContent::Unsupported)
+}
+
+fn local_file_url(value: &str) -> Option<PathBuf> {
+    let url = tauri::Url::parse(value).ok()?;
+    if url.scheme() != "file"
+        || url.host_str().is_some_and(|host| host != "localhost")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    url.to_file_path().ok()
+}
+
+fn text_paths(text: &str, home_dir: Option<&Path>) -> Option<Vec<PathBuf>> {
+    if text.len() > TEXT_BYTES {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if paths.len() == 32 {
+            return None;
+        }
+        let line = line
+            .strip_prefix('"')
+            .and_then(|line| line.strip_suffix('"'))
+            .or_else(|| {
+                line.strip_prefix('\'')
+                    .and_then(|line| line.strip_suffix('\''))
+            })
+            .unwrap_or(line);
+        if line.len() > 8192 || line.chars().any(char::is_control) {
+            return None;
+        }
+        let path = if line.starts_with("file:") {
+            local_file_url(line)?
+        } else if let Some(relative) = line.strip_prefix("~/") {
+            home_dir?.join(relative)
+        } else if line.starts_with('/') {
+            PathBuf::from(line)
+        } else {
+            return None;
+        };
+        paths.push(path);
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
+pub(super) fn selected_files(paths: Vec<PathBuf>) -> Result<Vec<NativeReference>, &'static str> {
+    if paths.is_empty() || paths.len() > 32 {
+        return Err("引用数量超出限制，本次附件未添加");
+    }
+    let mut files = Vec::new();
+    for path in paths {
+        let file = NativeReference::selected_file_detailed(path).map_err(|(_, message)| message)?;
+        if !files
+            .iter()
+            .any(|existing: &NativeReference| existing.same_selected_file(&file))
+        {
+            files.push(file);
+        }
+    }
+    Ok(files)
+}
 
 pub(super) fn copy_diagnostics(
     diagnostics: &nexushub_core::services::codex_desktop::DesktopDiagnostics,
@@ -39,10 +200,6 @@ fn write_diagnostics(
     }
 }
 
-pub(super) fn paste_png() -> Result<Vec<u8>, &'static str> {
-    autoreleasepool(|_| read_png(&NSPasteboard::generalPasteboard()))
-}
-
 fn read_png(pasteboard: &NSPasteboard) -> Result<Vec<u8>, &'static str> {
     read_png_using(pasteboard, normalize)
 }
@@ -56,6 +213,8 @@ fn read_png_using(
     let (data, png) = unsafe {
         if let Some(data) = pasteboard.dataForType(NSPasteboardTypePNG) {
             (data, true)
+        } else if let Some(data) = pasteboard.dataForType(&NSString::from_str("public.jpeg")) {
+            (data, false)
         } else {
             (
                 pasteboard
@@ -201,7 +360,7 @@ fn check_dimensions(bytes: &[u8]) -> Result<(), &'static str> {
 mod tests {
     use super::*;
     use nexushub_core::services::codex_desktop::{DesktopDiagnostic, DesktopDiagnostics};
-    const PNG: &[u8] = &[
+    pub(super) const PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
         0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 96, 96, 96, 248, 15,
         0, 1, 4, 1, 0, 95, 229, 195, 75, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,

@@ -1180,6 +1180,10 @@
       "core": "DesktopAttachmentResult",
       "webui": "DesktopAttachmentResult"
     },
+    "DesktopPasteDisposition": {
+      "core": "DesktopPasteDisposition",
+      "webui": "DesktopPasteDisposition"
+    },
     "DesktopDiagnosticsRequest": {
       "core": "DesktopDiagnosticsRequest",
       "webui": "DesktopDiagnosticsRequest"

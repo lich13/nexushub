@@ -24,6 +24,7 @@ export const contractDtoNames = [
     "DesktopAttachmentBounds",
     "DesktopAttachmentEvent",
     "DesktopAttachmentResult",
+  "DesktopPasteDisposition",
     "DesktopChosenItem",
     "DesktopChoice",
     "DesktopCreateRequest",

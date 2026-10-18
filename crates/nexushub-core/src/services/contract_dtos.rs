@@ -24,6 +24,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "DesktopAttachmentBounds",
     "DesktopAttachmentEvent",
     "DesktopAttachmentResult",
+    "DesktopPasteDisposition",
     "DesktopChosenItem",
     "DesktopChoice",
     "DesktopCreateRequest",
