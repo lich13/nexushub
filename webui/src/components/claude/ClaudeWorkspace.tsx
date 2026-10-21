@@ -177,7 +177,7 @@ export function ClaudeWorkspace() {
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
-      <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong><code className="delete-path">{preview.path}</code><p>{preview.fileCount} 个 JSONL 文件，{preview.bytes.toLocaleString()} 字节。只删除此会话文件；工作目录、其他会话和 Claude 配置保留。</p>
+      <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong>{(preview.paths ?? [preview.path]).map(path => <code className="delete-path" key={path}>{path}</code>)}<p>{preview.fileCount} 个会话及专属文件，{preview.bytes.toLocaleString()} 字节。</p>
       {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
       <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
     </ConfirmDialog>}

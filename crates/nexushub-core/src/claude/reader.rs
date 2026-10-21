@@ -560,7 +560,8 @@ impl Parser {
                     self.read_auxiliary(record, key, kind);
                 }
                 "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
-                | "saved_hook_context" | "mode" | "permission-mode" => {}
+                | "saved_hook_context" | "mode" | "permission-mode" | "api-request-shape"
+                | "api-request-blob" | "api-request" | "agent-setting" | "continued-in" => {}
                 _ => {
                     let mut e = event(
                         key,
@@ -571,7 +572,7 @@ impl Parser {
                     );
                     e.detail = Some(printable(record));
                     self.parsed.events.push(Arc::new(e));
-                    warning(&mut self.parsed, "存在新格式活动，管理操作已禁用");
+                    warning(&mut self.parsed, "存在新格式活动，仅显示兼容提示");
                 }
             }
         }
@@ -943,6 +944,7 @@ impl Parser {
                     subtype,
                     "init"
                         | "turn_duration"
+                        | "away_summary"
                         | "stop_hook_summary"
                         | "interrupted"
                         | "cancelled"
@@ -959,7 +961,7 @@ impl Parser {
                 e.detail = Some(printable(record));
                 self.parsed.events.push(Arc::new(e));
                 if !known {
-                    warning(&mut self.parsed, "存在新格式系统活动，管理操作已禁用");
+                    warning(&mut self.parsed, "存在新格式系统活动，仅显示兼容提示");
                 }
             }
         }

@@ -27,11 +27,194 @@ fn checked_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
             "Claude 会话存在硬链接，管理操作已禁用"
         );
     }
+    Ok(())
+}
+pub(super) fn check_rename_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
+    checked_path(paths, path)?;
     ensure!(
-        !metadata.permissions().readonly(),
-        "Claude 会话只读，请核对权限和 systemd 会话目录写入白名单"
+        !fs::metadata(path)?.permissions().readonly(),
+        "Claude 会话只读，无法追加名称"
     );
     Ok(())
+}
+pub(super) fn check_delete_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
+    checked_path(paths, path)?;
+    ensure!(
+        !fs::metadata(path.parent().context("会话父目录缺失")?)?
+            .permissions()
+            .readonly(),
+        "Claude 会话目录只读，无法删除"
+    );
+    let directory = path.with_extension("");
+    if let Ok(metadata) = fs::symlink_metadata(&directory) {
+        ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "Claude 专属目录身份无法确认"
+        );
+    }
+    Ok(())
+}
+
+struct OwnedFiles {
+    paths: Vec<PathBuf>,
+    fingerprint: String,
+    bytes: u64,
+    directories: Vec<PathBuf>,
+}
+
+fn child_identity(path: &Path, parent: &str) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    let mut associated = false;
+    let mut child = None::<String>;
+    ensure!(
+        fs::metadata(path)?.len() <= 512 * 1024 * 1024,
+        "子代理历史超出核验上限"
+    );
+    let mut reader = BufReader::new(fs::File::open(path)?);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader
+            .by_ref()
+            .take(32 * 1024 * 1024)
+            .read_line(&mut line)?
+            == 0
+        {
+            break;
+        }
+        ensure!(line.ends_with('\n'), "子代理历史含半行或超大记录");
+        let row: Value = serde_json::from_str(&line).context("子代理历史损坏")?;
+        if let Some(id) = row.get("parentSessionId").and_then(Value::as_str) {
+            ensure!(id == parent, "子代理关联到其他主会话");
+            associated = true;
+        }
+        if let Some(id) = row.get("sessionId").and_then(Value::as_str) {
+            if id == parent {
+                associated = true;
+            } else if let Some(previous) = &child {
+                ensure!(previous == id, "子代理身份冲突");
+            } else {
+                child = Some(id.into());
+            }
+        }
+    }
+    ensure!(associated, "子代理缺少可核验的父会话关联");
+    Ok(())
+}
+
+fn owned_files(main: &Path, parent: &str) -> Result<OwnedFiles> {
+    let meta = fs::symlink_metadata(main)?;
+    ensure!(
+        meta.is_file() && !meta.file_type().is_symlink(),
+        "Claude 主文件身份已变化"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ensure!(meta.nlink() == 1, "Claude 主文件存在硬链接");
+    }
+    let directory = main.with_extension("");
+    let mut paths = vec![main.to_path_buf()];
+    let mut directories = Vec::new();
+    if fs::symlink_metadata(&directory)
+        .map(|_| true)
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        })?
+    {
+        for (count, entry) in walkdir::WalkDir::new(&directory)
+            .follow_links(false)
+            .max_depth(18)
+            .sort_by_file_name()
+            .into_iter()
+            .enumerate()
+        {
+            let entry = entry?;
+            ensure!(
+                count < 20_000 && entry.depth() < 18,
+                "Claude 专属目录超出核验上限"
+            );
+            let meta = fs::symlink_metadata(entry.path())?;
+            ensure!(!meta.file_type().is_symlink(), "Claude 专属目录含符号链接");
+            let relative = entry.path().strip_prefix(&directory)?;
+            if let Some(first) = relative.components().next() {
+                ensure!(
+                    matches!(
+                        first.as_os_str().to_str(),
+                        Some("subagents" | "tool-results")
+                    ),
+                    "Claude 专属目录存在归属不明内容"
+                );
+            }
+            if meta.is_dir() {
+                ensure!(!meta.permissions().readonly(), "Claude 专属目录只读");
+                directories.push(entry.path().to_path_buf());
+                continue;
+            }
+            ensure!(meta.is_file(), "Claude 专属目录含非普通文件");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                ensure!(meta.nlink() == 1, "Claude 专属文件存在硬链接");
+            }
+            if relative.starts_with("subagents") {
+                let name = entry.file_name().to_str().context("子代理文件名无法核验")?;
+                if name.starts_with("agent-") && name.ends_with(".jsonl") {
+                    child_identity(entry.path(), parent)?;
+                } else if let Some(stem) = name
+                    .strip_suffix(".meta.json")
+                    .filter(|s| s.starts_with("agent-"))
+                {
+                    let transcript = entry.path().with_file_name(format!("{stem}.jsonl"));
+                    child_identity(&transcript, parent)?;
+                    ensure!(meta.len() <= 1024 * 1024, "子代理元数据超出上限");
+                    let _: Value = serde_json::from_slice(&fs::read(entry.path())?)
+                        .context("子代理元数据损坏")?;
+                } else {
+                    anyhow::bail!("子代理目录存在归属不明文件");
+                }
+            }
+            paths.push(entry.path().into());
+        }
+    }
+    let mut hash = Sha256::new();
+    hash.update(parent.as_bytes());
+    let mut bytes = 0;
+    for path in &paths {
+        hash.update(if path == main {
+            b"main".as_slice()
+        } else {
+            path.strip_prefix(&directory)?
+                .as_os_str()
+                .as_encoded_bytes()
+        });
+        hash.update(fingerprint(path)?);
+        bytes += fs::metadata(path)?.len();
+    }
+    for path in &directories {
+        hash.update(
+            path.strip_prefix(&directory)?
+                .as_os_str()
+                .as_encoded_bytes(),
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = fs::metadata(path)?;
+            hash.update(meta.dev().to_le_bytes());
+            hash.update(meta.ino().to_le_bytes());
+        }
+    }
+    Ok(OwnedFiles {
+        paths,
+        fingerprint: hex::encode(hash.finalize()),
+        bytes,
+        directories,
+    })
 }
 fn fingerprint(path: &Path) -> Result<String> {
     fingerprint_prefix(path, u64::MAX)
@@ -66,31 +249,36 @@ fn fingerprint_prefix(path: &Path, limit: u64) -> Result<String> {
     );
     Ok(hex::encode(hash.finalize()))
 }
-fn ensure_inactive(parsed: &Parsed, path: &Path) -> Result<()> {
+fn ensure_inactive(paths: &ClaudePaths, parsed: &Parsed, path: &Path) -> Result<()> {
     ensure!(
-        parsed.issues.is_empty() && parsed.warnings.is_empty(),
+        parsed.issues.is_empty(),
         "Claude 会话格式或身份不明，管理操作已禁用"
     );
     ensure!(
-        !parsed.turn_open
-            && activity::Snapshot::capture().ownership(parsed, path)
-                == activity::Ownership::Inactive,
+        activity::Snapshot::capture(paths).ownership(parsed, path) == activity::Ownership::Inactive,
         "Claude 会话仍被原生进程占用或归属无法确认，请关闭后重试"
     );
     Ok(())
 }
 pub fn preview_claude_delete(paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
     let (path, parsed) = resolve(paths, key)?;
-    checked_path(paths, &path)?;
-    ensure_inactive(&parsed, &path)?;
+    check_delete_path(paths, &path)?;
+    ensure_inactive(paths, &parsed, &path)?;
+    let owned = owned_files(&path, &parsed.id)?;
     Ok(ClaudeDeletePreview {
         session_key: key.into(),
         id: parsed.id.clone(),
         title: parsed.title.clone(),
-        bytes: fs::metadata(&path)?.len(),
-        fingerprint: fingerprint(&path)?,
+        bytes: owned.bytes,
+        fingerprint: owned.fingerprint,
+        paths: owned
+            .paths
+            .iter()
+            .chain(owned.directories.iter())
+            .cloned()
+            .collect(),
         path,
-        file_count: 1,
+        file_count: owned.paths.len(),
     })
 }
 pub fn rename_claude_session(
@@ -107,8 +295,8 @@ pub fn rename_claude_session(
         "名称应为 1 至 200 字符"
     );
     let (path, parsed) = resolve(paths, key)?;
-    checked_path(paths, &path)?;
-    ensure_inactive(&parsed, &path)?;
+    check_rename_path(paths, &path)?;
+    ensure_inactive(paths, &parsed, &path)?;
     let before = fingerprint(&path)?;
     let original_len = fs::metadata(&path)?.len();
     let mut options = OpenOptions::new();
@@ -140,7 +328,7 @@ pub fn rename_claude_session(
         current.id == parsed.id && current.cwd == parsed.cwd,
         "Claude 会话身份已变化"
     );
-    ensure_inactive(&current, &path)?;
+    ensure_inactive(paths, &current, &path)?;
     let bytes = serde_json::to_vec(
         &serde_json::json!({"type":"custom-title","customTitle":title,"sessionId":parsed.id}),
     )?;
@@ -179,27 +367,73 @@ pub fn execute_claude_delete(
         "Claude 会话已变化，请重新预览"
     );
     let (_, parsed) = resolve(paths, &request.session_key)?;
-    checked_path(paths, &preview.path)?;
-    ensure_inactive(&parsed, &preview.path)?;
+    check_delete_path(paths, &preview.path)?;
+    ensure_inactive(paths, &parsed, &preview.path)?;
     let quarantine = preview
         .path
         .with_file_name(format!(".nexushub-delete-{}", uuid::Uuid::new_v4()));
-    fs::rename(&preview.path, &quarantine)
-        .context("Claude 删除无法写入，请核对会话目录权限和 systemd 写入白名单")?;
+    fs::create_dir(&quarantine)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&quarantine, fs::Permissions::from_mode(0o700))?;
+    }
+    let staged = quarantine.join("session.jsonl");
+    let directory = preview.path.with_extension("");
+    let mut moved = Vec::new();
     let result = (|| -> Result<()> {
+        for (source, target) in [
+            (&preview.path, staged.clone()),
+            (&directory, staged.with_extension("")),
+        ] {
+            if !source.try_exists()? {
+                continue;
+            }
+            fs::rename(source, &target)?;
+            moved.push((source.clone(), target));
+        }
+        #[cfg(test)]
+        mutation_checkpoint(&staged)?;
+        let owned = owned_files(&staged, &parsed.id)?;
         ensure!(
-            fingerprint(&quarantine)? == preview.fingerprint,
+            owned.fingerprint == preview.fingerprint,
             "Claude 文件在隔离时发生变化"
         );
-        ensure_inactive(&parsed, &preview.path)?;
-        ensure!(!preview.path.exists(), "Claude 会话已被原生进程重新创建");
-        fs::remove_file(&quarantine)?;
+        ensure_inactive(paths, &parsed, &preview.path)?;
+        let activity = activity::Snapshot::capture(paths);
+        ensure!(
+            owned
+                .paths
+                .iter()
+                .all(|p| activity.ownership(&parsed, p) == activity::Ownership::Inactive),
+            "隔离的 Claude 文件仍被原生进程占用或归属无法确认"
+        );
+        ensure!(
+            !preview.path.try_exists()? && !directory.try_exists()?,
+            "Claude 会话已被原生进程重新创建"
+        );
+        // Unlink only the exact verified inventory. Unknown additions prevent
+        // directory removal and remain recoverable; never recursively erase it.
+        for path in &owned.paths {
+            fs::remove_file(path)?;
+        }
+        for path in owned.directories.iter().rev() {
+            fs::remove_dir(path)?;
+        }
+        fs::remove_dir(&quarantine)?;
+        ensure!(
+            !preview.path.try_exists()? && !directory.try_exists()?,
+            "Claude 会话删除后重新出现"
+        );
         Ok(())
     })();
     if let Err(error) = result {
-        if !preview.path.exists() {
-            let _ = fs::rename(&quarantine, &preview.path);
+        for (source, target) in moved.iter().rev() {
+            if !source.exists() && target.exists() {
+                let _ = fs::rename(target, source);
+            }
         }
+        let _ = fs::remove_dir(&quarantine);
         let location = if quarantine.exists() {
             &quarantine
         } else {
@@ -211,5 +445,17 @@ pub fn execute_claude_delete(
         session_key: request.session_key,
         deleted: true,
         bytes: preview.bytes,
+    })
+}
+
+#[cfg(test)]
+type MutationHook = Box<dyn FnMut(&Path) -> Result<()>>;
+#[cfg(test)]
+thread_local! { pub(super) static TEST_MUTATION: std::cell::RefCell<Option<MutationHook>> = const { std::cell::RefCell::new(None) }; }
+#[cfg(test)]
+fn mutation_checkpoint(path: &Path) -> Result<()> {
+    TEST_MUTATION.with(|slot| match slot.borrow_mut().as_mut() {
+        Some(hook) => hook(path),
+        None => Ok(()),
     })
 }

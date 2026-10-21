@@ -857,6 +857,13 @@
             "type": "PathBuf"
           },
           {
+            "name": "paths",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Vec < PathBuf >"
+          },
+          {
             "name": "fingerprint",
             "serde": [],
             "type": "String"
@@ -1155,6 +1162,46 @@
               "serde (default , skip_serializing_if = \"Option::is_none\")"
             ],
             "type": "Option < String >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      }
+    },
+    "crates/nexushub-core/src/claude/activity.rs": {
+      "Registration": {
+        "fields": [
+          {
+            "name": "pid",
+            "serde": [],
+            "type": "u32"
+          },
+          {
+            "name": "session_id",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "cwd",
+            "serde": [],
+            "type": "PathBuf"
+          },
+          {
+            "name": "proc_start",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "started_at",
+            "serde": [],
+            "type": "i64"
+          },
+          {
+            "name": "pid_domain",
+            "serde": [],
+            "type": "String"
           }
         ],
         "kind": "struct",

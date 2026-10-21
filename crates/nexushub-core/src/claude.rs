@@ -105,6 +105,8 @@ pub struct ClaudeDeletePreview {
     pub id: String,
     pub title: String,
     pub path: PathBuf,
+    #[serde(default)]
+    pub paths: Vec<PathBuf>,
     pub fingerprint: String,
     pub file_count: usize,
     pub bytes: u64,
@@ -286,9 +288,7 @@ fn summary(
     let warning_reason = (!parsed.warnings.is_empty()).then(|| parsed.warnings.join("；"));
     let reason = if let Some(reason) = fatal_reason.clone() {
         Some(reason)
-    } else if let Some(reason) = warning_reason.clone() {
-        Some(reason)
-    } else if parsed.turn_open || owner != activity::Ownership::Inactive {
+    } else if owner != activity::Ownership::Inactive {
         Some("Claude 会话仍被原生进程占用或归属无法确认，请关闭后重试".into())
     } else {
         None
@@ -304,11 +304,21 @@ fn summary(
     };
     /*
      * Fatal parse errors remain the read error and force an unknown status.
-     * Compatibility warnings are shown separately and still guard mutations,
+     * Compatibility warnings are shown separately without blocking mutations,
      * while notification scanning may use their terminal evidence.
      */
     let read_error = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
     let read_warning = warning_reason;
+    let rename_reason = reason.clone().or_else(|| {
+        mutations::check_rename_path(paths, path)
+            .err()
+            .map(|e| e.to_string())
+    });
+    let delete_reason = reason.or_else(|| {
+        mutations::check_delete_path(paths, path)
+            .err()
+            .map(|e| e.to_string())
+    });
     Ok(ClaudeSessionSummary {
         storage_size: None,
         id: parsed.id.clone(),
@@ -321,10 +331,10 @@ fn summary(
         last_message: parsed.last_message.clone(),
         status: status.into(),
         format_version: parsed.version.clone(),
-        can_rename: reason.is_none(),
-        can_delete: reason.is_none(),
-        rename_block_reason: reason.clone(),
-        delete_block_reason: reason,
+        can_rename: rename_reason.is_none(),
+        can_delete: delete_reason.is_none(),
+        rename_block_reason: rename_reason,
+        delete_block_reason: delete_reason,
         read_error,
         read_warning,
     })
@@ -334,7 +344,7 @@ pub fn list_claude_sessions(
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<ClaudeSessionSummary>> {
-    let snapshot = activity::Snapshot::capture();
+    let snapshot = activity::Snapshot::capture(paths);
     let needle = query.unwrap_or("").trim().to_lowercase();
     let mut result = Vec::new();
     for path in files(paths)? {
@@ -396,7 +406,7 @@ fn attach_storage_size(paths: &ClaudePaths, summary: &mut ClaudeSessionSummary) 
 }
 pub fn claude_session_summary(paths: &ClaudePaths, key: &str) -> Result<ClaudeSessionSummary> {
     let (path, parsed) = resolve(paths, key)?;
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture(paths))?;
     attach_storage_size(paths, &mut summary);
     Ok(summary)
 }
@@ -433,7 +443,7 @@ pub fn claude_session_detail(
             user.refresh_files(Some(&parsed.cwd));
         }
     }
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture(paths))?;
     attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),
