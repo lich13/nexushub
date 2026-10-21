@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { executeSessionBatch, previewSessionBatch, type SessionBatchPreview, type SessionBatchResult, type SessionOperation, type SessionProvider } from "../api/sessions";
 import { useConnection } from "./connection";
+import { getSystemCapabilities } from "../api/system";
 import { addSessionSelection, clickSessionSelection, emptySessionSelection, syncSessionSelection, type SessionClick } from "../domain/sessionSelection";
 
 export function useSessionSelection(provider: SessionProvider, filterKey: string, keys: string[], onSucceeded?: (keys: string[], operation: SessionOperation) => void) {
@@ -21,7 +22,10 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const operation = typeof input === "string" ? input : input.operation;
       const sessionKeys = typeof input === "string" ? selection : input.keys;
       const generation = epoch.current.value;
-      return { generation, response: await previewSessionBatch({ provider, operation, sessionKeys }) };
+      const includeDescendants = provider === "codex" && operation === "delete";
+      if (includeDescendants && !(await getSystemCapabilities()).capabilities.codex_delete_tree) throw new Error("当前服务不支持整树删除，请先升级服务");
+      if (generation !== epoch.current.value) throw new Error("选择范围已变化，请重新预览");
+      return { generation, response: await previewSessionBatch({ provider, operation, sessionKeys, ...(includeDescendants ? { includeDescendants: true } : {}) }) };
     },
     onSuccess: ({ generation, response }) => { if (generation === epoch.current.value) setPreview(response); }
   });
@@ -32,11 +36,11 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const request = preview;
       // Every attempt consumes its preview, including an uncertain transport failure.
       setPreview(null);
-      const response = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: request.items.filter(i => i.allowed && i.fingerprint).map(i => ({ sessionKey: i.sessionKey, fingerprint: i.fingerprint! })), confirmed: true });
+      const response = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: request.items.filter(i => i.allowed && i.fingerprint).map(i => ({ sessionKey: i.sessionKey, fingerprint: i.fingerprint! })), confirmed: true, ...(request.provider === "codex" && request.operation === "delete" ? { includeDescendants: true } : {}) });
       return { response, generation, operation: request.operation };
     },
     onSuccess: ({ response, generation, operation }) => {
-      const succeeded = response.items.filter(i => i.status === "succeeded").map(i => i.sessionKey);
+      const succeeded = [...new Set(response.items.flatMap(i => [...(i.status === "succeeded" ? [i.sessionKey] : []), ...(i.deletedIds ?? [])]))];
       if (generation === epoch.current.value) {
         onSucceeded?.(succeeded, operation);
         setResult(response);

@@ -6842,6 +6842,13 @@
               "serde (default)"
             ],
             "type": "bool"
+          },
+          {
+            "name": "include_descendants",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -6890,6 +6897,20 @@
             "name": "fingerprint",
             "serde": [],
             "type": "Option < String >"
+          },
+          {
+            "name": "descendants",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
+          },
+          {
+            "name": "warnings",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -6913,6 +6934,20 @@
             "name": "message",
             "serde": [],
             "type": "Option < String >"
+          },
+          {
+            "name": "deleted_ids",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
+          },
+          {
+            "name": "residuals",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -6959,6 +6994,13 @@
             "name": "session_keys",
             "serde": [],
             "type": "Vec < String >"
+          },
+          {
+            "name": "include_descendants",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "bool"
           }
         ],
         "kind": "struct",
@@ -7526,6 +7568,11 @@
           },
           {
             "fields": [],
+            "name": "CodexDeleteTree",
+            "serde": []
+          },
+          {
+            "fields": [],
             "name": "ThreadArchiveActions",
             "serde": []
           },
@@ -7648,6 +7695,13 @@
           },
           {
             "name": "hidden_cleanup_scan",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "codex_delete_tree",
             "serde": [
               "serde (default)"
             ],
@@ -10389,11 +10443,11 @@
       "types": {
         "SessionAttachmentRequest": "exporttypeSessionAttachmentRequest={rootThreadId?:string;provider:SessionProvider;sessionKey:string;messageId:string;attachmentId:string};",
         "SessionAttachmentResponse": "exporttypeSessionAttachmentResponse={mimeType:string;base64:string};",
-        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint:string}>;confirmed:boolean};",
-        "SessionBatchItem": "exporttypeSessionBatchItem={sessionKey:string;id:string;title:string;paths:string[];bytes:number;allowed:boolean;reason:string|null;fingerprint:string|null};",
+        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint:string}>;confirmed:boolean;includeDescendants?:boolean};",
+        "SessionBatchItem": "exporttypeSessionBatchItem={sessionKey:string;id:string;title:string;paths:string[];bytes:number;allowed:boolean;reason:string|null;fingerprint:string|null;descendants?:string[];warnings?:string[]};",
         "SessionBatchPreview": "exporttypeSessionBatchPreview={provider:SessionProvider;operation:SessionOperation;items:SessionBatchItem[]};",
-        "SessionBatchRequest": "exporttypeSessionBatchRequest={provider:SessionProvider;operation:SessionOperation;sessionKeys:string[]};",
-        "SessionBatchResult": "exporttypeSessionBatchResult={items:Array<{sessionKey:string;status:\"succeeded\"|\"blocked\"|\"failed\";message:string|null}>};",
+        "SessionBatchRequest": "exporttypeSessionBatchRequest={provider:SessionProvider;operation:SessionOperation;sessionKeys:string[];includeDescendants?:boolean};",
+        "SessionBatchResult": "exporttypeSessionBatchResult={items:Array<{sessionKey:string;status:\"succeeded\"|\"blocked\"|\"failed\";message:string|null;deletedIds?:string[];residuals?:string[]}>};",
         "SessionOperation": "exporttypeSessionOperation=\"archive\"|\"restore\"|\"delete\";",
         "SessionProvider": "exporttypeSessionProvider=\"codex\"|\"grok\"|\"claude_code\";"
       }
@@ -10520,7 +10574,7 @@
         "SubagentCollection": "exporttypeSubagentCollection={agents:SubagentActivity[];counts:Record<SubagentActivity[\"status\"],number>;complete:boolean;warning?:string|null;};",
         "SubagentDetailRequest": "exporttypeSubagentDetailRequest={rootThreadId:string;agentId:string;limit?:number;before?:string|null;};",
         "SubagentDetailResponse": "exporttypeSubagentDetailResponse={rootThreadId:string;parentThreadId:string;agent:SubagentActivity;detail:ThreadDetail;};",
-        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
+        "SystemCapabilities": "exporttypeSystemCapabilities={threads:boolean;jobs:boolean;probe:boolean;settings:boolean;job_history:boolean;app_updater:boolean;systemd:boolean;linux_update_job:boolean;prune_backups:boolean;thread_cleanup?:boolean;hidden_cleanup_scan?:boolean;codex_delete_tree?:boolean;codex_desktop?:boolean;thread_archive_actions?:boolean;thread_subagents?:boolean;};",
         "SystemCapabilitiesResponse": "exporttypeSystemCapabilitiesResponse={api_version:number;host_surface:HostSurface;capabilities:SystemCapabilities;};",
         "SystemVersion": "exporttypeSystemVersion={panel_current:string;panel_latest?:string|null;panel_update_available?:boolean|null;codex_current?:string|null;codex_latest?:string|null;codex_update_available?:boolean|null;codex_user?:string|null;codex_root?:string|null;codex_raw?:string|null;};",
         "ThreadBlockPage": "exporttypeThreadBlockPage={history?:HistoryMetadata|null;thread_id:string;blocks:MessageBlock[];total_blocks:number;has_more_blocks:boolean;before_cursor?:string|null;};",

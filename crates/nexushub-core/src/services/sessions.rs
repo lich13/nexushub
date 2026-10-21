@@ -32,6 +32,8 @@ pub struct SessionBatchRequest {
     pub provider: SessionProvider,
     pub operation: SessionOperation,
     pub session_keys: Vec<String>,
+    #[serde(default)]
+    pub include_descendants: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,10 @@ pub struct SessionBatchItem {
     pub allowed: bool,
     pub reason: Option<String>,
     pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descendants: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +76,8 @@ pub struct SessionBatchExecuteRequest {
     pub items: Vec<SessionBatchSelection>,
     #[serde(default)]
     pub confirmed: bool,
+    #[serde(default)]
+    pub include_descendants: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +86,10 @@ pub struct SessionBatchItemResult {
     pub session_key: String,
     pub status: String,
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub residuals: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,15 +181,16 @@ impl SessionUseCases {
             .session_keys
             .iter()
             .map(|key| {
-                self.preview_one(request.provider, request.operation, key, grok.as_ref())
-                    .unwrap_or_else(|error| {
-                        self.blocked_item(
-                            request.provider,
-                            key,
-                            format!("{error:#}"),
-                            grok.as_ref(),
-                        )
-                    })
+                self.preview_one(
+                    request.provider,
+                    request.operation,
+                    key,
+                    request.include_descendants,
+                    grok.as_ref(),
+                )
+                .unwrap_or_else(|error| {
+                    self.blocked_item(request.provider, key, format!("{error:#}"), grok.as_ref())
+                })
             })
             .collect();
         Ok(SessionBatchPreview {
@@ -203,6 +216,8 @@ impl SessionUseCases {
             allowed: false,
             reason: Some(reason),
             fingerprint: None,
+            descendants: vec![],
+            warnings: vec![],
         };
         let summary = match provider {
             SessionProvider::Claude => crate::claude::claude_session_summary(&self.claude, key)
@@ -254,8 +269,11 @@ impl SessionUseCases {
         provider: SessionProvider,
         operation: SessionOperation,
         key: &str,
+        include_descendants: bool,
         grok: Option<&grok::DeletionContext<'_>>,
     ) -> Result<SessionBatchItem> {
+        let mut descendants = Vec::new();
+        let mut warnings = Vec::new();
         let (id, title, paths, bytes, fingerprint) = match provider {
             SessionProvider::Claude => {
                 let p = crate::claude::preview_claude_delete(&self.claude, key)?;
@@ -267,7 +285,11 @@ impl SessionUseCases {
                     "线程身份无法确认为主任务"
                 );
                 if operation == SessionOperation::Delete {
-                    let p = selected_codex::preview_delete(&self.codex, key)?;
+                    let tree =
+                        selected_codex::tree::preview(&self.codex, key, include_descendants)?;
+                    descendants = tree.ids.into_iter().filter(|id| id != key).collect();
+                    warnings = tree.warnings;
+                    let p = tree.selected;
                     (p.id, p.title, p.paths, p.bytes, p.fingerprint)
                 } else {
                     let p = selected_codex::preview_archive(
@@ -295,6 +317,8 @@ impl SessionUseCases {
             allowed: true,
             reason: None,
             fingerprint: Some(fingerprint),
+            descendants,
+            warnings,
         })
     }
 
@@ -321,9 +345,26 @@ impl SessionUseCases {
             "缺少预览指纹，请重新预览"
         );
         let mut results = Vec::with_capacity(request.items.len());
+        let mut storage_failed = false;
         for item in &request.items {
+            if storage_failed {
+                results.push(SessionBatchItemResult {
+                    session_key: item.session_key.clone(),
+                    status: "blocked".into(),
+                    message: Some("共享存储核验失败，已停止后续删除，请检查后重新预览".into()),
+                    deleted_ids: vec![],
+                    residuals: vec![],
+                });
+                continue;
+            }
             let check = self
-                .preview_one(request.provider, request.operation, &item.session_key, None)
+                .preview_one(
+                    request.provider,
+                    request.operation,
+                    &item.session_key,
+                    request.include_descendants,
+                    None,
+                )
                 .and_then(|current| {
                     ensure!(
                         current.fingerprint.as_deref() == Some(&item.fingerprint),
@@ -336,6 +377,43 @@ impl SessionUseCases {
                     session_key: item.session_key.clone(),
                     status: "blocked".into(),
                     message: Some(format!("{error:#}")),
+                    deleted_ids: vec![],
+                    residuals: vec![],
+                });
+                continue;
+            }
+            if request.provider == SessionProvider::Codex
+                && request.operation == SessionOperation::Delete
+            {
+                let outcome = selected_codex::tree::execute(
+                    &self.codex,
+                    &item.session_key,
+                    request.include_descendants,
+                    &item.fingerprint,
+                );
+                results.push(match outcome {
+                    Ok(outcome) => {
+                        storage_failed = outcome.storage_failure;
+                        SessionBatchItemResult {
+                            session_key: item.session_key.clone(),
+                            status: if outcome.error.is_none() {
+                                "succeeded"
+                            } else {
+                                "failed"
+                            }
+                            .into(),
+                            message: outcome.error,
+                            deleted_ids: outcome.deleted_ids,
+                            residuals: outcome.residuals,
+                        }
+                    }
+                    Err(error) => SessionBatchItemResult {
+                        session_key: item.session_key.clone(),
+                        status: "blocked".into(),
+                        message: Some(format!("{error:#}")),
+                        deleted_ids: vec![],
+                        residuals: vec![],
+                    },
                 });
                 continue;
             }
@@ -350,12 +428,7 @@ impl SessionUseCases {
                 )
                 .map(|_| ()),
                 (SessionProvider::Codex, SessionOperation::Delete) => {
-                    selected_codex::execute_delete(
-                        &self.codex,
-                        &item.session_key,
-                        &item.fingerprint,
-                    )
-                    .map(|_| ())
+                    unreachable!("Codex deletion is handled by the tree verifier above")
                 }
                 (SessionProvider::Codex, action) => selected_codex::execute_archive(
                     &self.codex,
@@ -382,6 +455,8 @@ impl SessionUseCases {
                 }
                 .into(),
                 message: result.err().map(|e| format!("{e:#}")),
+                deleted_ids: vec![],
+                residuals: vec![],
             });
         }
         Ok(SessionBatchResult { items: results })

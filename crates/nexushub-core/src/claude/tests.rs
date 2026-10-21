@@ -405,6 +405,7 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
     let unknown = format!("claude:{}", "f".repeat(64));
     let preview = cases
         .bulk_preview(SessionBatchRequest {
+            include_descendants: false,
             provider: SessionProvider::Claude,
             operation: SessionOperation::Delete,
             session_keys: vec![f.key(), unknown.clone()],
@@ -414,6 +415,7 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
     assert!(!preview.items[1].allowed);
     let result = cases
         .bulk_execute(SessionBatchExecuteRequest {
+            include_descendants: false,
             provider: SessionProvider::Claude,
             operation: SessionOperation::Delete,
             confirmed: true,

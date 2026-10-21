@@ -73,6 +73,7 @@ pub enum Capability {
     JobHistory,
     AppUpdater,
     ThreadCleanup,
+    CodexDeleteTree,
     ThreadArchiveActions,
     Systemd,
     LinuxUpdateJob,
@@ -90,6 +91,7 @@ impl Capability {
         Capability::JobHistory,
         Capability::AppUpdater,
         Capability::ThreadCleanup,
+        Capability::CodexDeleteTree,
         Capability::ThreadArchiveActions,
         Capability::Systemd,
         Capability::LinuxUpdateJob,
@@ -111,6 +113,7 @@ impl Capability {
             Self::JobHistory => "job_history",
             Self::AppUpdater => "app_updater",
             Self::ThreadCleanup => "thread_cleanup",
+            Self::CodexDeleteTree => "codex_delete_tree",
             Self::ThreadArchiveActions => "thread_archive_actions",
             Self::Systemd => "systemd",
             Self::LinuxUpdateJob => "linux_update_job",
@@ -138,6 +141,7 @@ impl Capability {
             | Self::Settings
             | Self::JobHistory
             | Self::ThreadCleanup
+            | Self::CodexDeleteTree
             | Self::ThreadArchiveActions => linux_server_api || desktop_embedded,
             Self::AppUpdater => linux_server_api || desktop_embedded,
             Self::Systemd | Self::LinuxUpdateJob | Self::PruneBackups => linux_server_api,
@@ -160,6 +164,8 @@ pub struct SystemCapabilities {
     pub thread_cleanup: bool,
     #[serde(default)]
     pub hidden_cleanup_scan: bool,
+    #[serde(default)]
+    pub codex_delete_tree: bool,
     pub thread_archive_actions: bool,
     pub systemd: bool,
     pub linux_update_job: bool,
@@ -257,6 +263,8 @@ pub fn system_capabilities_for_surface(
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),
         thread_cleanup: Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface),
         hidden_cleanup_scan: Capability::ThreadCleanup
+            .is_supported_on_surface(platform, host_surface),
+        codex_delete_tree: Capability::CodexDeleteTree
             .is_supported_on_surface(platform, host_surface),
         thread_archive_actions: Capability::ThreadArchiveActions
             .is_supported_on_surface(platform, host_surface),

@@ -14,6 +14,7 @@
     "job_history",
     "app_updater",
     "thread_cleanup",
+    "codex_delete_tree",
     "thread_archive_actions",
     "systemd",
     "linux_update_job",
@@ -29,6 +30,7 @@
       "job_history",
       "app_updater",
       "thread_cleanup",
+      "codex_delete_tree",
       "thread_archive_actions",
       "systemd",
       "linux_update_job",
@@ -44,6 +46,7 @@
       "job_history",
       "app_updater",
       "thread_cleanup",
+      "codex_delete_tree",
       "thread_archive_actions"
     ]
   },

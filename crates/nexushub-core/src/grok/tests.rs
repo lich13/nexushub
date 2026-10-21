@@ -349,6 +349,7 @@ fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_file
     };
     let batch = sessions
         .bulk_preview(crate::services::sessions::SessionBatchRequest {
+            include_descendants: false,
             provider: crate::services::sessions::SessionProvider::Grok,
             operation: crate::services::sessions::SessionOperation::Delete,
             session_keys: vec![id.clone()],
