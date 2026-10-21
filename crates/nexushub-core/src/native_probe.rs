@@ -11,6 +11,21 @@ use std::{
     path::Path,
 };
 
+pub(crate) fn notification_title(title: &str, id: &str, cwd: &str) -> String {
+    if !title.trim().is_empty()
+        && title != id
+        && !matches!(title.trim(), "未命名会话" | "未命名线程")
+    {
+        title.into()
+    } else {
+        Path::new(cwd)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NativeProvider {
@@ -37,7 +52,9 @@ impl NativeProvider {
         match (self, kind) {
             (Self::Claude, "completion") => config.probe.notifications.notify_claude_completion,
             (Self::Claude, "failure") => config.probe.notifications.notify_claude_failure,
-            (Self::Claude, "reply_needed") => config.probe.notifications.notify_claude_reply_needed,
+            (Self::Claude, "reply_needed" | "authorization") => {
+                config.probe.notifications.notify_claude_reply_needed
+            }
             (Self::Grok, "completion") => config.probe.notifications.notify_grok_completion,
             (Self::Grok, "failure") => config.probe.notifications.notify_grok_failure,
             _ => false,
@@ -47,6 +64,8 @@ impl NativeProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeTurnEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
     pub position: u64,
     pub turn_id: String,
     pub kind: String,
@@ -74,6 +93,12 @@ impl NativeStreamSnapshot {
             self.identity
         )))
     }
+    pub fn prompt_event_key(&self, prompt: &str, kind: &str, instance: &str) -> String {
+        hex::encode(Sha256::digest(format!(
+            "claude-prompt\0{instance}\0{}\0{prompt}\0{kind}",
+            self.key()
+        )))
+    }
     pub fn event_key(&self, event: &NativeTurnEvent) -> String {
         hex::encode(Sha256::digest(format!(
             "{}\0{}\0{}",
@@ -88,6 +113,25 @@ impl NativeStreamSnapshot {
 pub struct NativeScan {
     pub streams: Vec<NativeStreamSnapshot>,
     pub errors: usize,
+}
+
+pub fn event_category(event: &NativeTurnEvent) -> &str {
+    if event.kind == "reply_needed" && event.turn_id.contains(":permission:") {
+        "authorization"
+    } else {
+        &event.kind
+    }
+}
+pub fn same_event(current: &NativeTurnEvent, queued: &NativeTurnEvent) -> bool {
+    current.position == queued.position
+        && current.turn_id == queued.turn_id
+        && event_category(current) == event_category(queued)
+        && current.body == queued.body
+        && current.timestamp_ms == queued.timestamp_ms
+        && queued
+            .prompt_id
+            .as_ref()
+            .is_none_or(|p| current.prompt_id.as_ref() == Some(p))
 }
 
 pub fn file_identity(path: &Path) -> Result<String> {
@@ -111,7 +155,7 @@ pub fn file_identity(path: &Path) -> Result<String> {
 pub fn retry_event_is_current(provider: NativeProvider, id: &str, event: &NativeTurnEvent) -> bool {
     match provider {
         NativeProvider::Grok => crate::grok::notification_event_current(id, event.position),
-        NativeProvider::Claude => true, // Claude snapshots retain only the current native turn.
+        NativeProvider::Claude => true, // Claude snapshots retain terminal events on the valid branch.
     }
 }
 
@@ -340,6 +384,7 @@ pub(crate) fn grok_events(
                     continue;
                 }
                 result.push(NativeTurnEvent {
+                    prompt_id: None,
                     position: position as u64 + 1,
                     turn_id: format!(
                         "{}:{prompt}",
@@ -359,6 +404,20 @@ pub(crate) fn grok_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_subject_uses_project_when_native_title_is_missing() {
+        for title in ["", "fixture-id", "未命名会话", "未命名线程"] {
+            assert_eq!(
+                notification_title(title, "fixture-id", "/fixture/project"),
+                "project"
+            );
+        }
+        assert_eq!(
+            notification_title("Named session", "fixture-id", "/fixture/project"),
+            "Named session"
+        );
+    }
     use serde_json::json;
     fn grok_fixture(outcome: &str, stop: &str, relationship: &str) -> (Vec<Value>, Vec<Value>) {
         let id = "session";

@@ -249,6 +249,7 @@ impl Fixture {
 
     fn request(&self) -> ProbeBarkRequest {
         ProbeBarkRequest {
+            presentation: None,
             title: "完成 · 中文 fixture".into(),
             body: BODY.into(),
             dedupe_key: "fixture-event".into(),
@@ -282,6 +283,7 @@ impl Fixture {
             thread_id: "fixture-native-thread".into(),
             title: "原生测试线程".into(),
             event: NativeTurnEvent {
+                prompt_id: None,
                 position: 3,
                 turn_id: "fixture-native-turn".into(),
                 kind: kind.into(),
@@ -405,6 +407,7 @@ async fn an_initial_lease_claimed_elsewhere_stays_retrying_at_repeated_entrances
         &fixture.config,
         &fixture.db,
         Source::Codex {
+            original_body: None,
             event: Box::new(event.clone()),
             fingerprint: codex_fingerprint(&fixture.config, &event),
         },
@@ -508,14 +511,14 @@ async fn bark_delivers_native_grok_and_claude_events_without_replaying_them() {
         assert!(bark.sent);
         let requests = fixture.bark.requests();
         assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0].body["body"],
-            format!("{BODY}\n\n线程 ID：fixture-native-thread\n回合：fixture-native-turn")
-        );
-        assert!(requests[0].body["title"]
-            .as_str()
-            .unwrap()
-            .contains(provider.as_str()));
+        assert_eq!(requests[0].body["body"], BODY);
+        assert!(requests[0].body["title"].as_str().unwrap().contains(
+            if provider == NativeProvider::Claude {
+                "Claude Code"
+            } else {
+                "Grok"
+            }
+        ));
         let reopened = PanelDb::open(fixture.db.path()).unwrap();
         let duplicate = native(&fixture.config, &reopened, &delivery, REQUEST_TIMEOUT)
             .await
@@ -767,6 +770,7 @@ async fn retry_reloads_configuration_after_source_validation_before_sending() {
             &fixture.config,
             &fixture.db,
             Source::Codex {
+                original_body: None,
                 event: Box::new(event.clone()),
                 fingerprint: codex_fingerprint(&fixture.config, &event),
             },
@@ -1102,9 +1106,33 @@ async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_ch
         "丙".repeat(900)
     );
     let key = codex_key(&event);
-    let first = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    // Simulate an already-encrypted pre-upgrade payload, including its saved chunks.
+    let mut candidate = queued_candidate(
+        &fixture.config,
+        &fixture.db,
+        Source::Codex {
+            original_body: None,
+            event: Box::new(event.clone()),
+            fingerprint: codex_fingerprint(&fixture.config, &event),
+        },
+        fixture.request(),
+        fixture.event_ms(),
+    )
+    .unwrap();
+    candidate.request.body = event.bark_body.clone();
+    candidate.chunks =
+        crate::bark_body_chunks(&event.bark_body, crate::PROBE_BARK_BODY_CHUNK_BYTES);
+    let first = deliver(
+        &fixture.config,
+        &fixture.db,
+        &key,
+        NotificationChannel::Bark,
+        &candidate,
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.status.as_deref(), Some("waiting_retry"));
     assert!(first.chunk_count >= 3);
     assert_eq!(first.confirmed_chunks, 1);

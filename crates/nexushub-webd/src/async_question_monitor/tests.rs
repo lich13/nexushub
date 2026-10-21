@@ -143,7 +143,7 @@ async fn ongoing_question_is_delivered_once_across_hook_monitor_restart_and_ttl(
     monitor.unwrap();
     let payloads = fixture.requests.lock().unwrap().clone();
     assert_eq!(payloads.len(), 1);
-    assert_eq!(payloads[0]["title"], "等待回复：Question fixture");
+    assert_eq!(payloads[0]["title"], "Codex｜需要回复｜Question fixture");
     assert!(payloads[0]["body"]
         .as_str()
         .unwrap()

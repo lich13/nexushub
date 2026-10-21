@@ -88,3 +88,8 @@ async function startProbeCommand(
   const result = await callCommand<{ job_id?: string | null; jobId?: string | null }>(command, {});
   return jobIdFromRuntimeResult(result, fallback);
 }
+
+export async function manageClaudeHooks(action: import("../../types").ClaudeHooksAction, confirmed = false): Promise<import("../../types").ClaudeHooksStatus> {
+  if (USE_DEMO) return { installed: false, managedCount: 0, changed: false };
+  return callCommand("claude.hooks", { request: { action, confirmed } });
+}

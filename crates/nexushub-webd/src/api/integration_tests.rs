@@ -3431,6 +3431,7 @@ mod maintenance_security {
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.base.clone();
             let request = crate::ProbeBarkRequest {
+                presentation: None,
                 title: TITLE.into(),
                 body: BODY.into(),
                 dedupe_key: "fixture-maintenance-notification".into(),

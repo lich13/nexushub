@@ -25,7 +25,12 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
         } else {
             NativeScan::default()
         };
-        db.stage_native_notifications(provider, &scan, config)?;
+        db.stage_native_notifications_with_hooks(
+            provider,
+            &scan,
+            config,
+            super::claude_hook::installed(),
+        )?;
         snapshots.extend(scan.streams);
     }
     deliver_pending(config, db, &snapshots).await
@@ -55,14 +60,19 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Option<NativeScan>>,
 {
-    for delivery in db.pending_native_deliveries(100)? {
+    let deliveries = db.pending_native_deliveries(100)?;
+    let instance = db.notification_instance_id()?;
+    let fresh = if deliveries
+        .iter()
+        .any(|d| d.provider == NativeProvider::Claude)
+    {
+        read_claude().await
+    } else {
+        None
+    };
+    for delivery in deliveries {
         // Identity and branch are resolved by each native parser. Codex's
         // main-task identity filter must never be applied to these providers.
-        let fresh = if delivery.provider == NativeProvider::Claude {
-            read_claude().await
-        } else {
-            None
-        };
         let candidates = if delivery.provider == NativeProvider::Claude {
             fresh.as_ref().map(|s| s.streams.as_slice()).unwrap_or(&[])
         } else {
@@ -73,7 +83,15 @@ where
                 && stream.session_key == delivery.session_key
                 && stream.id == delivery.thread_id
                 && stream.events.iter().any(|event| {
-                    stream.event_key(event) == delivery.event_key && *event == delivery.event
+                    (stream.event_key(&delivery.event) == delivery.event_key
+                        || event.prompt_id.as_deref().is_some_and(|p| {
+                            stream.prompt_event_key(
+                                p,
+                                native_probe::event_category(event),
+                                &instance,
+                            ) == delivery.event_key
+                        }))
+                        && native_probe::same_event(event, &delivery.event)
                 })
         });
         if !db.claim_native_delivery(&delivery.event_key)? {
@@ -125,6 +143,7 @@ mod tests {
                 record_count: 2,
                 settled_count: 2,
                 events: vec![NativeTurnEvent {
+                    prompt_id: None,
                     position: 2,
                     turn_id: "fixture-turn".into(),
                     kind: "completion".into(),
@@ -148,7 +167,10 @@ mod tests {
             );
             let mut fresh = scan.clone();
             match change {
-                "new_turn" => fresh.streams[0].events.clear(),
+                "new_turn" => {
+                    fresh.streams[0].record_count += 1;
+                    fresh.streams[0].settled_count += 1;
+                }
                 "identity" => fresh.streams[0].identity = "fixture-replaced".into(),
                 "unreadable" => fresh.streams.clear(),
                 _ => {}
@@ -162,9 +184,13 @@ mod tests {
             assert_eq!(events.len(), 1);
             assert_eq!(
                 events[0].payload["bark_status"],
-                if change == "none" { "sent" } else { "skipped" }
+                if matches!(change, "none" | "new_turn") {
+                    "sent"
+                } else {
+                    "skipped"
+                }
             );
-            if change == "none" {
+            if matches!(change, "none" | "new_turn") {
                 assert!(server.request().contains("Fixture completed"));
             }
             db.recover_interrupted_native_deliveries().unwrap();
@@ -199,6 +225,7 @@ mod tests {
                 record_count: 2,
                 settled_count: 2,
                 events: vec![NativeTurnEvent {
+                    prompt_id: None,
                     position: 2,
                     turn_id: "native-turn".into(),
                     kind: kind.into(),
@@ -225,10 +252,13 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("Final fixture answer"));
-            assert!(capture["title"]
-                .as_str()
-                .unwrap()
-                .contains(provider.as_str()));
+            assert!(capture["title"].as_str().unwrap().contains(
+                if provider == NativeProvider::Claude {
+                    "Claude Code"
+                } else {
+                    "Grok"
+                }
+            ));
             let events = db.list_probe_events(10).unwrap();
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].payload["provider"], provider.as_str());
@@ -271,6 +301,7 @@ mod tests {
             record_count: 2,
             settled_count: 2,
             events: vec![NativeTurnEvent {
+                prompt_id: None,
                 position: 2,
                 turn_id: "u:a".into(),
                 kind: "completion".into(),

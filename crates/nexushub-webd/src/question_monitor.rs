@@ -284,7 +284,7 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_str(&requests.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
         assert!(payload["body"].as_str().unwrap().contains("请确认测试结果"));
-        assert_eq!(payload["title"], "等待回复：Feedback fixture");
+        assert_eq!(payload["title"], "Codex｜需要回复｜Feedback fixture");
         run(&fixture.config, &fixture.db).await.unwrap();
         assert!(requests.recv_timeout(Duration::from_millis(150)).is_err());
     }

@@ -221,15 +221,45 @@ impl PanelDb {
         event_ms: i64,
         payload: &Value,
     ) -> Result<bool> {
+        self.stage_notification_delivery_with_aliases(channel, key, event_ms, payload, &[])
+    }
+
+    pub fn stage_notification_delivery_with_aliases(
+        &self,
+        channel: NotificationChannel,
+        key: &str,
+        event_ms: i64,
+        payload: &Value,
+        aliases: &[String],
+    ) -> Result<bool> {
         let (ciphertext, nonce) = self.crypto.encrypt(&serde_json::to_vec(payload)?)?;
         let now = Utc::now().timestamp_millis();
-        let conn = self.conn.lock().expect("db mutex");
-        let eligible = conn.query_row("SELECT enabled=1 AND ?2>=activated_ms FROM probe_notification_channels WHERE channel=?1", params![channel.as_str(),event_ms], |r|r.get::<_,bool>(0)).optional()?.unwrap_or(false);
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for alias in aliases.iter().filter(|alias| alias.as_str() != key) {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel=?1 AND event_key=?2)", params![channel.as_str(),alias], |r| r.get(0))?;
+            if exists {
+                return Ok(false);
+            }
+            if let Some(native) = alias.strip_prefix("native:") {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM native_probe_deliveries WHERE event_key=?1)",
+                    [native],
+                    |r| r.get(0),
+                )?;
+                if exists {
+                    return Ok(false);
+                }
+            }
+        }
+        let eligible = tx.query_row("SELECT enabled=1 AND ?2>=activated_ms FROM probe_notification_channels WHERE channel=?1", params![channel.as_str(),event_ms], |r|r.get::<_,bool>(0)).optional()?.unwrap_or(false);
         if !eligible {
             return Ok(false);
         }
         let chunks = payload["chunks"].as_array().map_or(1, Vec::len).max(1);
-        Ok(conn.execute("INSERT OR IGNORE INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,created_ms,updated_ms,queue_version,chunk_count) VALUES(?1,?2,?3,?4,'pending',?5,?5,1,?6)", params![key,channel.as_str(),ciphertext,nonce,now,chunks])? > 0)
+        let staged = tx.execute("INSERT OR IGNORE INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,created_ms,updated_ms,queue_version,chunk_count) VALUES(?1,?2,?3,?4,'pending',?5,?5,1,?6)", params![key,channel.as_str(),ciphertext,nonce,now,chunks])? > 0;
+        tx.commit()?;
+        Ok(staged)
     }
 
     pub fn notification_instance_id(&self) -> Result<String> {

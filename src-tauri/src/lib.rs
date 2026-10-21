@@ -55,6 +55,7 @@ pub fn run() {
         commands::settings::getProbeEvents,
         commands::settings::probeBarkTest,
         commands::settings::probeInstallHooks,
+        commands::settings::claudeHooks,
         commands::settings::dryRunArchiveDelete,
         commands::settings::startArchiveDelete,
         commands::settings::dryRunHiddenThreadDelete,

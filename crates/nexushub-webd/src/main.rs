@@ -1,7 +1,9 @@
 use nexushub_core::shell::{shell_quote, QuoteStyle};
+mod claude_hook;
 mod cli;
 mod hooks;
 mod monitor_start;
+mod notification_format;
 use cli::*;
 use hooks::*;
 use monitor_start::*;
@@ -56,6 +58,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
+#[cfg(test)]
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
 const PROBE_ERROR_MONITOR_CURSOR_SETTING: &str = "probe_error_monitor_cursor";
@@ -75,7 +78,19 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if matches!(cli.command, Command::ClaudeHook) {
+        // A hook never blocks Claude, emits decisions, or leaks payloads to logs.
+        // Force exit also bounds any filesystem/stdin work in blocking tasks.
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(5));
+            std::process::exit(0);
+        });
+        let _ =
+            tokio::time::timeout(Duration::from_millis(4800), claude_hook::run(&cli.config)).await;
+        std::process::exit(0);
+    }
     match cli.command {
+        Command::ClaudeHook => unreachable!(),
         Command::InitConfig => {
             Config::write_default(&cli.config)?;
             println!("wrote {}", cli.config.display());
@@ -729,6 +744,8 @@ struct HookStopResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProbeBarkRequest {
+    #[serde(default)]
+    presentation: Option<notification_format::Presentation>,
     title: String,
     body: String,
     dedupe_key: String,
@@ -1025,6 +1042,7 @@ async fn send_bark_notification(
     Ok(outcome)
 }
 
+#[cfg(test)]
 fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
     if value.is_empty() || max_bytes == 0 {
         return vec![String::new()];
@@ -1049,6 +1067,7 @@ fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
     chunks
 }
 
+#[cfg(test)]
 fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || max_bytes == 0 {
@@ -1066,6 +1085,7 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
 }
@@ -3242,6 +3262,7 @@ last_error = "old nexushub request hook"
         config.probe.notifications.url = Some("https://panel.example.com/nexushub/".to_string());
 
         let request = ProbeBarkRequest {
+            presentation: None,
             title: "NexusHub 推送测试".to_string(),
             body: "来自本机的测试通知。".to_string(),
             dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
@@ -3288,6 +3309,7 @@ last_error = "old nexushub request hook"
         config.probe.notifications.group = "Probe Group".to_string();
 
         let request = ProbeBarkRequest {
+            presentation: None,
             title: "NexusHub Probe long body".to_string(),
             body: "完成".repeat(4_000),
             dedupe_key: "hook-stop:thread-a:turn-long".to_string(),
@@ -3342,7 +3364,7 @@ last_error = "old nexushub request hook"
     }
 
     #[tokio::test]
-    async fn bark_delivery_uses_full_event_body_not_truncated_summary() {
+    async fn bark_delivery_sends_one_bounded_summary_without_ids_or_chunks() {
         let server = TestHttpServer::start_n(
             20,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
@@ -3381,30 +3403,18 @@ last_error = "old nexushub request hook"
         assert!(bark.sent);
         let requests = server.requests(bark.request_count);
         assert_eq!(requests.len(), bark.request_count);
-        let combined = requests
-            .iter()
-            .enumerate()
-            .map(|(index, raw)| {
-                let body = raw.split("\r\n\r\n").nth(1).unwrap();
-                let payload: Value = serde_json::from_str(body).unwrap();
-                assert_eq!(
-                    payload["title"],
-                    format!(
-                        "线程正常完成：真实长正文线程 ({}/{})",
-                        index + 1,
-                        bark.request_count
-                    )
-                );
-                let chunk = payload["body"].as_str().unwrap();
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
-                let body_part = chunk.strip_prefix(&prefix).unwrap();
-                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
-                body_part.to_string()
-            })
-            .collect::<String>();
-        assert!(combined.contains("开头"));
-        assert!(combined.contains("末尾唯一完整反馈"));
-        assert!(combined.contains(&full_body));
+        assert_eq!(bark.request_count, 1);
+        assert_eq!(bark.chunk_count, 1);
+        let payload: Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(payload["title"], "Codex｜完成｜真实长正文线程");
+        let summary = payload["body"].as_str().unwrap();
+        assert!(summary.starts_with("开头\n"));
+        assert!(summary.ends_with('…'));
+        assert_eq!(summary.chars().count(), 300);
+        assert!(!summary.contains("末尾唯一完整反馈"));
+        assert_eq!(payload["group"], "NexusHub｜Codex");
+        assert_eq!(payload["level"], "active");
         let stored = db.list_probe_events(10).unwrap();
         let stored_json = serde_json::to_string(&stored[0]).unwrap();
         assert!(!stored_json.contains("末尾唯一完整反馈"));
@@ -3916,6 +3926,7 @@ last_error = "old nexushub request hook"
             &config,
             b"device-key-secret",
             &ProbeBarkRequest {
+                presentation: None,
                 title: "NexusHub 推送测试".to_string(),
                 body: "ok".to_string(),
                 dedupe_key: "hook-stop:thread-a:turn-1".to_string(),

@@ -43,6 +43,22 @@ impl<'a> ProbeUseCases<'a> {
         Self { config, platform }
     }
 
+    pub fn claude_hooks(
+        self,
+        request: crate::claude::hooks::ClaudeHooksRequest,
+    ) -> Result<crate::claude::hooks::ClaudeHooksStatus> {
+        anyhow::ensure!(
+            self.platform.kind == crate::platform::PlatformKind::Macos,
+            "Claude hooks 仅支持本机 macOS 设置"
+        );
+        crate::claude::hooks::manage(
+            &crate::claude::ClaudePaths::default_for_user(),
+            &self.platform.daemon_binary(),
+            &self.platform.config_file,
+            request,
+        )
+    }
+
     pub fn status(self) -> Result<ProbeStatusFacadePlan> {
         probe_status_with_capability(self.config, self.platform)
     }

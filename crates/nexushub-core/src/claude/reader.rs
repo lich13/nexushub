@@ -615,9 +615,22 @@ impl Parser {
                     .iter()
                     .any(|p| matches!(field(p, "type"), "text" | "image" | "document"));
             if visible_user {
-                // A new request supersedes any undelivered event from the
-                // previous turn. The persisted delivery ledger keeps history.
-                self.parsed.native_events.clear();
+                // Keep earlier terminal events so an incremental polling cursor
+                // can catch up after several turns between scans.
+                let prompt = field(record, "promptId");
+                if !prompt.is_empty() {
+                    let entry =
+                        self.parsed
+                            .prompts
+                            .entry(prompt.into())
+                            .or_insert_with(|| ClaudePrompt {
+                                turn_id: key.clone(),
+                                timestamp_ms: millis(field(record, "timestamp")).unwrap_or(0),
+                                ambiguous: false,
+                                cancelled: false,
+                            });
+                    entry.ambiguous |= entry.turn_id != key;
+                }
                 self.turn = Some(key.clone());
                 self.parsed.turn_open = true;
                 self.parsed.last_turn_at = millis(field(record, "timestamp"));
@@ -755,6 +768,7 @@ impl Parser {
                                     self.questions.insert(
                                         call.into(),
                                         crate::native_probe::NativeTurnEvent {
+                                            prompt_id: prompt_for_turn(&self.parsed, turn),
                                             position: position as u64 + 1,
                                             turn_id: format!("{turn}:{call}"),
                                             kind: "reply_needed".into(),
@@ -827,7 +841,9 @@ impl Parser {
                 self.last_stop_reason = field(message, "stop_reason").into();
                 if !terminal_stop_reason(&self.last_stop_reason) || !self.pending.is_empty() {
                     self.parsed.turn_open = self.turn.is_some();
-                    self.parsed.native_events.clear();
+                    self.parsed
+                        .native_events
+                        .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
                 }
             }
             let assistant_terminal = terminal_stop_reason(field(message, "stop_reason"));
@@ -867,9 +883,9 @@ impl Parser {
             if subtype == "success"
                 && stop_reason.is_some_and(|reason| !terminal_stop_reason(reason))
             {
-                self.parsed
-                    .native_events
-                    .retain(|event| event.kind != "completion");
+                self.parsed.native_events.retain(|event| {
+                    event.kind != "completion" || Some(&event.turn_id) != self.turn.as_ref()
+                });
                 self.parsed.turn_open = self.turn.is_some();
             }
             if subtype == "success"
@@ -912,8 +928,15 @@ impl Parser {
         for key in std::iter::once(key) {
             let subtype = field(record, "subtype");
             if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
+                for prompt in self.parsed.prompts.values_mut() {
+                    if Some(&prompt.turn_id) == self.turn.as_ref() {
+                        prompt.cancelled = true;
+                    }
+                }
                 self.parsed.turn_open = false;
-                self.parsed.native_events.clear();
+                self.parsed
+                    .native_events
+                    .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
                 self.turn = None;
                 self.last_stop_reason.clear();
                 self.last_assistant_text = None;
@@ -996,9 +1019,10 @@ impl Parser {
                         self.permission_calls.insert(request.into(), call.into());
                         self.questions.entry(call.into()).or_insert(
                             crate::native_probe::NativeTurnEvent {
+                                prompt_id: prompt_for_turn(&self.parsed, turn),
                                 position: position as u64 + 1,
                                 turn_id: format!("{turn}:permission:{request}"),
-                                kind: "reply_needed".into(),
+                                kind: "authorization".into(),
                                 body: bounded(&body),
                                 timestamp_ms: ts,
                             },
@@ -1165,6 +1189,7 @@ fn finish(
     parsed
         .native_events
         .push(crate::native_probe::NativeTurnEvent {
+            prompt_id: prompt_for_turn(parsed, turn),
             position: position as u64 + 1,
             turn_id: turn.clone(),
             kind: kind.into(),

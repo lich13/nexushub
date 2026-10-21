@@ -11,6 +11,7 @@ use std::{
 };
 
 mod activity;
+pub mod hooks;
 mod mutations;
 mod reader;
 #[cfg(test)]
@@ -143,6 +144,7 @@ struct Parsed {
     last_turn_at: Option<i64>,
     turn_open: bool,
     native_events: Vec<crate::native_probe::NativeTurnEvent>,
+    prompts: HashMap<String, ClaudePrompt>,
     record_count: u64,
     settled_count: u64,
 }
@@ -507,7 +509,7 @@ pub(crate) fn notification_snapshots(
             provider: NativeProvider::Claude,
             session_key: key_for(&paths.projects.canonicalize()?, &path, &parsed.id),
             id: parsed.id.clone(),
-            title: parsed.title.clone(),
+            title: crate::native_probe::notification_title(&parsed.title, &parsed.id, &parsed.cwd),
             identity: file_identity(&path)?,
             record_count: parsed.record_count,
             settled_count: parsed.settled_count,
@@ -515,4 +517,85 @@ pub(crate) fn notification_snapshots(
         });
     }
     Ok(scan)
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudePrompt {
+    pub turn_id: String,
+    pub timestamp_ms: i64,
+    pub ambiguous: bool,
+    pub cancelled: bool,
+}
+#[derive(Debug, Clone)]
+pub struct ClaudeNotificationContext {
+    pub stream: crate::native_probe::NativeStreamSnapshot,
+    pub prompts: HashMap<String, ClaudePrompt>,
+    pub path: PathBuf,
+    pub project: String,
+}
+pub fn notification_context_for_key(
+    paths: &ClaudePaths,
+    key: &str,
+) -> Result<ClaudeNotificationContext> {
+    let (path, _) = resolve(paths, key)?;
+    notification_context(paths, &path)
+}
+/// Targeted read for hook correlation and delivery verification; no full-provider scan.
+pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNotificationContext> {
+    let root = paths.projects.canonicalize()?;
+    let relative = path
+        .strip_prefix(&paths.projects)
+        .or_else(|_| path.strip_prefix(&root))
+        .context("Claude notification path is outside session storage")?;
+    ensure!(
+        relative.components().count() == 2 && path.extension().is_some_and(|e| e == "jsonl"),
+        "Claude notification source must be a main transcript"
+    );
+    let canonical_path = root.join(relative);
+    let path = canonical_path.as_path();
+    let mut component = root.clone();
+    for part in relative.components() {
+        component.push(part);
+        ensure!(
+            !fs::symlink_metadata(&component)?.file_type().is_symlink(),
+            "Claude notification source contains a link"
+        );
+    }
+    let before = reader::stamp(path)?;
+    let parsed = reader::read(path)?;
+    ensure!(
+        parsed.issues.is_empty(),
+        "Claude notification identity is unavailable"
+    );
+    let stream = crate::native_probe::NativeStreamSnapshot {
+        provider: crate::native_probe::NativeProvider::Claude,
+        session_key: key_for(&root, path, &parsed.id),
+        id: parsed.id.clone(),
+        title: crate::native_probe::notification_title(&parsed.title, &parsed.id, &parsed.cwd),
+        identity: crate::native_probe::file_identity(path)?,
+        record_count: parsed.record_count,
+        settled_count: parsed.settled_count,
+        events: parsed.native_events.clone(),
+    };
+    ensure!(
+        before == reader::stamp(path)?,
+        "Claude notification source changed during read"
+    );
+    Ok(ClaudeNotificationContext {
+        stream,
+        prompts: parsed.prompts.clone(),
+        path: path.into(),
+        project: Path::new(&parsed.cwd)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into(),
+    })
+}
+fn prompt_for_turn(parsed: &Parsed, turn: &str) -> Option<String> {
+    parsed
+        .prompts
+        .iter()
+        .find(|(_, p)| !p.ambiguous && p.turn_id == turn)
+        .map(|(id, _)| id.clone())
 }

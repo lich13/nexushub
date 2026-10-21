@@ -1,8 +1,7 @@
 //! Durable Bark delivery claims and bounded retries; credentials stay outside the queue.
 use super::{
-    async_question_monitor, bark, bark_body_chunks, question_monitor,
-    task_notification_suppression_reason, ProbeBarkOutcome, ProbeBarkRequest,
-    PROBE_BARK_BODY_CHUNK_BYTES,
+    async_question_monitor, bark, question_monitor, task_notification_suppression_reason,
+    ProbeBarkOutcome, ProbeBarkRequest,
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -30,9 +29,16 @@ enum Source {
     Codex {
         event: Box<ProbeBuiltEvent>,
         fingerprint: Option<SourceProof>,
+        #[serde(default)]
+        original_body: Option<String>,
     },
     Native {
         delivery: NativeDelivery,
+    },
+    ClaudeHook {
+        hook: super::claude_hook::HookEvent,
+        proof: Option<SourceProof>,
+        verified: bool,
     },
 }
 
@@ -63,7 +69,7 @@ fn codex_path(config: &Config, event: &ProbeBuiltEvent) -> Option<PathBuf> {
 }
 
 fn prefix_digest(path: &Path, length: u64) -> Option<String> {
-    if length > 128 * 1024 * 1024 {
+    if length > 512 * 1024 * 1024 {
         return None;
     }
     let mut file = std::fs::File::open(path).ok()?.take(length);
@@ -85,6 +91,11 @@ fn codex_fingerprint(config: &Config, event: &ProbeBuiltEvent) -> Option<SourceP
     let path = codex_path(config, event)?;
     let identity = native_probe::file_identity(&path).ok()?;
     let length = std::fs::metadata(&path).ok()?.len();
+    // Preserve the existing Codex source-validation bound. Claude's hook
+    // verifier shares the digest reader but has its own larger transcript limit.
+    if length > 128 * 1024 * 1024 {
+        return None;
+    }
     let digest = prefix_digest(&path, length)?;
     Some(SourceProof {
         identity,
@@ -118,7 +129,7 @@ fn queued_candidate(
         .unwrap_or_default();
     Ok(Candidate {
         source,
-        chunks: bark_body_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES),
+        chunks: vec![request.body.clone()],
         request,
         event_ms,
         instance_id: db.notification_instance_id()?,
@@ -141,6 +152,29 @@ pub async fn codex(
 ) -> Result<ProbeBarkOutcome> {
     db.sync_notification_channels(config)?;
     let key = codex_key(event);
+    let title = event
+        .payload
+        .get("notification_title")
+        .unwrap_or(&event.payload["thread_title"])
+        .as_str()
+        .unwrap_or("");
+    let project = if title.trim().is_empty() || matches!(title.trim(), "未命名会话" | "未命名线程")
+    {
+        let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
+        event
+            .thread_id
+            .as_deref()
+            .and_then(|id| codex::local_thread_summary(&paths, id).ok().flatten())
+            .and_then(|thread| thread.cwd)
+            .and_then(|cwd| {
+                std::path::Path::new(&cwd)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let origin_ms = event.payload["question_created_at_ms"]
         .as_i64()
         .or_else(|| event.payload["feedback_completed_at_ms"].as_i64())
@@ -154,12 +188,16 @@ pub async fn codex(
         Source::Codex {
             event: Box::new(event.clone()),
             fingerprint: codex_fingerprint(config, event),
+            original_body: Some(event.bark_body.clone()),
         },
-        ProbeBarkRequest {
-            title: event.bark_title.clone(),
-            body: event.bark_body.clone(),
-            dedupe_key: event.dedupe_key.clone(),
-        },
+        super::notification_format::request(
+            "Codex",
+            &event.event_type,
+            title,
+            &project,
+            &event.bark_body,
+            &event.dedupe_key,
+        ),
         origin_ms,
     )?;
     let bark = deliver(
@@ -182,30 +220,23 @@ pub async fn native(
     timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
     db.sync_notification_channels(config)?;
-    let label = match delivery.event.kind.as_str() {
-        "reply_needed" => "需要回复",
-        "completion" => "完成",
-        _ => "失败",
-    };
     let candidate = queued_candidate(
         config,
         db,
         Source::Native {
             delivery: delivery.clone(),
         },
-        ProbeBarkRequest {
-            title: format!(
-                "{} · {} · {}",
-                delivery.provider.as_str(),
-                label,
-                delivery.title
-            ),
-            body: format!(
-                "{}\n\n线程 ID：{}\n回合：{}",
-                delivery.event.body, delivery.thread_id, delivery.event.turn_id
-            ),
-            dedupe_key: delivery.event_key.clone(),
-        },
+        super::notification_format::request(
+            match delivery.provider {
+                native_probe::NativeProvider::Claude => "Claude Code",
+                native_probe::NativeProvider::Grok => "Grok",
+            },
+            &delivery.event.kind,
+            &delivery.title,
+            "",
+            &delivery.event.body,
+            &delivery.event_key,
+        ),
         delivery.event.timestamp_ms,
     )?;
     let key = format!("native:{}", delivery.event_key);
@@ -225,6 +256,10 @@ pub async fn native(
 fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
     match &candidate.source {
         Source::Test => true,
+        Source::ClaudeHook { hook, .. } => {
+            native_probe::NativeProvider::Claude.enabled(config)
+                && native_probe::NativeProvider::Claude.event_enabled(config, &hook.kind)
+        }
         Source::Codex { event, .. } => {
             config.probe.enabled
                 && probe_service::probe_event_bark_switch_enabled(config, &event.kind)
@@ -236,6 +271,253 @@ fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
                     .event_enabled(config, &delivery.event.kind)
         }
     }
+}
+
+fn claude_aliases(db: &PanelDb, candidate: &Candidate) -> Result<Vec<String>> {
+    let (context, prompt, kind) = match &candidate.source {
+        Source::ClaudeHook {
+            hook,
+            verified: true,
+            ..
+        } => (
+            super::claude_hook::context(hook)?,
+            hook.prompt_id.clone().unwrap_or_default(),
+            hook.kind.clone(),
+        ),
+        Source::Native { delivery }
+            if delivery.provider == native_probe::NativeProvider::Claude
+                && super::claude_hook::installed() =>
+        {
+            let context = nexushub_core::claude::notification_context_for_key(
+                &nexushub_core::claude::ClaudePaths::default_for_user(),
+                &delivery.session_key,
+            )?;
+            let turn = delivery.event.turn_id.split(':').next().unwrap_or("");
+            let Some((prompt, _)) = context
+                .prompts
+                .iter()
+                .find(|(_, p)| !p.ambiguous && p.turn_id == turn)
+            else {
+                return Ok(vec![]);
+            };
+            let prompt = prompt.clone();
+            (
+                context,
+                prompt,
+                native_probe::event_category(&delivery.event).into(),
+            )
+        }
+        _ => return Ok(vec![]),
+    };
+    let Some(turn) = context.prompts.get(&prompt) else {
+        return Ok(vec![]);
+    };
+    let mut aliases =
+        db.claude_legacy_delivery_keys(&context.stream.session_key, &turn.turn_id, &kind)?;
+    aliases.push(format!(
+        "native:{}",
+        context
+            .stream
+            .prompt_event_key(&prompt, &kind, &db.notification_instance_id()?)
+    ));
+    for event in context.stream.events.iter().filter(|e| {
+        e.prompt_id.as_deref() == Some(&prompt) && native_probe::event_category(e) == kind
+    }) {
+        aliases.push(format!("native:{}", context.stream.event_key(event)));
+        if kind == "authorization" {
+            let mut legacy = event.clone();
+            legacy.kind = "reply_needed".into();
+            aliases.push(format!("native:{}", context.stream.event_key(&legacy)));
+        }
+    }
+    Ok(aliases)
+}
+
+pub(super) async fn claude_hook(
+    config: &Config,
+    db: &PanelDb,
+    hook: super::claude_hook::HookEvent,
+    timeout: Duration,
+) -> Result<()> {
+    db.sync_notification_channels(config)?;
+    if !native_probe::NativeProvider::Claude.enabled(config)
+        || !native_probe::NativeProvider::Claude.event_enabled(config, &hook.kind)
+    {
+        return Ok(());
+    }
+    let key = format!(
+        "claude-hook:{}",
+        hex::encode(Sha256::digest(format!(
+            "{}\0{}\0{}\0{}\0{}\0{}",
+            db.notification_instance_id()?,
+            hook.path.display(),
+            hook.identity.as_deref().unwrap_or(""),
+            hook.session_id,
+            hook.prompt_id.as_deref().unwrap_or(""),
+            hook.kind
+        )))
+    );
+    let request =
+        super::notification_format::request("Claude Code", &hook.kind, "", "", &hook.body, &key);
+    let event_ms = hook.received_ms;
+    let candidate = queued_candidate(
+        config,
+        db,
+        Source::ClaudeHook {
+            hook,
+            proof: None,
+            verified: false,
+        },
+        request,
+        event_ms,
+    )?;
+    // Even a transcript that has not caught up is stored encrypted before resolution.
+    if db.stage_notification_delivery(
+        NotificationChannel::Bark,
+        &key,
+        event_ms,
+        &serde_json::to_value(&candidate)?,
+    )? {
+        process_claude_hook(config, db, &key, &candidate, timeout).await?;
+    }
+    Ok(())
+}
+
+async fn process_claude_hook(
+    config: &Config,
+    db: &PanelDb,
+    key: &str,
+    candidate: &Candidate,
+    timeout: Duration,
+) -> Result<()> {
+    let Source::ClaudeHook { hook, .. } = &candidate.source else {
+        return Ok(());
+    };
+    let Some(lease) = db.claim_notification_delivery(NotificationChannel::Bark, key)? else {
+        return Ok(());
+    };
+    let started = Instant::now();
+    let hook = hook.clone();
+    let resolved = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut hook = hook;
+        let context = super::claude_hook::context(&hook)?;
+        if hook.idle {
+            hook.body = context
+                .stream
+                .events
+                .iter()
+                .find(|event| event.kind == "completion" && event.prompt_id == hook.prompt_id)
+                .map(|e| e.body.clone())
+                .ok_or_else(|| anyhow::anyhow!("terminal evidence pending"))?;
+        }
+        let length = std::fs::metadata(&hook.path)?.len();
+        let proof = SourceProof {
+            identity: context.stream.identity.clone(),
+            length,
+            digest: prefix_digest(&hook.path, length)
+                .ok_or_else(|| anyhow::anyhow!("source proof pending"))?,
+        };
+        anyhow::ensure!(same_source(&hook.path, &proof), "source changed");
+        Ok((hook, context, proof))
+    })
+    .await;
+    let (hook, context, proof) = match resolved {
+        Ok(Ok(value)) => value,
+        _ => {
+            db.finish_notification_delivery(&lease, &json!({"sent":false,"skipped":false,"retryable":true,"uncertain":false,"reason":"claude_identity_pending","error_category":"source_pending"}))?;
+            return Ok(());
+        }
+    };
+    let prompt = hook.prompt_id.as_deref().unwrap_or("");
+    let event_ms = if hook.idle {
+        let terminal = context
+            .stream
+            .events
+            .iter()
+            .find(|e| e.kind == "completion" && e.prompt_id == hook.prompt_id)
+            .expect("idle terminal was resolved");
+        if !db.claude_idle_after_baseline(&context.stream, terminal)? {
+            db.finish_notification_delivery(
+                &lease,
+                &json!({"sent":false,"skipped":true,"reason":"idle_baseline"}),
+            )?;
+            return Ok(());
+        }
+        terminal.timestamp_ms
+    } else {
+        candidate.event_ms
+    };
+    let canonical = format!(
+        "native:{}",
+        context
+            .stream
+            .prompt_event_key(prompt, &hook.kind, &db.notification_instance_id()?)
+    );
+    let title = if context.stream.title == context.stream.id {
+        ""
+    } else {
+        &context.stream.title
+    };
+    let request = super::notification_format::request(
+        "Claude Code",
+        &hook.kind,
+        title,
+        &context.project,
+        &hook.body,
+        &canonical,
+    );
+    let kind = hook.kind.clone();
+    let candidate = queued_candidate(
+        config,
+        db,
+        Source::ClaudeHook {
+            hook,
+            proof: Some(proof),
+            verified: true,
+        },
+        request,
+        event_ms,
+    )?;
+    let aliases = claude_aliases(db, &candidate)?;
+    let staged = if event_enabled(config, &candidate) {
+        db.stage_notification_delivery_with_aliases(
+            NotificationChannel::Bark,
+            &canonical,
+            candidate.event_ms,
+            &serde_json::to_value(&candidate)?,
+            &aliases,
+        )?
+    } else {
+        false
+    };
+    db.finish_notification_delivery(
+        &lease,
+        &json!({"sent":false,"skipped":true,"reason":"claude_identity_resolved"}),
+    )?;
+    if staged {
+        db.record_probe_event(nexushub_core::db::NewProbeEvent {
+            kind: &kind,
+            thread_id: Some(&context.stream.id),
+            title: Some(&context.stream.title),
+            message: Some(&candidate.request.body),
+            dedupe_key: Some(&canonical),
+            source: "claude_hook",
+            payload: json!({"provider":"claude_code","notification_event_key":canonical,"body_source":"claude_hook","body_summary":candidate.request.body,"bark_status":"queued"}),
+        })?;
+        process(
+            &|| Ok(config.clone()),
+            db,
+            &canonical,
+            NotificationChannel::Bark,
+            &candidate,
+            timeout
+                .saturating_sub(started.elapsed())
+                .max(Duration::from_millis(1)),
+            true,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn deliver(
@@ -263,11 +545,13 @@ async fn deliver(
     if !legacy_allowed {
         return Ok(ProbeBarkOutcome::skipped("dedupe", enabled, true, true));
     }
-    let staged = db.stage_notification_delivery(
+    let aliases = claude_aliases(db, candidate)?;
+    let staged = db.stage_notification_delivery_with_aliases(
         channel,
         key,
         candidate.event_ms,
         &serde_json::to_value(candidate)?,
+        &aliases,
     )?;
     if !staged {
         return Ok(db
@@ -350,6 +634,18 @@ async fn process(
             )
         } else if secret.is_empty() {
             ProbeBarkOutcome::skipped("device_key_missing", channel.enabled(config), true, false)
+        } else if candidate.request.presentation.is_some()
+            && super::claude_hook::installed()
+            && matches!(&candidate.source, Source::Native { delivery } if delivery.provider == native_probe::NativeProvider::Claude && delivery.event.prompt_id.is_none())
+        {
+            // Missing native promptId is not a license to use message uuid as
+            // hook identity. Keep it in the existing bounded retry queue.
+            let mut pending =
+                ProbeBarkOutcome::skipped("claude_identity_pending", true, true, true);
+            pending.skipped = false;
+            pending.retryable = true;
+            pending.error_category = Some("source_pending".into());
+            pending
         } else if let Some(chunk) = candidate.chunks.get(lease.chunk_index) {
             let Some(remaining_ms) = db.notification_delivery_lease_remaining_ms(&lease)? else {
                 return Ok(db
@@ -430,6 +726,7 @@ pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> 
         db,
         Source::Test,
         ProbeBarkRequest {
+            presentation: None,
             title: "NexusHub 推送测试".into(),
             body: nexushub_core::probe::bark_test_body().into(),
             dedupe_key: key.clone(),
@@ -473,26 +770,68 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
         Source::Test => true,
         Source::Native { delivery } => {
             let provider = delivery.provider;
-            tokio::task::spawn_blocking(move || native_probe::scan(provider))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .is_some_and(|scan| {
-                    scan.streams.iter().any(|stream| {
-                        native_probe::retry_event_is_current(
-                            provider,
-                            &delivery.thread_id,
-                            &delivery.event,
-                        ) && stream.session_key == delivery.session_key
-                            && stream.id == delivery.thread_id
-                            && stream.events.iter().any(|event| {
-                                stream.event_key(event) == delivery.event_key
-                                    && event == &delivery.event
-                            })
+            let instance = db.notification_instance_id().unwrap_or_default();
+            let session_key = delivery.session_key.clone();
+            tokio::task::spawn_blocking(move || {
+                if provider == native_probe::NativeProvider::Claude {
+                    nexushub_core::claude::notification_context_for_key(
+                        &nexushub_core::claude::ClaudePaths::default_for_user(),
+                        &session_key,
+                    )
+                    .map(|c| native_probe::NativeScan {
+                        streams: vec![c.stream],
+                        errors: 0,
                     })
+                } else {
+                    native_probe::scan(provider)
+                }
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|scan| {
+                scan.streams.iter().any(|stream| {
+                    native_probe::retry_event_is_current(
+                        provider,
+                        &delivery.thread_id,
+                        &delivery.event,
+                    ) && stream.session_key == delivery.session_key
+                        && stream.id == delivery.thread_id
+                        && stream.events.iter().any(|event| {
+                            (stream.event_key(&delivery.event) == delivery.event_key
+                                || event.prompt_id.as_deref().is_some_and(|p| {
+                                    stream.prompt_event_key(
+                                        p,
+                                        native_probe::event_category(event),
+                                        &instance,
+                                    ) == delivery.event_key
+                                }))
+                                && native_probe::same_event(event, &delivery.event)
+                        })
                 })
+            })
         }
-        Source::Codex { event, fingerprint } => {
+        Source::ClaudeHook {
+            hook,
+            proof,
+            verified,
+        } => {
+            let (hook, proof, verified) = (hook.clone(), proof.clone(), *verified);
+            tokio::task::spawn_blocking(move || {
+                verified
+                    && proof
+                        .as_ref()
+                        .is_some_and(|proof| same_source(&hook.path, proof))
+                    && super::claude_hook::context(&hook).is_ok()
+            })
+            .await
+            .unwrap_or(false)
+        }
+        Source::Codex {
+            event,
+            fingerprint,
+            original_body,
+        } => {
             if task_notification_suppression_reason(config, event.thread_id.as_deref()).is_some() {
                 return false;
             }
@@ -503,7 +842,9 @@ async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
                 return false;
             }
             let mut event = (**event).clone();
-            event.bark_body = candidate.request.body.clone();
+            event.bark_body = original_body
+                .clone()
+                .unwrap_or_else(|| candidate.request.body.clone());
             if event.payload["question_tool"] == "request_user_input_async"
                 || event.payload["body_source"] == "assistant_question"
             {
@@ -603,6 +944,23 @@ pub async fn retry_pending_with_config(db: &PanelDb, load_config: &ConfigLoader<
                 continue;
             }
         };
+        if matches!(
+            &candidate.source,
+            Source::ClaudeHook {
+                verified: false,
+                ..
+            }
+        ) {
+            process_claude_hook(
+                &latest_config(load_config)?,
+                db,
+                &job.event_key,
+                &candidate,
+                Duration::from_secs(5),
+            )
+            .await?;
+            continue;
+        }
         process(
             load_config,
             db,

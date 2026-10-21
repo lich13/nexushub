@@ -474,6 +474,7 @@ impl ProbeRuntime {
             "transcript_path": input.transcript_path.clone(),
             "last_assistant_message": last_assistant_message.clone(),
             "thread_title": title.clone(),
+            "notification_title": input.thread_title.clone(),
             "thread_id": event_thread_id.clone(),
             "body_summary": body_summary.clone(),
             "body_sha256": body_sha256.clone(),

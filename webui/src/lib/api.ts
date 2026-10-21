@@ -24,6 +24,7 @@ export {
   getProbeEvents,
   runProbeBarkTest,
   runProbeHooksInstall,
+  manageClaudeHooks,
 } from "./api/probe";
 export { getUpdateStatus, updates } from "./api/updates";
 export { listGrokSessions, getGrokSession, renameGrokSession, previewGrokSessionDelete, deleteGrokSession } from "./api/grok";

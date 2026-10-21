@@ -574,3 +574,7 @@ export type CodexConfig = {
 };
 
 export type { RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
+
+export type ClaudeHooksAction = "status" | "install" | "remove";
+export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
+export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean };
