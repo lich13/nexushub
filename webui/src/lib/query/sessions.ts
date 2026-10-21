@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { executeSessionBatch, previewSessionBatch, type SessionBatchPreview, type SessionBatchResult, type SessionOperation, type SessionProvider } from "../api/sessions";
+import { useConnection } from "./connection";
+import { addSessionSelection, clickSessionSelection, emptySessionSelection, syncSessionSelection, type SessionClick } from "../domain/sessionSelection";
 
 export function useSessionSelection(provider: SessionProvider, filterKey: string, keys: string[], onSucceeded?: (keys: string[], operation: SessionOperation) => void) {
   const client = useQueryClient();
+  const connection = useConnection();
+  const scope = `${connection.revision}\0${connection.target}\0${provider}\0${filterKey}`;
   const returnFocus = useRef<HTMLElement | null>(null);
-  const [selecting, setSelecting] = useState(false);
-  const [selection, setSelection] = useState<string[]>([]);
+  const [state, setState] = useState(() => emptySessionSelection(scope));
+  const current = syncSessionSelection(state, scope, keys);
+  const { selecting, keys: selection, notice } = current;
   const [preview, setPreview] = useState<SessionBatchPreview | null>(null);
   const [result, setResult] = useState<SessionBatchResult | null>(null);
-  const scope = `${provider}\0${filterKey}`;
   const epoch = useRef({ scope, value: 0 });
   if (epoch.current.scope !== scope) epoch.current = { scope, value: epoch.current.value + 1 };
   const prepare = useMutation({
@@ -36,30 +40,37 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       if (generation === epoch.current.value) {
         onSucceeded?.(succeeded, operation);
         setResult(response);
-        setSelection(current => current.filter(key => !succeeded.includes(key)));
+        setState(current => ({ ...current, keys: current.keys.filter(key => !succeeded.includes(key)), anchor: current.anchor && succeeded.includes(current.anchor) ? null : current.anchor }));
       }
-      void client.invalidateQueries({ predicate: query => provider === "codex" ? /thread|system-capabilities|probe-status/.test(String(query.queryKey[0])) : query.queryKey[0] === (provider === "claude_code" ? "claude" : provider) });
+      void client.invalidateQueries({ predicate: query => provider === "codex" ? /thread|system-capabilities|probe-status/.test(String(query.queryKey[0])) : query.queryKey[0] === provider });
     }
   });
-  useEffect(() => { setSelection([]); setPreview(null); setResult(null); setSelecting(false); prepare.reset(); execute.reset(); }, [provider, filterKey]);
+  useEffect(() => { setState(emptySessionSelection(scope)); setPreview(null); setResult(null); prepare.reset(); execute.reset(); }, [scope]);
   const visibleKeys = keys.join("\0");
-  useEffect(() => { const visible = new Set(keys); setSelection(current => current.filter(key => visible.has(key))); }, [visibleKeys]);
+  useEffect(() => { setState(current => syncSessionSelection(current, scope, keys)); }, [scope, visibleKeys]);
+  const select = (key: string, event: SessionClick, open: () => void) => {
+    if (prepare.isPending || execute.isPending || (event.ctrlKey && event.detail !== 0)) return;
+    const modified = event.detail !== 0 && (event.metaKey || event.shiftKey);
+    setState(clickSessionSelection(current, keys, key, event));
+    if (selecting || modified) { epoch.current.value += 1; setPreview(null); setResult(null); }
+    else open();
+  };
   return {
-    selecting, selection, preview, result, prepare, execute, returnFocus,
+    selecting, selection, notice, preview, result, prepare, execute, returnFocus, select,
     busy: prepare.isPending || execute.isPending,
-    toggle: (key: string) => { setPreview(null); setSelection(current => current.includes(key) ? current.filter(k => k !== key) : current.length < 100 ? [...current, key] : current); },
-    begin: () => { setSelecting(true); setResult(null); },
+    toggle: (key: string) => select(key, { detail: 1, metaKey: true, shiftKey: false, ctrlKey: false }, () => {}),
+    begin: () => { setState({ ...current, selecting: true }); setResult(null); },
     prepareSingle: (key: string, operation: SessionOperation, origin?: HTMLElement | null) => {
       returnFocus.current = origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       epoch.current.value += 1;
-      setSelection([key]);
+      setState({ ...current, keys: [key], anchor: key, notice: null });
       setResult(null);
       setPreview(null);
       prepare.mutate({ operation, keys: [key] });
     },
-    cancel: () => { epoch.current.value += 1; setSelecting(false); setSelection([]); setPreview(null); setResult(null); prepare.reset(); execute.reset(); },
-    selectAll: () => { setPreview(null); setSelection(keys.slice(0, 100)); },
-    clear: () => { setPreview(null); setSelection([]); },
+    cancel: () => { epoch.current.value += 1; setState(emptySessionSelection(scope)); setPreview(null); setResult(null); prepare.reset(); execute.reset(); },
+    selectAll: () => { epoch.current.value += 1; setPreview(null); setState(addSessionSelection(current, keys)); },
+    clear: () => { epoch.current.value += 1; setPreview(null); setState({ ...current, keys: [], anchor: null, notice: null }); },
     dismissPreview: () => { epoch.current.value += 1; setPreview(null); },
   };
 }

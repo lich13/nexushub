@@ -18,8 +18,7 @@ import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchCon
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { useReadOnlyThreadActions } from "../../lib/query/threads";
-import { getThread } from "../../lib/api/threads";
-import { latestAssistantCopyText, threadResumeCommand } from "../../lib/domain/conversationViewModel";
+import { threadResumeCommand } from "../../lib/domain/conversationViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import type { SessionSearchResult } from "../../types";
 import { useSearchWorkspace } from "../common/SessionSearch";
@@ -181,14 +180,11 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
               selecting={batch.selecting}
               selected={selectedId === thread.id}
               renameBlockReason={thread.status === "Archived" ? sharedDisabledStates.renameArchivedThread : undefined}
-              onSelect={() => batch.selecting ? batch.toggle(thread.id) : onSelect(thread.id)}
+              onSelect={event => batch.select(thread.id, event, () => onSelect(thread.id))}
               onRename={(next) => rename.mutateAsync({ kind: "rename", id: thread.id, title: next })}
               menuActions={[
                 { id: "archive", label: thread.status === "Archived" ? "恢复" : "归档", icon: thread.status === "Archived" ? <ArchiveRestore size={15} /> : <Archive size={15} />,
                   disabled: batch.busy, run: () => batch.prepareSingle(thread.id, thread.status === "Archived" ? "restore" : "archive") },
-                { id: "copy-answer", label: "复制答复", icon: <Copy size={15} />, run: () => {
-                  void getThread(thread.id).then(detail => copy(latestAssistantCopyText(detail.blocks))).catch(() => setMenuFeedback("读取答复失败，请重试"));
-                } },
                 { id: "copy-id", label: "复制 ID", icon: <Copy size={15} />, run: () => { void copy(thread.id); } },
                 { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, disabled: !thread.rollout_path, run: () => { void copy(thread.rollout_path); } },
                 { id: "copy-resume", label: "复制恢复命令", icon: <Copy size={15} />, run: () => { void copy(threadResumeCommand(thread.id)); } },

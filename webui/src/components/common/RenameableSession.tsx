@@ -9,7 +9,7 @@ export function RenameableSession({ title, className, disabled, selecting, renam
   selecting: boolean;
   selected?: boolean;
   renameBlockReason?: string | null;
-  onSelect: () => void;
+  onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
   onRename: (title: string) => Promise<unknown>;
   menuActions?: ThreadMenuAction[];
   children: ReactNode;
@@ -77,7 +77,7 @@ export function RenameableSession({ title, className, disabled, selecting, renam
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     // Selecting immediately also keeps the row mounted for native double-click
     // rename; the second click doesn't re-select or reset the reading position.
-    if (selecting || event.detail < 2) onSelect();
+    if ((!event.ctrlKey || event.detail === 0) && (selecting || event.detail < 2)) onSelect(event);
   };
   const openMenu = (x: number, y: number) => {
     if (!selecting && !disabled) setContext({ x, y });
@@ -101,7 +101,7 @@ export function RenameableSession({ title, className, disabled, selecting, renam
     </div> : <button ref={button} type="button" className={className} disabled={disabled} title={title}
       onClick={handleClick}
       onContextMenu={event => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
-      onDoubleClick={event => { event.preventDefault(); begin(); }}
+      onDoubleClick={event => { event.preventDefault(); if (!event.metaKey && !event.shiftKey && !event.ctrlKey) begin(); }}
       onKeyDown={event => {
         if (event.key === "F2") { event.preventDefault(); begin(); }
         if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
