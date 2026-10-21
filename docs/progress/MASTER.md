@@ -37,7 +37,7 @@
 
 1.3.5 同步现有 manifest 和两份 lock 中的自身版本；按新增 RustSec 公告定向更新 rustls-webpki 0.103.16、webpki-roots 1.0.10 和桌面 webpki-root-certs 1.0.10，保留原有依赖审计策略。发布说明继续使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。
 
-发布顺序为最终提交三项 CI 全绿、创建 v1.3.5、Release 构建及发布、使用正式 CI 资产升级远端 API、安装 macOS App。部署／安装只核对版本、健康和启动状态，保留现有回退材料；App 安装不自动启用 Claude hooks。目前发布和部署结果待本轮流水线完成后记录。
+发布已完成：提交 [`51dfcd5`](https://github.com/lich13/nexushub/commit/51dfcd5225eef215b4dade342d4330d3ad42159f) 的 [三项主 CI](https://github.com/lich13/nexushub/actions/runs/39585391199) 全绿，`v1.3.5` 的 [Release CI](https://github.com/lich13/nexushub/actions/runs/39586479754) 全绿并发布 [八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.5)。已使用正式 Linux 资产升级远端 API，服务版本、健康、公开 healthz、未授权 API 和退役路径检查通过；已安装正式 macOS ARM64 App，版本为 1.3.5 且启动成功。部署和安装保留既有回退材料，未自动启用 Claude hooks。
 
 ## 待用户验收
 
