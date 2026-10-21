@@ -3,7 +3,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 
 const labels: Record<SessionOperation, string> = { archive: "归档", restore: "恢复", delete: "删除" };
 export function SessionCheckbox({ batch, sessionKey, title }: { batch: SessionSelection; sessionKey: string; title: string }) {
-  return <input className="session-checkbox" type="checkbox" aria-label={`选择 ${title}`} checked={batch.selection.includes(sessionKey)} disabled={batch.busy} onChange={() => batch.toggle(sessionKey)} />;
+  return <input className="session-checkbox" type="checkbox" aria-label={`选择 ${title}`} checked={batch.selection.includes(sessionKey)} disabled={batch.busy} onClick={event => batch.select(sessionKey, event, () => {})} onChange={() => {}} />;
 }
 export function SessionBatchControls({ batch, operations, showSelection = true }: { batch: SessionSelection; operations: SessionOperation[]; showSelection?: boolean }) {
   const trigger = batch.returnFocus;

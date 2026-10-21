@@ -2,6 +2,7 @@ import { isValidElement, type ComponentProps, type ReactElement, type ReactNode 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RenameableSession } from "./RenameableSession";
 import { ContextTaskMenu, ThreadMenuItems } from "./TaskMenu";
+import { SessionCheckbox } from "./SessionBatchControls";
 
 // The project uses Vitest's Node environment. Exercise component event/state
 // boundaries here; native event dispatch, portals and layout belong to browser QA.
@@ -109,6 +110,18 @@ afterEach(() => {
 });
 
 describe("RenameableSession event boundaries", () => {
+  test("checkboxes forward range modifiers and keyboard clicks to the shared selector", () => {
+    const select = vi.fn();
+    const batch = { selection: [], busy: false, select } as unknown as ComponentProps<typeof SessionCheckbox>["batch"];
+    const checkbox = SessionCheckbox({ batch, sessionKey: "fixture", title: "Fixture" });
+    for (const event of [{ detail: 1, shiftKey: true, metaKey: false, ctrlKey: false }, { detail: 0, shiftKey: true, metaKey: true, ctrlKey: false }]) {
+      checkbox.props.onClick(event);
+      expect(select).toHaveBeenLastCalledWith("fixture", event, expect.any(Function));
+    }
+    checkbox.props.onChange();
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
   test("selects immediately on the first click and opens rename on double-click without selecting twice", () => {
     const view = mount();
     view.row().props.onClick({ detail: 1 });

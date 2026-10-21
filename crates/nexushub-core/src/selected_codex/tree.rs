@@ -298,22 +298,22 @@ fn related_rows(
             continue;
         }
         let mut selected = Vec::new();
-        let mut statement = conn.prepare(&format!("SELECT * FROM {}", quoted(&table)))?;
+        let predicate = keys
+            .iter()
+            .map(|key| format!("{} IN (SELECT value FROM json_each(?1))", quoted(key)))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let mut statement = conn.prepare(&format!(
+            "SELECT * FROM {} WHERE {predicate} LIMIT 200001",
+            quoted(&table)
+        ))?;
         let columns: Vec<_> = statement
             .column_names()
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let mut rows = statement.query([])?;
+        let mut rows = statement.query([serde_json::to_string(ids)?])?;
         while let Some(row) = rows.next()? {
-            if !keys.iter().any(|key| {
-                row.get::<_, Option<String>>(key.as_str())
-                    .ok()
-                    .flatten()
-                    .is_some_and(|v| ids.contains(&v))
-            }) {
-                continue;
-            }
             selected.push(read_row_value(row, &columns)?);
             ensure!(selected.len() <= 200_000, "关联记录超出管理核验上限");
         }
@@ -476,6 +476,24 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
             path.extension().is_none_or(|e| e != "zst"),
             "目标包含压缩历史，本轮不支持删除"
         );
+        // Metadata-only threads may legitimately have no rollout. Missing
+        // files do not make traversal components or dangling links safe.
+        let relative = path.strip_prefix(&paths.home)?;
+        ensure!(
+            relative
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+            "线程路径包含不安全分量"
+        );
+        let mut component = paths.home.clone();
+        for part in relative.components() {
+            component.push(part);
+            match fs::symlink_metadata(&component) {
+                Ok(meta) => ensure!(!meta.file_type().is_symlink(), "线程路径包含符号链接"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
         if !path.try_exists()? {
             digest.update(serde_json::to_vec(&(path, "missing"))?);
             continue;
@@ -483,9 +501,7 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
         let (hash, size) = file_digest(paths, path, owner)?;
         digest.update(serde_json::to_vec(&(path, hash))?);
         bytes += size;
-        if crate::codex::local_thread_summary(paths, owner)?
-            .is_some_and(|s| s.status == crate::codex::ThreadStatus::ReplyNeeded)
-        {
+        if crate::codex::rollout_waiting_for_reply(path)? {
             warnings.push("将丢弃待回复的问题".into());
         }
     }
@@ -601,11 +617,14 @@ pub fn execute(
     let mut outcome = match verify(paths, &preview) {
         Ok(result) => result,
         Err(_) => DeleteOutcome {
-            error: Some("删除结果无法完整核验；请刷新原生应用后重新预览，勿直接重试".into()),
+            error: Some("删除可能已部分完成；无法完整核验文件、原生索引和分页历史。请刷新原生应用后重新预览，勿直接重试".into()),
             storage_failure: true,
             ..Default::default()
         },
     };
+    if outcome.storage_failure {
+        return Ok(outcome);
+    }
     if operation.is_err() {
         outcome.error =
             Some("原生删除未确认完整完成；已复检可核验的数据，请检查残留后重新预览".into());

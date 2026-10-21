@@ -321,6 +321,10 @@ pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
     Ok(scan.latest_message)
 }
 
+pub(crate) fn rollout_waiting_for_reply(path: &Path) -> Result<bool> {
+    Ok(scan_rollout(path, 1)?.reply_needed)
+}
+
 pub fn rollout_hook_stop_message(path: &Path, turn_id: Option<&str>) -> Result<Option<String>> {
     Ok(rollout_hook_stop_message_with_source(path, turn_id)?.map(|(message, _)| message))
 }
