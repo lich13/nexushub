@@ -99,3 +99,20 @@ pub async fn startHiddenThreadDelete(
     .await
     .map_err(|err| err.to_string())?
 }
+
+#[tauri::command(rename = "claude.hooks")]
+pub async fn claudeHooks(
+    state: tauri::State<'_, DesktopState>,
+    request: nexushub_core::claude::hooks::ClaudeHooksRequest,
+) -> Result<nexushub_core::claude::hooks::ClaudeHooksStatus, String> {
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        let config = state.config();
+        nexushub_core::services::use_cases::NexusHubUseCases::with_config(&config, state.platform())
+            .probe()?
+            .claude_hooks(request)
+    })
+    .await
+    .map_err(|_| "Claude 设置任务未完成".to_string())?
+    .map_err(|error| error.to_string())
+}

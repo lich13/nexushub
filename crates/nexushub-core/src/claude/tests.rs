@@ -518,7 +518,7 @@ fn native_saved_plans_and_bound_permission_requests_are_read_without_guessing() 
     let waiting = reader::read(&f.file).unwrap();
     assert!(waiting.issues.is_empty());
     assert_eq!(waiting.native_events.len(), 1);
-    assert_eq!(waiting.native_events[0].kind, "reply_needed");
+    assert_eq!(waiting.native_events[0].kind, "authorization");
     f.append(&json!({"type":"permission_response","request_id":"approval","subtype":"error","sessionId":"native-fixture"}));
     assert!(reader::read(&f.file).unwrap().native_events.is_empty());
     f.append(&json!({"type":"attachment","uuid":"plan","sessionId":"native-fixture","attachment":{"type":"plan_file_reference","planContent":"# Saved plan\nKeep content"}}));
@@ -1208,7 +1208,7 @@ fn empty_success_result_uses_this_turn_text_and_never_tool_use_or_cancelled_turn
     assert!(reader::read(&f.file).unwrap().native_events.is_empty());
     f.complete();
     f.append(&f.row("u2", Some("a1"), "user", json!("New request")));
-    assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+    assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
 }
 
 #[test]
@@ -1263,4 +1263,45 @@ fn terminal_evidence_respects_pending_tools_identity_and_record_integrity() {
         .write_all(b"{\"type\":")
         .unwrap();
     assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
+}
+
+#[test]
+fn notification_prompts_are_native_prompt_ids_and_completed_turns_survive_later_turns() {
+    let f = Fixture::new();
+    let mut user = f.row("message-one", None, "user", json!("First prompt"));
+    user["promptId"] = json!("prompt-one");
+    let mut answer = f.row(
+        "answer-one",
+        Some("message-one"),
+        "assistant",
+        json!("First completion"),
+    );
+    answer["message"]["stop_reason"] = json!("end_turn");
+    let mut second = f.row(
+        "message-two",
+        Some("answer-one"),
+        "user",
+        json!("Second prompt"),
+    );
+    second["promptId"] = json!("prompt-two");
+    f.write(&[user, answer, second]);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(context.stream.events.len(), 1);
+    assert_eq!(
+        context.stream.events[0].prompt_id.as_deref(),
+        Some("prompt-one")
+    );
+    assert!(!context.prompts.contains_key("message-one"));
+    assert_eq!(context.prompts["prompt-two"].turn_id, "message-two");
+    let mut partial = f.row(
+        "partial-two",
+        Some("message-two"),
+        "assistant",
+        json!("Second partial"),
+    );
+    partial["message"]["stop_reason"] = Value::Null;
+    f.append(&partial);
+    assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
+    f.append(&json!({"type":"system","subtype":"cancelled"}));
+    assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
 }

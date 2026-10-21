@@ -28,6 +28,21 @@ impl PanelDb {
         scan: &NativeScan,
         config: &Config,
     ) -> Result<usize> {
+        self.stage_native_notifications_with_hooks(provider, scan, config, false)
+    }
+
+    pub fn stage_native_notifications_with_hooks(
+        &self,
+        provider: NativeProvider,
+        scan: &NativeScan,
+        config: &Config,
+        local_claude_hooks: bool,
+    ) -> Result<usize> {
+        let instance = if local_claude_hooks {
+            Some(self.notification_instance_id()?)
+        } else {
+            None
+        };
         let enabled = provider.enabled(config);
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -81,7 +96,13 @@ impl PanelDb {
                         continue;
                     }
                     let delivery = NativeDelivery {
-                        event_key: stream.event_key(event),
+                        event_key: if let (NativeProvider::Claude, Some(instance), Some(prompt)) =
+                            (provider, instance.as_deref(), event.prompt_id.as_deref())
+                        {
+                            stream.prompt_event_key(prompt, &event.kind, instance)
+                        } else {
+                            stream.event_key(event)
+                        },
                         provider,
                         session_key: stream.session_key.clone(),
                         thread_id: stream.id.clone(),
@@ -97,6 +118,45 @@ impl PanelDb {
         }
         tx.commit()?;
         Ok(queued)
+    }
+
+    pub fn claude_legacy_delivery_keys(
+        &self,
+        session_key: &str,
+        turn: &str,
+        kind: &str,
+    ) -> Result<Vec<String>> {
+        let conn = self.conn.lock().expect("db mutex");
+        let mut statement = conn.prepare("SELECT event_key,event_json FROM native_probe_deliveries WHERE provider='claude_code' AND json_valid(event_json) AND json_extract(event_json,'$.session_key')=?1 AND (json_extract(event_json,'$.event.turn_id')=?2 OR instr(json_extract(event_json,'$.event.turn_id'),?2 || ':')=1)")?;
+        let mut keys = Vec::new();
+        for row in statement.query_map(params![session_key, turn], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (key, value) = row?;
+            let delivery: NativeDelivery = serde_json::from_str(&value)?;
+            if crate::native_probe::event_category(&delivery.event) == kind {
+                keys.push(format!("native:{key}"));
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Idle is only a fallback for a new terminal record, never a way to replay
+    /// a stream that was baselined when notifications were enabled.
+    pub fn claude_idle_after_baseline(
+        &self,
+        stream: &crate::native_probe::NativeStreamSnapshot,
+        event: &NativeTurnEvent,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().expect("db mutex");
+        let active: bool = conn.query_row("SELECT enabled=1 AND activated_ms<=?1 FROM native_probe_providers WHERE provider='claude_code'", [event.timestamp_ms], |r| r.get(0)).optional()?.unwrap_or(false);
+        if !active {
+            return Ok(false);
+        }
+        let prior: Option<(String,u64)> = conn.query_row("SELECT identity,cursor FROM native_probe_streams WHERE provider='claude_code' AND session_key=?1", [&stream.session_key], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        Ok(prior.is_none_or(|(identity, cursor)| {
+            identity == stream.identity && event.position > cursor
+        }))
     }
 
     pub fn pending_native_deliveries(&self, limit: usize) -> Result<Vec<NativeDelivery>> {
@@ -214,6 +274,7 @@ mod tests {
         old.streams[0].record_count = 2;
         old.streams[0].settled_count = 2;
         old.streams[0].events = vec![NativeTurnEvent {
+            prompt_id: None,
             position: 2,
             turn_id: "new-turn".into(),
             kind: "completion".into(),
@@ -263,6 +324,7 @@ mod tests {
                 settled_count: count,
                 events: (1..=count)
                     .map(|n| NativeTurnEvent {
+                        prompt_id: None,
                         position: n,
                         turn_id: format!("turn-{n}"),
                         kind: "completion".into(),

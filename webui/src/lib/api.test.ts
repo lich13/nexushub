@@ -921,6 +921,7 @@ describe("archive delete API compatibility", () => {
       "claude.deleteExecute",
       "claude.deletePreview",
       "claude.detail",
+      "claude.hooks",
       "claude.list",
       "claude.rename",
       "grok.deleteExecute",

@@ -193,7 +193,11 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
                     provider: NativeProvider::Grok,
                     session_key: id.clone(),
                     id,
-                    title: summary.title,
+                    title: crate::native_probe::notification_title(
+                        &summary.title,
+                        &summary.id,
+                        &summary.cwd,
+                    ),
                     identity,
                     record_count: events.len() as u64,
                     settled_count,

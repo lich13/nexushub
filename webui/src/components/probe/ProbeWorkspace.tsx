@@ -7,6 +7,7 @@ import {
   TriangleAlert
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ClaudeHookCard } from "./ClaudeHookCard";
 import { Panel } from "../common/Panel";
 import { JobList } from "../jobs/JobList";
 import {
@@ -139,6 +140,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
             <Panel title="Codex Hook" icon={<GitFork size={18} />}>
               <ProbeHookCard status={data} draft={draft} busy={jobBusy} onInstall={() => probeJobMutation.mutate("hooks-install")} />
             </Panel>
+            <Panel title="Claude Code Hooks" icon={<GitFork size={18} />}><ClaudeHookCard /></Panel>
             <Panel title="Bark" icon={<Cloud size={18} />}>
               {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} testStatus={probeJobMutation.variables === "bark-test" ? (jobBusy ? "正在发送，遇到临时故障将自动重试…" : startedJob.data?.status === "succeeded" ? "Bark 已受理" : startedJob.data?.status === "failed" ? "发送失败，请查看执行记录" : probeJobMutation.error?.message ?? null) : null} onSave={saveSettings} onTest={() => probeJobMutation.mutate("bark-test")} />}
             </Panel>

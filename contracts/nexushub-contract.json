@@ -796,6 +796,18 @@
       "requestDto": "DesktopDiagnosticsRequest",
       "responseDto": "DesktopDiagnostics",
       "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "claude.hooks",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "probe.claude_hooks",
+      "tauriCommand": "commands::settings::claudeHooks",
+      "webuiWrapper": "manageClaudeHooks",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeHooksRequest",
+      "responseDto": "ClaudeHooksStatus",
+      "hostOnlyReason": "Explicit local macOS Claude settings status/install/remove; never exposed by the server or remote.invoke"
     }
   ],
   "dtoCatalog": {
@@ -1202,6 +1214,18 @@
     "DesktopGoal": {
       "core": "DesktopGoal",
       "webui": "DesktopGoal"
+    },
+    "ClaudeHooksRequest": {
+      "core": "ClaudeHooksRequest",
+      "webui": "ClaudeHooksRequest"
+    },
+    "ClaudeHooksStatus": {
+      "core": "ClaudeHooksStatus",
+      "webui": "ClaudeHooksStatus"
+    },
+    "ClaudeHooksAction": {
+      "core": "ClaudeHooksAction",
+      "webui": "ClaudeHooksAction"
     }
   },
   "retiredActions": [

@@ -7,8 +7,10 @@ import {
   saveProbeSettings,
   runProbeBarkTest,
   runProbeHooksInstall,
+  manageClaudeHooks,
 } from "../api";
-import type { ProbeJobAction, ProbeSettings } from "../../types";
+import { useConnection } from "./connection";
+import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
 import { preservePreviousQueryData } from "./shared";
 import { backgroundJobKey } from "./jobs";
@@ -102,4 +104,13 @@ export function useProbeActions(input: {
       onError: (error: Error) => input.onSaveError(error)
     })
   };
+}
+
+export function useClaudeHooks(onSuccess: () => void) {
+  const connection = useConnection();
+  const local = connection.target === "local";
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ["claude-hooks", connection.revision], queryFn: () => manageClaudeHooks("status"), enabled: local });
+  const mutation = useMutation({ mutationFn: (action: ClaudeHooksAction) => manageClaudeHooks(action, true), onSuccess: async () => { onSuccess(); await queryClient.invalidateQueries({ queryKey: ["claude-hooks"] }); } });
+  return { local, revision: connection.revision, status, mutation };
 }

@@ -173,7 +173,13 @@ async fn hook_stop_accuracy_fixture_turns_deliver_only_exact_terminal_answers() 
         let request = server.request();
         let capture: Value =
             serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
-        assert_eq!(capture["body"], expected);
+        assert_eq!(
+            capture["body"],
+            expected
+                .replace("[sample](https://example.com/sample)", "sample")
+                .replace("\n\n- ", "\n")
+                .replace("\n- ", "\n")
+        );
     }
 }
 
@@ -207,7 +213,7 @@ async fn hook_stop_accuracy_fixture_final_body_reaches_bark_with_current_title()
     let raw = server.request();
     let payload: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(payload["body"], final_body);
-    assert_eq!(payload["title"], "线程正常完成：Current native title");
+    assert_eq!(payload["title"], "Codex｜完成｜Current native title");
     assert_eq!(event.payload["body_selected_turn_id"], "root-turn");
     let (_, duplicate) = record_probe_event_with_bark(&fixture.config, &db, event)
         .await

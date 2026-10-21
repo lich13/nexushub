@@ -178,10 +178,38 @@ async fn send(
     } else {
         request.title.clone()
     };
+    let mut payload = json!({"device_key":key.trim(),"title":title,"body":body,"id":id});
+    if let Some(presentation) = &request.presentation {
+        let settings = &config.probe.notifications;
+        payload["group"] = json!(format!(
+            "{}｜{}",
+            settings.group.trim(),
+            presentation.provider
+        ));
+        payload["level"] = json!(if presentation.urgent {
+            "timeSensitive"
+        } else {
+            "active"
+        });
+        if let Some(sound) = settings.sound.as_deref().filter(|s| !s.is_empty()) {
+            payload["sound"] = json!(sound);
+        }
+        if let Some(url) = settings.url.as_deref().filter(|s| {
+            reqwest::Url::parse(s).is_ok_and(|u| {
+                !matches!(
+                    u.scheme(),
+                    "javascript" | "data" | "file" | "about" | "blob"
+                ) && u.username().is_empty()
+                    && u.password().is_none()
+            })
+        }) {
+            payload["url"] = json!(url);
+        }
+    }
     let response = client
         .post(url)
         .timeout(timeout)
-        .json(&json!({"device_key":key.trim(),"title":title,"body":body,"id":id}))
+        .json(&payload)
         .send()
         .await;
     let mut response = match response {
@@ -270,6 +298,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_server_urls_fail_without_network_delivery_or_retry() {
         let request = ProbeBarkRequest {
+            presentation: None,
             title: "fixture title".into(),
             body: "fixture body".into(),
             dedupe_key: "fixture-event".into(),
