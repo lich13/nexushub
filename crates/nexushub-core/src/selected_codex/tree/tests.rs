@@ -119,6 +119,86 @@ fn metadata_only_empty_and_header_only_threads_can_be_deleted() {
 }
 
 #[test]
+fn missing_rollouts_still_reject_symlinks_and_parent_traversal() {
+    for link in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, false);
+        let path = if link {
+            let link = f.paths.sessions_dir().join("alias");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(f.paths.home.join("missing"), &link).unwrap();
+            link.join(f.file(ROOT, None).file_name().unwrap())
+        } else {
+            f.paths
+                .sessions_dir()
+                .join("../missing")
+                .join(f.file(ROOT, None).file_name().unwrap())
+        };
+        f.conn()
+            .execute(
+                "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+                rusqlite::params![path.to_string_lossy(), ROOT],
+            )
+            .unwrap();
+        assert!(preview(&f.paths, ROOT, true).is_err());
+    }
+}
+
+#[test]
+fn inactive_waiting_threads_warn_and_delete_in_both_locations() {
+    use std::io::Write;
+    for archived in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        let mut path = f.file(ROOT, None);
+        let question = json!({"type":"response_item","turn_id":"fixture-turn","payload":{"type":"function_call","name":"request_user_input","call_id":"fixture-call","arguments":{"questions":[{"id":"choice","question":"Choose a fixture option"}]}}});
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&path).unwrap(),
+            "{question}"
+        )
+        .unwrap();
+        if archived {
+            let dir = f.paths.home.join("archived_sessions");
+            fs::create_dir(&dir).unwrap();
+            let archived_path = dir.join(path.file_name().unwrap());
+            fs::rename(&path, &archived_path).unwrap();
+            path = archived_path;
+            f.conn()
+                .execute(
+                    "UPDATE threads SET archived=1,rollout_path=?1 WHERE id=?2",
+                    rusqlite::params![path.to_string_lossy(), ROOT],
+                )
+                .unwrap();
+        }
+        f.native(remove_native);
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("待回复")));
+        let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+        assert!(result.error.is_none(), "{result:?}");
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn trees_beyond_the_existing_depth_budget_are_rejected_without_truncation() {
+    let f = Fixture::new();
+    f.add(ROOT, None, false);
+    let mut parent = ROOT.to_string();
+    for n in 1..=33 {
+        let id = format!("55555555-5555-4555-8555-{n:012}");
+        f.add(&id, Some(&parent), false);
+        parent = id;
+    }
+    assert!(preview(&f.paths, ROOT, true).is_err());
+    assert_eq!(
+        f.conn()
+            .query_row("SELECT count(*) FROM threads", [], |r| r.get::<_, usize>(0))
+            .unwrap(),
+        34
+    );
+}
+
+#[test]
 fn explicit_tree_includes_archived_rollout_variants_and_paged_history() {
     let f = Fixture::new();
     f.add(ROOT, None, true);
@@ -268,6 +348,25 @@ fn success_with_residual_paged_rows_is_reported_as_failure() {
     let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
     assert!(result.error.is_some());
     assert!(result.residuals.iter().any(|r| r.contains("thread_items")));
+}
+
+#[test]
+fn a_successful_native_request_with_unverifiable_storage_never_reports_success() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let plan = preview(&f.paths, ROOT, true).unwrap();
+    f.native(|paths, preview| {
+        remove_native(paths, preview)?;
+        fs::write(paths.session_index(), "{incomplete")?;
+        Ok(())
+    });
+    let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+    assert!(result.storage_failure);
+    assert!(result
+        .error
+        .unwrap()
+        .contains("无法完整核验文件、原生索引和分页历史"));
+    assert!(result.deleted_ids.is_empty());
 }
 
 #[test]
