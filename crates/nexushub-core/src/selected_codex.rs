@@ -32,6 +32,7 @@ fn mutation_checkpoint(stage: &str, quarantine: &Path) -> Result<()> {
 
 mod preview_context;
 pub(crate) use preview_context::PreviewContext;
+pub mod tree;
 
 static MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
@@ -65,6 +66,7 @@ pub fn preview(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
 }
 
 /// Preview a permanent delete for either a normal or archived main Codex thread.
+#[cfg(test)]
 pub fn preview_delete(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
     snapshot(paths, &open(paths, false)?, id, None)
 }
@@ -518,10 +520,12 @@ pub fn execute(paths: &CodexPaths, id: &str, fingerprint: &str) -> Result<u64> {
 }
 
 /// Execute a permanent delete for either a normal or archived main Codex thread.
+#[cfg(test)]
 pub fn execute_delete(paths: &CodexPaths, id: &str, fingerprint: &str) -> Result<u64> {
     execute_with_expected_archive(paths, id, fingerprint, None)
 }
 
+#[cfg(test)]
 fn execute_with_expected_archive(
     paths: &CodexPaths,
     id: &str,
@@ -531,6 +535,15 @@ fn execute_with_expected_archive(
     let _guard = MUTATION_LOCK
         .lock()
         .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
+    execute_with_expected_archive_locked(paths, id, fingerprint, expected_archived)
+}
+
+fn execute_with_expected_archive_locked(
+    paths: &CodexPaths,
+    id: &str,
+    fingerprint: &str,
+    expected_archived: Option<bool>,
+) -> Result<u64> {
     let mut conn = open(paths, true)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let selected = snapshot(paths, &tx, id, expected_archived)?;
@@ -1067,6 +1080,7 @@ mod tests {
         };
         let first = api
             .bulk_preview(SessionBatchRequest {
+                include_descendants: false,
                 provider: SessionProvider::Codex,
                 operation: SessionOperation::Archive,
                 session_keys: vec!["active".into(), "one".into()],
@@ -1075,6 +1089,7 @@ mod tests {
         assert!(first.items[0].allowed);
         assert!(!first.items[1].allowed);
         let request = SessionBatchExecuteRequest {
+            include_descendants: false,
             provider: SessionProvider::Codex,
             operation: SessionOperation::Archive,
             confirmed: true,
@@ -1094,39 +1109,21 @@ mod tests {
         let restore = preview_archive(&f.paths, "active", false).unwrap();
         execute_archive(&f.paths, "active", false, &restore.fingerprint).unwrap();
         assert!(preview(&f.paths, "active").is_err());
+        // An older client must explicitly opt in before a native subtree can
+        // be deleted. Full native deletion behavior uses UUID fixtures below.
         let deletion = api
             .bulk_preview(SessionBatchRequest {
+                include_descendants: false,
                 provider: SessionProvider::Codex,
                 operation: SessionOperation::Delete,
-                session_keys: vec!["one".into(), "two".into(), "active".into()],
+                session_keys: vec!["one".into()],
             })
             .unwrap();
-        assert_eq!(deletion.items.iter().filter(|i| i.allowed).count(), 3);
-        fs::write(f.file("two"), "changed").unwrap();
-        let result = api
-            .bulk_execute(SessionBatchExecuteRequest {
-                provider: SessionProvider::Codex,
-                operation: SessionOperation::Delete,
-                confirmed: true,
-                items: deletion
-                    .items
-                    .into_iter()
-                    .filter(|i| i.allowed)
-                    .map(|i| SessionBatchSelection {
-                        session_key: i.session_key,
-                        fingerprint: i.fingerprint.unwrap(),
-                    })
-                    .collect(),
-            })
-            .unwrap();
-        assert_eq!(result.items[0].status, "succeeded");
-        assert_eq!(result.items[1].status, "blocked");
-        assert_eq!(result.items[2].status, "succeeded");
-        assert!(f.file("child").is_file());
-        assert!(!f.file("active").exists());
-        assert!(f.file("two").is_file());
+        assert!(!deletion.items[0].allowed);
+        assert!(deletion.items[0].reason.as_ref().unwrap().contains("后代"));
         assert!(api
             .bulk_preview(SessionBatchRequest {
+                include_descendants: false,
                 provider: SessionProvider::Codex,
                 operation: SessionOperation::Delete,
                 session_keys: vec!["one".into(); 101]
@@ -1134,6 +1131,7 @@ mod tests {
             .is_err());
         assert!(api
             .bulk_preview(SessionBatchRequest {
+                include_descendants: false,
                 provider: SessionProvider::Grok,
                 operation: SessionOperation::Archive,
                 session_keys: vec!["one".into()]

@@ -13,6 +13,9 @@ use std::{
 use tokio::io::{AsyncRead, BufReader, ReadBuf};
 
 static FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+// These tests share the production helper semaphore. Keep each multi-step
+// cancellation assertion isolated from other fixture clients taking its slot.
+static HELPER_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct HelperFixture {
     directory: PathBuf,
@@ -85,6 +88,7 @@ while IFS= read -r line; do
         printf '{{"id":%s,"result":{{"data":[],"nextCursor":null}}}}\n' "$request_id"
       fi ;;
 {create_case}
+    *'"method":"thread/delete"'*) printf '{{"id":%s,"result":{{}}}}\n' "$request_id" ;;
   esac
 done
 "#,
@@ -133,6 +137,52 @@ impl Drop for HelperFixture {
 }
 
 const GENERATED_CHUNK_BYTES: usize = 8 * 1024;
+
+#[tokio::test(flavor = "current_thread")]
+async fn delete_uses_only_initialize_and_fixed_management_method() {
+    let _test = HELPER_TEST.lock().await;
+    let fixture = HelperFixture::new(false);
+    fixture
+        .helper()
+        .delete_thread("11111111-1111-4111-8111-111111111111")
+        .await
+        .unwrap();
+    let methods: Vec<_> = fixture
+        .records()
+        .iter()
+        .map(|(_, message)| message["method"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(methods, ["initialize", "initialized", "thread/delete"]);
+    assert!(matches!(
+        fixture.helper().delete_thread("not-a-native-id").await,
+        Err(DesktopError::InvalidInput)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delete_disconnect_is_unknown_and_is_not_resubmitted() {
+    let _test = HELPER_TEST.lock().await;
+    let fixture = HelperFixture::for_create(CreateReply::Disconnected);
+    let script = fs::read_to_string(&fixture.executable)
+        .unwrap()
+        .replace("thread/start", "thread/delete");
+    fs::write(&fixture.executable, script).unwrap();
+    assert!(matches!(
+        fixture
+            .helper()
+            .delete_thread("11111111-1111-4111-8111-111111111111")
+            .await,
+        Err(DesktopError::OutcomeUnknown)
+    ));
+    assert_eq!(
+        fixture
+            .records()
+            .iter()
+            .filter(|(_, message)| message["method"] == "thread/delete")
+            .count(),
+        1
+    );
+}
 
 struct GeneratedReader {
     prefix: &'static [u8],
@@ -270,6 +320,7 @@ fn app_list_is_unbound_and_force_flags_are_method_specific() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn app_catalog_pages_use_one_helper_and_one_process() {
+    let _test = HELPER_TEST.lock().await;
     let fixture = HelperFixture::new(false);
     let helper = fixture.helper();
     let mut reader = helper.catalog_reader(true).await.unwrap();
@@ -310,6 +361,7 @@ async fn app_catalog_pages_use_one_helper_and_one_process() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn apps_budget_allows_a_page_after_simulated_thirty_two_seconds() {
+    let _test = HELPER_TEST.lock().await;
     let apps_fixture = HelperFixture::new(false);
     let mut apps_reader = apps_fixture.helper().catalog_reader(true).await.unwrap();
     apps_reader.deadline -= Duration::from_secs(32);
@@ -338,6 +390,7 @@ async fn apps_budget_allows_a_page_after_simulated_thirty_two_seconds() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancelling_catalog_read_kills_its_helper_and_releases_the_permit() {
+    let _test = HELPER_TEST.lock().await;
     let blocked = HelperFixture::new(true);
     let blocked_helper = blocked.helper();
     let read = tokio::spawn(async move {
@@ -395,6 +448,7 @@ async fn cancelling_catalog_read_kills_its_helper_and_releases_the_permit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_empty_reports_unknown_after_any_committed_error_or_bad_thread_id() {
+    let _test = HELPER_TEST.lock().await;
     for reply in [
         CreateReply::RpcError,
         CreateReply::Disconnected,
@@ -423,6 +477,7 @@ async fn create_empty_reports_unknown_after_any_committed_error_or_bad_thread_id
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_empty_returns_only_a_verified_thread_uuid() {
+    let _test = HELPER_TEST.lock().await;
     let fixture = HelperFixture::for_create(CreateReply::ValidThreadId);
 
     let result = fixture
