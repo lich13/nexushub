@@ -15,7 +15,7 @@ NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: 
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
-- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable and guard mutations; only fatal parse or identity errors suppress notification scanning.
+- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without disabling safe management; only fatal parse or identity errors suppress notification scanning.
 - The reading column has a 20px timeline rail outside the document flow on desktop and mobile. Its complete user-message index is independent of loaded or folded body pages. Only a bounded range of marks mounts; scrolling and Home/End/arrow keys reach every entry. A single hover/focus preview sizes to its text, capped at 280px on desktop and 240px on mobile, without a duplicate browser tooltip. Selecting an unloaded entry reads one bounded window; older/newer paging and 返回最新 preserve the reading context. Assistant replies, plans and activities retain search anchors without rail marks. `⌘F` on macOS and `Ctrl+F` elsewhere opens machine-scoped 当前线程/当前 Provider search.
 
 ## 本机 Codex 协作区
@@ -64,15 +64,21 @@ Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验
 
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
 
-Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Common record variants remain readable; unknown or incomplete formats and uncertain activity disable management with the native blocker.
+Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Compatibility warnings remain visible; only fatal record, identity, path, permission or uncertain ownership errors block the affected management action.
 
 ## 线程菜单、清理与窗口
 
 线程项右键立即在指针处打开共享操作菜单，不改变当前详情。省略号、Shift+F10 和菜单键使用同一动作列表；Escape、外部点击和列表滚动关闭，菜单在视口边缘自动避让。复制、改名、归档和永久删除都有明确目标，批量模式不混入右键操作。
 
+三个 Provider 通过共享选择逻辑处理行和复选框点击：⌘ 进入多选并切换目标，普通点击在多选中切换，否则打开；Shift 按可见顺序追加连续区间，连续 Shift 保留锚点，无有效锚点仅选当前项。键盘生成的点击忽略修饰键，Ctrl 点击仍打开菜单。保留已有选择，上限 100 项且超出时提示；机器、Provider、筛选和退出多选清除选择及锚点，轮询不自动选择新项。
+
+Codex 列表菜单不提供重复的“复制答复”，会话头部保留。Claude 菜单统一提供改名、复制线程 ID、复制文件路径、复制恢复命令、在 Finder 中显示和删除；改名、删除理由独立显示，复制不受其资格影响。远端 Finder 明确显示不可用原因，恢复命令仅复制，Claude 不提供归档。
+
 列表项与外层改名容器均填满可用宽度，保留 min-width: 0；长短标题、运行 spinner、复选框和选中背景的左右边界一致。
 
 永久删除先显示候选范围与保护原因。隐藏清理呈现本次候选的允许状态，结束后显示删除、跳过、失败、剩余数量和逐项原因；全部受保护时显示“无可清理项目”。失败重试需重新预览。
+
+Codex 删除确认展示全部后代、文件与总大小，待回复项提示丢弃问题。Claude 展示主文件及专属目录完整路径集合。结果以整棵树或独立会话为单位；部分失败展示已删除 ID、残留类别和可行的下一步，详情及缓存按实际删除 ID 清理。残留路径只出现在操作结果中。
 
 Grok 的列表菜单、详情菜单与批量预览共用删除资格，不以“状态未知”文字直接禁止预览。后端提供的占用、身份、损坏或未完成写入原因就地展示；旧服务缺少资格字段时使用原判断。
 
@@ -108,11 +114,13 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
-Probe 仅展示 Bark 设置与既有 Provider、事件筛选。移除退休通道的卡片、测试按钮、加载状态与结果字段，不保留空白占位或额外说明。
+Probe 展示 Bark 设置、Provider／事件筛选及本机 Claude hooks 状态。安装、修复和移除均需明确确认并保留其他 hooks；远端说明继续轮询。App 安装不自动启用 hooks。退休通道不保留卡片或占位。
 
 ## Bark 状态与测试反馈
 
-同一事件卡片显示最新投递结果，重试成功不新建卡片。“等待重试”显示下次时间；“重试中”显示当前次数；确认成功显示“Bark 已受理”；最终拒绝、结果不明和停止投递分别显示“发送失败”“结果未确认”“已跳过”。错误仅使用安全中文分类，分段通知显示已确认进度。
+同一事件卡片显示最新投递结果，重试成功不新建卡片。“等待重试”显示下次时间；“重试中”显示当前次数；确认成功显示“Bark 已受理”；最终拒绝、结果不明和停止投递分别显示“发送失败”“结果未确认”“已跳过”。错误仅使用安全中文分类，旧队列分段通知继续显示已确认进度。
+
+新事件标题为 `Provider｜完成／需要回复／需要授权／失败｜线程标题`；缺失标题回退项目名和固定名称。正文最多四个非空行、300 个 Unicode 字符，移除 Markdown、代码、工具输出与内部元数据，截断加省略号。Claude hooks 及同机轮询同回合每类提醒一次，完成后没有单独空闲提醒；Codex 保留逐问题提醒。
 
 Bark 地址保存和投递共用安全校验；无效配置在既有错误位置显示失败，不新增入口，也不悄悄改用默认服务。HTTPS 服务与 HTTP 回环测试保持既有操作方式。
 

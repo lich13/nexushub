@@ -77,7 +77,7 @@ Tauri 频道最多每秒十次投影视图，初值取自同一订阅；前端�
 
 ### 证据与未核实项
 
-1.3.4 的隔离文件样本已复现 macOS 扩展属性更新只改变 ctime、内容与其他身份不变时被误拒；摘要复核覆盖此情形，不能据此确认用户截图中那次失败的唯一原因。新增 Finder、路径文本、PNG/TIFF/JPEG 使用专用 pasteboard 测试，不触碰真实剪贴板；修复候选真实粘贴与发送由用户确认，覆盖范围见[当前验收记录](progress/MASTER.md#候选与用户验收)。
+1.3.4 的隔离文件样本已复现 macOS 扩展属性更新只改变 ctime、内容与其他身份不变时被误拒；摘要复核覆盖此情形，不能据此确认用户截图中那次失败的唯一原因。新增 Finder、路径文本、PNG/TIFF/JPEG 使用专用 pasteboard 测试，不触碰真实剪贴板；修复候选真实粘贴与发送由用户确认，覆盖范围见[1.3.4 验收记录](https://github.com/lich13/nexushub/blob/2b443fb412670e436bdb919affeef405f4efe200/docs/progress/MASTER.md#候选与用户验收)。
 
 1.3.3 修复前已只读复现：带线程 ID 的临时 helper 返回 -32600/thread not found；threadId:null 的应用冷读约 29–32 秒，同一 helper 第二页约 108ms；model/list 实际包含 max。当时桌面 build 为 20586、bundled CLI 为 0.163.0-alpha.10.2；这些目录探测不是回合或两端功能验收。
 
@@ -117,9 +117,11 @@ Goal 仅支持状态显示与原生操作入口，直接创建、修改、暂停
 
 ### Claude Code
 
-opaque session key 绑定相对 transcript 位置和原生 ID，同名 ID 互不混淆；子智能体文件不作为独立主会话。详情按稳定事件身份分页，保留分支和原生事件顺序。常见 2.x user/assistant、标题、工具、queue/history/usage、compaction 等记录可读；未知记录仍显示，格式未验证、损坏或半行记录阻止管理。
+opaque session key 绑定相对 transcript 位置和原生 ID，同名 ID 互不混淆；子智能体文件不作为独立主会话。详情按稳定事件身份分页，保留分支和原生事件顺序。兼容常见 2.x user/assistant、标题、工具、queue/history/usage、compaction、API 请求辅助、会话设置、续接及已核实 system subtype。兼容 warning 仅展示，未知记录不伪造完成或权限；损坏、半行、身份冲突、路径和权限异常继续阻止写操作。
 
-运行显示要求已识别进程、启动时间、会话/项目匹配及未结束回合。管理更保守地拒绝任何潜在占用。改名仅追加已验证的 `custom-title` 并确认持久化；删除只隔离和复核目标 JSONL，不改原生索引、配置、安装或项目工作目录。
+原生会话登记结合会话 ID、PID、进程身份、启动标识和主机进程域判断占用，打开 transcript 与显式恢复参数补充证据；PID 复用或不匹配登记不能证明占用。已明确属于其他会话的进程不锁住同 cwd 的全部历史会话；证据不足仅阻止可能受影响目标。不使用静默时间窗口，有明确非活跃证据时遗留 turn_open 不永久禁止管理。canRename、canDelete 及原因独立，执行前再次核验归属和指纹。
+
+改名仅追加原生 `custom-title`。删除预览绑定主 transcript 及经验证同名目录的完整文件集合，包括 subagents、工具结果和元数据；子代理以原生父会话关联核验，允许自身不同 sessionId。全部目标一起隔离、复检，移除前发现新增文件、链接或归属变化即停止并恢复隔离项；不沿 continued-in 删除其他主会话，不删除工作目录或共享存储。
 
 ### Grok Build
 
@@ -151,7 +153,15 @@ opaque session key 绑定相对 transcript 位置和原生 ID，同名 ID 互不
 
 ## 管理安全与隐藏扫描
 
-批量请求只接受明确 Provider keys，预览和执行逐项返回结果；筛选变化清空选择，轮询不得追加选择。Codex 普通/归档删除以预览指纹绑定身份、明确终态、数据库/索引关联、共享引用和文件内容；先进入私有隔离目录，再配合数据库事务与索引原子替换。普通错误尝试恢复文件和索引，回滚不完整时保留可恢复数据，不级联删除未选中线程。强制终止后的隔离数据保留不等于启动时自动恢复。
+批量请求只接受明确 Provider keys，预览和执行逐项返回结果。三种 Provider 共用 useSessionSelection，点击事件从 RenameableSession 和复选框传入；⌘ 切换单项、Shift 按可见顺序追加区间，键盘点击按普通选择处理。最多 100 项，切换机器／Provider／筛选或退出多选清空选择和锚点，轮询只移除消失项。列表、详情与批量复用管理资格，复制与写操作的资格独立。
+
+Codex 普通和归档线程显式删除允许 metadata-only／header-only 空线程及无活跃 owner 或 writer 的待回复线程，后者必须提示丢弃问题。按原生命名识别传统、_rolloutId 及归档文件；压缩文件无法核验目标或外部历史引用时整项阻止。由原生父子关联建立完整子树，深度、扫描预算、循环、多父链、缺失关系及外部历史分支引用均严格核验。指纹绑定机器、范围、全部线程／rollout 身份、文件、关联和索引；执行前变化须重新预览。
+
+新客户端检查 codex_delete_tree 能力并在预览和执行中显式传 includeDescendants=true；默认 false 的旧请求不能隐式级联。SessionBatchItem 增加可选 descendants／warnings，SessionBatchItemResult 增加 deletedIds／residuals。ClaudeDeletePreview 保留 path 并增加完整 paths。客户端按实际删除 ID 清理详情和缓存；归档、恢复和隐藏清理不继承删除条件的放宽。
+
+短生命周期原生 helper 只调用固定 thread/delete 管理方法；桌面 IPC 不冒充删除转发，Linux 复用配置的原生程序。helper 不恢复线程、启动回合或停止用户进程。官方请求提交后错误或超时均不回退、不自动重试，不承诺整树事务回滚。仅官方路径预先不可用、结构与引用可完整核验的旧格式单线程保留隔离、哈希和回滚路径；未知结构或不支持的分页历史拒绝离线删除。
+
+完成后统一核验全部文件、threads、关联索引、名称索引及按线程／rollout ID 存储的分页历史；仅完整通过返回 succeeded。残留或无法核验返回 failed，明确部分结果或未知范围与下一步，路径只出现在操作结果中。一棵树为一个结果单位，独立项可继续，共享存储完整性故障停止受影响操作。
 
 `cleanup.hiddenDryRun` 固定扫描开始时的候选，集中读取一次数据库元数据、会话索引和原生目录，建立引用映射；逐项流式核验终态、身份和完整指纹。取消检查间隔最多 64KiB。可选 start/poll/cancel、扫描 ID 与游标复用原 action；无参数保持原完整响应，重复游标返回相同已发布结果，扫描中发布完整页，完成/停止发布尾页。
 
@@ -175,17 +185,25 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 
 ## 通知与监测
 
-事件识别与 Bark HTTP 投递分离。Codex 错误绑定规范主任务身份；普通自然语言反馈仅在确认终态后本地识别，monitor、Stop Hook 和完成入口共享 `assistant_question` 与持久化认领。Grok 使用主回合结束证据；Claude 要求明确终态且无 pending tools，空完成内容回退到本回合最后一段助手回复。兼容警告继续可读并保护管理，仅致命解析/身份错误禁止扫描。
+事件识别与 Bark HTTP 投递分离。Codex 错误绑定规范主任务身份；普通自然语言反馈仅在确认终态后本地识别，monitor、Stop Hook 和完成入口共享 `assistant_question` 与持久化认领。Grok 使用主回合结束证据；Claude 轮询要求明确终态且无 pending tools，空完成内容回退到本回合最后一段助手回复。兼容警告继续可读，仅致命解析/身份错误禁止扫描。
 
 原生 Codex 问题解析位于 `codex/user_input.rs`，统一同步 question、异步 title 和字符串/对象选项。tracker 以原始 turn/call/question 身份配对完整回复，处理明确取消与替换；工具确认、背景进度或正常完成不能关闭尚未回答的问题。异步 monitor 独立于列表状态，与 Hook、passive、Stop 共用发送前复核。启用基线和原子 per-call 认领保证首次跳过旧历史、部分回答不产生新身份，重启/TTL 过期不重发已确认调用。
 
-Claude 通知复用 provider monitor 的游标和原子认领；仅明确完成/失败、未解决 AskUserQuestion 或绑定 pending 主工具的权限请求符合条件。不从普通待完成工具猜权限，不使用 Codex 自然语言推断；原生记录未保存的权限不能通知。首次启用和兼容读取器升级建立基线，新请求取代未发送旧事件，发送时复核身份和 pending 状态。
+Claude 轮询复用 provider monitor 游标；仅明确完成／失败、未解决 AskUserQuestion 或绑定 pending 主工具的权限请求符合条件，不从普通 pending tool 猜权限。解析器保留有效分支上先前回合的终态，后续新用户消息不清空旧完成，增量游标可补发未处理事件；一轮共享扫描或按目标读取完成投递复核，避免每项全库重扫。
+
+claude.hooks 是仅限本机的 status／install／remove 操作。安装须设置页明确确认，App 安装不启用；配置位置沿用 Claude Provider，按固定程序和专属子命令识别受管条目，结构化合并并原子替换，保留用户／插件 hooks。安装、修复、移除幂等，格式错误或并发修改停止。Linux RPC 和 remote.invoke 不开放 hooks 配置写入。
+
+受管 hook 使用 exec 程序与参数、async=true，handler 自行限制总时间五秒，不依赖异步 timeout 字段，不输出审批、模型上下文或唤醒指令。Stop 使用 last_assistant_message；Notification 的 permission_prompt 为授权，elicitation_dialog／elicitation_url_dialog／agent_needs_input 为回复；StopFailure 仅使用过滤后的错误类别。idle_prompt 不独立提醒，仅在尚未通知完成、未被启用基线覆盖且可核实终态时作为完成兜底。
+
+hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成仅在来源替换、截断、分支回退等真实失效时撤销。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
+
+三种 Provider 共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 NexusHub 深链。
 
 Bark 保存和发送前共用 URL 校验。HTTPS 拒绝回环、未指定、链路本地、IPv4 私网、IPv6 ULA 及对应映射地址；拒绝数字 IP 别名、非法 authority 和 URL 凭据。保留普通 HTTPS 主机名与真实 HTTP 回环服务，不作 DNS 解析。无效配置保留原值并停止投递，不改用默认服务携带原密钥发送。
 
 `bark` 复用支持 HTTP/2 的连接池并禁重定向，分类 DNS、连接、TLS、超时、读取、HTTP 及业务拒绝；已知永久 APNs 错误优先。原始异常仅用于内部分类，对外保留安全分类、状态码、耗时、次数及匿名关联，不输出 Key 或正文。
 
-`notification_delivery` 将不可变请求和分段加密入队，事务化认领/确认/事件回写；租约持有者才能确认，过期租约只恢复未确认分段。每分段最多 3 次，等待 15/60 秒并加 ±20% 抖动，首次投递后最长 10 分钟；尊重 Retry-After，超出剩余期限即终止。成功分段不重发，稳定通知 ID 由机器实例、事件与分段组成。
+`notification_delivery` 将不可变请求加密入队，事务化认领／确认／事件回写；新事件保存单条摘要，旧在途请求仍按原内容和分段确认继续，不重新格式化。租约持有者才能确认，过期租约只恢复未确认内容。每条／旧分段最多 3 次，等待 15/60 秒并加 ±20% 抖动，首次投递后最长 10 分钟；尊重 Retry-After，超出剩余期限即终止。成功项不重发，稳定通知 ID 由机器实例、事件与分段组成；保留默认关闭、Provider 开关和启用基线，不清空数据库或凭据。
 
 Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后检查当前配置、身份、开关、目标与事件有效性。正常追加以原始前缀和文件身份复核，不因长度变化取消。结束清除队列正文，同一 UI 事件更新状态。旧终态失败/未知不回放，新网络未知可有限重试且可能重复提醒。主动测试使用独立身份和同一队列，最终未受理以失败退出；受理不代表手机实收。
 
@@ -224,6 +242,7 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 | 1.2.17 history/稳定 cursor/Grok 分页 | 旧 cursor、全量快照或逐页刷新 | 最低服务保证变更元数据及分页 |
 | 1.2.20 hidden_cleanup_scan/deletionEligibility | 单次扫描无虚假进度/取消；Grok 使用原活动资格判断 | 最低服务保证两项能力 |
 | 1.2.21 contextBlocks/timeline | 保守解析原包装；历史顺序加载和定位 | 最低服务保证结构化内容及索引 |
+| 1.3.5 codex_delete_tree／includeDescendants | 提示升级，不隐式级联；旧请求默认不含后代 | 最低服务保证整树预览、执行和复检 |
 
 不删除 tombstone、回退或有效迁移。tombstone 至少保留整个协议 2 生命周期；移除回退需明确提高最低服务版本；数据库迁移按历史数据库升级支持范围保留，不能仅因服务版本提高而移除。
 

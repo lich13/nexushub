@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.5": [
+        "统一三种 Provider 的多选与菜单，修复 Codex 整树删除和 Claude 会话管理",
+        "Bark 改为简洁单条摘要，新增需手动启用的本机 Claude hooks，保留 Codex 逐问题提醒。",
+    ],
     "1.3.4": [
         "按实际协议判断桌面兼容性，移除无意义的 build 提示，修复附件仅元数据变化时被误拒",
         "支持 Finder 文件、完整路径文本和 PNG/TIFF/JPEG 粘贴，保留文件安全校验与原生桌面执行。",
@@ -183,6 +187,43 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.5":
+        sections = {
+            "版本概览": ["本版修复线程多选、菜单、Codex 删除、Claude 会话管理与 Bark 漏推；macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Codex、Claude Code、Grok 共用 ⌘ 点击多选、Shift 连续区间追加和 100 项上限；切换机器或筛选条件清除选择，轮询保留仍存在的选项。",
+                "Claude 菜单提供改名、复制线程 ID、路径、恢复命令、本机 Finder 定位和删除；各项能力独立判断。Codex 列表移除重复的复制答复入口，头部按钮保留。",
+                "本机设置新增 Claude hooks 的状态、安装、修复与移除；须明确确认，保留已有用户与插件 hooks，远端继续使用轮询。",
+            ],
+            "问题修复": [
+                "Codex 支持空线程和无活跃写入者的待回复线程删除，预览完整子线程树及文件；优先使用原生删除接口，复检文件、索引和分页历史，部分失败或结果不明不会报告成功或自动重试。",
+                "Claude 使用原生会话登记和进程身份判断占用，修复同工作目录历史会话被误保护；兼容警告不再阻止安全管理，专属目录与主文件一起核验、隔离和删除。",
+                "Bark 标题统一为 Provider、状态和线程标题，正文去除 Markdown、代码及内部信息，最多四行、300 个 Unicode 字符，每个新事件生成一条摘要。",
+                "Claude hooks 与本机轮询共享每回合每类一次的认领，保留有效旧回合完成事件以补发；完成后不再单独提醒空闲。Codex 多个独立问题仍分别通知。",
+                "更新 TLS 证书验证与根证书依赖，修复上游披露的 emSign 中间证书信任问题。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；整树删除需服务声明能力并由客户端显式确认，旧服务提示升级，不静默级联或降级。",
+                "压缩 rollout、未知存储、活动写入者及无法核验的引用仍阻止删除；归档、恢复和隐藏清理沿用原有条件。Claude 不增加归档，不沿续接关系删除其他主会话。",
+                "保留 Bark 默认关闭、Provider 开关、启用基线、凭据及加密队列；旧在途消息保留原内容和已确认分段，升级不回放历史或重发成功项。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装 App 不会自动启用 Claude hooks。保留现有配置、凭据、会话和回退材料。",
+                "用专门测试线程验收多选、菜单和删除；在本机设置页确认启用 Claude hooks 后，验证完成、问题、授权和失败提醒，以及 Codex 同回合多问题分别通知。",
+                "Bark 已受理表示服务端确认，设备实收仍需核对；网络结果未知时有限重试仍可能重复。macOS 包未使用 Developer ID 签名或 Apple 公证。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.4":
         sections = {

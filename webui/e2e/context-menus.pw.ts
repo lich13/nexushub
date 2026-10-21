@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { demoThreads } from "../src/lib/api/demo";
+import { demoSystemCapabilities, demoThreads } from "../src/lib/api/demo";
+import type { SessionBatchRequest } from "../src/lib/api/sessions";
 import type { ClaudeSessionSummary } from "../src/types";
 import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 
@@ -149,7 +150,11 @@ test("Grok and Claude context menus expose their provider actions", async ({ pag
 
 test("Codex ordinary thread deletion shows an explicit preview before any execution", async ({ page }) => {
   await mockApi(page);
-  const previews: Array<{ provider: string; operation: string; sessionKeys: string[] }> = [];
+  await mockCommand(page, "system.capabilities", () => {
+    const system = demoSystemCapabilities("macos-tauri");
+    return { ...system, capabilities: { ...system.capabilities, codex_delete_tree: true } };
+  });
+  const previews: SessionBatchRequest[] = [];
   let executions = 0;
   await mockCommand(page, "sessions.bulkPreview", args => {
     const request = args.request;
@@ -187,7 +192,8 @@ test("Codex ordinary thread deletion shows an explicit preview before any execut
   expect(previews).toEqual([{
     provider: "codex",
     operation: "delete",
-    sessionKeys: ["019e8c1f-demo"]
+    sessionKeys: ["019e8c1f-demo"],
+    includeDescendants: true
   }]);
   expect(executions).toBe(0);
 
@@ -195,6 +201,26 @@ test("Codex ordinary thread deletion shows an explicit preview before any execut
   await expect(dialog).toHaveCount(0);
   expect(executions).toBe(0);
 });
+
+for (const treeCapability of [undefined, false]) {
+  test(`Codex deletion requires a service upgrade when tree capability is ${treeCapability}`, async ({ page }) => {
+    await mockApi(page);
+    await mockCommand(page, "system.capabilities", () => {
+      const system = demoSystemCapabilities("macos-tauri");
+      return { ...system, capabilities: { ...system.capabilities, codex_delete_tree: treeCapability } };
+    });
+    let requests = 0;
+    await mockCommand(page, "sessions.bulkPreview", () => { requests++; return { items: [] }; });
+    await mockCommand(page, "sessions.bulkExecute", () => { requests++; return { items: [] }; });
+    await page.goto("/");
+    await page.locator(".thread-item").first().click();
+    await page.getByLabel("任务操作", { exact: true }).click();
+    await page.getByRole("button", { name: "永久删除", exact: true }).click();
+    await expect(page.getByText("当前服务不支持整树删除，请先升级服务", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(requests).toBe(0);
+  });
+}
 
 
 for (const theme of ["light", "dark"] as const) {
