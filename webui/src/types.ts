@@ -61,7 +61,7 @@ export type ClaudeSessionSummary = {
 export type ClaudeHistoryEvent = { id: string; turnId?: string | null; result?: string | null; userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
 export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
 export type ClaudeSessionDetail = { timeline?: TimelineEntry[]; afterCursor?: string | null; history?: HistoryMetadata | null; summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
-export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
+export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; paths?: string[]; fingerprint: string; fileCount: number; bytes: number };
 export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
 export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
 

@@ -277,7 +277,7 @@ impl SessionUseCases {
         let (id, title, paths, bytes, fingerprint) = match provider {
             SessionProvider::Claude => {
                 let p = crate::claude::preview_claude_delete(&self.claude, key)?;
-                (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
+                (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }
             SessionProvider::Codex => {
                 ensure!(

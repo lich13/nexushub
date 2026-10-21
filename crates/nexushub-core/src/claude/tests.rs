@@ -285,14 +285,14 @@ fn explicit_question_waits_for_result_and_does_not_infer_questions_from_prose() 
 }
 
 #[test]
-fn unfinished_turn_without_a_live_owner_remains_guarded() {
+fn unfinished_turn_with_verified_inactive_owner_can_be_managed() {
     let f = Fixture::new();
     f.write(&[f.row("u1", None, "user", json!("Unfinished request"))]);
     let summary = claude_session_summary(&f.paths, &f.key()).unwrap();
     assert_eq!(summary.status, "unknown");
-    assert!(!summary.can_rename && !summary.can_delete);
-    assert!(rename_claude_session(&f.paths, &f.key(), "Blocked").is_err());
-    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    assert!(summary.can_rename && summary.can_delete);
+    assert!(rename_claude_session(&f.paths, &f.key(), "Renamed").is_ok());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
 }
 
 #[test]
@@ -337,12 +337,12 @@ fn rename_and_delete_only_selected_file_recheck_fingerprint_and_identity() {
 }
 
 #[test]
-fn rejects_unknown_version_symlinks_and_damaged_identity() {
+fn warnings_allow_management_but_links_and_identity_conflicts_do_not() {
     let f = Fixture::new();
     f.complete();
     f.append(&json!({"type":"future","sessionId":"native-fixture"}));
-    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
-    assert!(rename_claude_session(&f.paths, &f.key(), "blocked").is_err());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
+    assert!(rename_claude_session(&f.paths, &f.key(), "Renamed").is_ok());
     f.complete();
     f.append(&json!({"type":"custom-title","sessionId":"other-id","customTitle":"wrong"}));
     assert!(rename_claude_session(&f.paths, &f.key(), "blocked").is_err());
@@ -870,7 +870,7 @@ fn claude_summary_cache_revalidates_rewrites_truncation_and_atomic_replacement()
         1,
         "Swapped request",
         "unknown",
-        false,
+        true,
     );
 }
 
@@ -978,14 +978,14 @@ fn success_result_does_not_finish_with_pending_tool_and_unknown_system_is_warnin
     assert_eq!(summary.status, "unknown");
     assert!(summary.read_error.is_none());
     assert!(summary.read_warning.is_some());
-    assert!(!summary.can_rename && !summary.can_delete);
+    assert!(summary.can_rename && summary.can_delete);
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(scan.errors, 0);
     assert_eq!(scan.streams.len(), 1);
 }
 
 #[test]
-fn compatible_auxiliary_records_are_readable_but_unknown_formats_stay_mutation_guarded() {
+fn compatible_warnings_do_not_block_verified_inactive_management() {
     let f = Fixture::new();
     f.complete();
     for kind in [
@@ -1009,13 +1009,153 @@ fn compatible_auxiliary_records_are_readable_but_unknown_formats_stay_mutation_g
     assert!(detail.summary.read_error.is_none());
     assert!(detail.summary.read_warning.is_some());
     assert_eq!(detail.summary.status, "recent");
-    assert!(!detail.summary.can_rename && !detail.summary.can_delete);
-    assert!(rename_claude_session(&f.paths, &f.key(), "Blocked").is_err());
-    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    assert!(detail.summary.can_rename && detail.summary.can_delete);
+    assert!(rename_claude_session(&f.paths, &f.key(), "Renamed").is_ok());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
     let scan = notification_snapshots(&f.paths).unwrap();
     assert_eq!(scan.errors, 0);
     assert_eq!(scan.streams[0].events.len(), 1);
     assert_eq!(scan.streams[0].events[0].kind, "completion");
+}
+
+#[test]
+fn auxiliary_api_metadata_is_not_displayed_or_treated_as_terminal() {
+    let f = Fixture::new();
+    f.complete();
+    for kind in [
+        "api-request-shape",
+        "api-request-blob",
+        "api-request",
+        "agent-setting",
+        "continued-in",
+    ] {
+        f.append(
+            &json!({"type":kind,"sessionId":"native-fixture","data":"synthetic-internal-content"}),
+        );
+    }
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed.warnings.is_empty());
+    assert!(!parsed.events.iter().any(|e| e
+        .detail
+        .as_deref()
+        .unwrap_or("")
+        .contains("synthetic-internal-content")));
+    assert_eq!(parsed.native_events.len(), 1);
+}
+
+fn owned_sidecars(f: &Fixture) -> PathBuf {
+    let directory = f.file.with_extension("");
+    fs::create_dir_all(directory.join("subagents")).unwrap();
+    fs::create_dir_all(directory.join("tool-results")).unwrap();
+    fs::write(directory.join("subagents/agent-fixture.jsonl"),format!("{}\n{}\n",json!({"type":"fork-context-ref","parentSessionId":"native-fixture"}),json!({"type":"user","sessionId":"child-fixture","uuid":"child-user","message":{"content":"Synthetic child"}}))).unwrap();
+    fs::write(
+        directory.join("subagents/agent-fixture.meta.json"),
+        "{\"agentType\":\"fixture\"}",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("tool-results/output.txt"),
+        "synthetic tool result",
+    )
+    .unwrap();
+    directory
+}
+
+#[test]
+fn deletion_covers_verified_sidecars_without_following_continuations() {
+    let f = Fixture::new();
+    f.complete();
+    let directory = owned_sidecars(&f);
+    f.append(&json!({"type":"continued-in","sessionId":"native-fixture","continuationSessionId":"other-fixture"}));
+    let other = f.file.with_file_name("other.jsonl");
+    fs::write(&other, "synthetic unrelated").unwrap();
+    let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
+    assert_eq!(plan.file_count, 4);
+    assert_eq!(plan.paths.len(), 7);
+    execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: f.key(),
+            confirmed: true,
+            fingerprint: plan.fingerprint,
+        },
+    )
+    .unwrap();
+    assert!(!f.file.exists());
+    assert!(!directory.exists());
+    assert!(other.exists());
+}
+
+#[test]
+fn sidecar_conflict_new_files_and_quarantine_mutations_are_preserved() {
+    for failure in ["foreign-parent", "new-file", "quarantined"] {
+        let f = Fixture::new();
+        f.complete();
+        let directory = owned_sidecars(&f);
+        let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
+        match failure {
+            "foreign-parent" => fs::write(
+                directory.join("subagents/agent-fixture.jsonl"),
+                format!(
+                    "{}\n",
+                    json!({"type":"fork-context-ref","parentSessionId":"other-fixture"})
+                ),
+            )
+            .unwrap(),
+            "new-file" => fs::write(directory.join("tool-results/new.txt"), "new fixture").unwrap(),
+            _ => mutations::TEST_MUTATION.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(|staged| {
+                    fs::write(
+                        staged.with_extension("").join("tool-results/new.txt"),
+                        "new fixture",
+                    )?;
+                    Ok(())
+                }))
+            }),
+        }
+        let result = execute_claude_delete(
+            &f.paths,
+            ClaudeDeleteRequest {
+                session_key: f.key(),
+                confirmed: true,
+                fingerprint: plan.fingerprint,
+            },
+        );
+        mutations::TEST_MUTATION.with(|slot| *slot.borrow_mut() = None);
+        assert!(result.is_err(), "{failure}");
+        assert!(f.file.exists());
+        assert!(directory.join("tool-results/output.txt").exists());
+        if failure != "foreign-parent" {
+            assert!(directory.join("tool-results/new.txt").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sidecar_links_are_blocked_and_rename_delete_capabilities_are_independent() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    for hard in [false, true] {
+        let f = Fixture::new();
+        f.complete();
+        let directory = owned_sidecars(&f);
+        let external = f.root.join("external");
+        fs::write(&external, "fixture").unwrap();
+        let link = directory.join("tool-results/link");
+        if hard {
+            fs::hard_link(&external, &link).unwrap();
+        } else {
+            symlink(&external, &link).unwrap();
+        }
+        assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+        assert!(external.exists());
+    }
+    let f = Fixture::new();
+    f.complete();
+    fs::set_permissions(&f.file, fs::Permissions::from_mode(0o400)).unwrap();
+    let summary = claude_session_summary(&f.paths, &f.key()).unwrap();
+    assert!(!summary.can_rename);
+    assert!(summary.can_delete);
 }
 
 #[test]
