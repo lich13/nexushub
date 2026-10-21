@@ -130,6 +130,18 @@ describe("RenameableSession event boundaries", () => {
     expect(view.props.onSelect).toHaveBeenCalledTimes(1);
   });
 
+  test("forwards selection modifiers and leaves Ctrl click to the context menu", () => {
+    const view = mount();
+    const event = { detail: 1, metaKey: true, shiftKey: true };
+    view.row().props.onClick(event);
+    expect(view.props.onSelect).toHaveBeenCalledExactlyOnceWith(event);
+    view.row().props.onClick({ detail: 1, ctrlKey: true });
+    expect(view.props.onSelect).toHaveBeenCalledOnce();
+    view.row().props.onDoubleClick({ ...doubleClick(), metaKey: true });
+    view.render();
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+  });
+
   test("F2 and Enter rename the trimmed draft and restore row focus", async () => {
     const view = mount();
     const rowHost = view.host(view.row());

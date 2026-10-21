@@ -124,7 +124,7 @@ export function GrokWorkspace({}: { }) {
           disabled={batch.busy}
           selecting={batch.selecting}
           selected={item.id === selected?.id}
-          onSelect={() => { if (batch.selecting) { batch.toggle(item.id); return; } setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); }}
+          onSelect={event => batch.select(item.id, event, () => { setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); })}
           onRename={(next) => actions.rename.mutateAsync({ id: item.id, title: next })}
           menuActions={[
             { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => {

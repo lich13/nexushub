@@ -3,7 +3,7 @@ import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, Copy, FolderOpen, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useMemo, useState, type ReactNode } from "react";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
@@ -16,7 +16,9 @@ import { MarkdownContent } from "../common/MarkdownContent";
 import { PlanActions } from "../common/PlanActions";
 import { CopyReplyButton } from "../common/CopyReplyButton";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
-import { TaskMenu } from "../common/TaskMenu";
+import { TaskMenu, ThreadMenuItems, type ThreadMenuAction } from "../common/TaskMenu";
+import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
+import { claudeResumeCommand } from "../../lib/domain/claudeSession";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
@@ -110,15 +112,21 @@ export function ClaudeWorkspace() {
     else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
   }, [navigation.active, navigation.latest, pendingSearch, selected?.sessionKey, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
 
-  const copyId = async () => {
-    if (!selected) return;
+  const copy = async (value: string) => {
     try {
-      await navigator.clipboard.writeText(selected.id);
-      setFeedback("已复制线程 ID");
-    } catch (copyError) {
-      setFeedback(`复制失败：${copyError instanceof Error ? copyError.message : "剪贴板不可用"}`);
-    }
+      await navigator.clipboard.writeText(value);
+      setFeedback("已复制");
+    } catch { setFeedback("复制失败：剪贴板不可用"); }
   };
+  const menuActions = (item: ClaudeSessionSummary): ThreadMenuAction[] => [
+    { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => { void copy(item.id); } },
+    { id: "copy-path", label: "复制文件路径", icon: <Copy size={15} />, run: () => { void copy(item.path); } },
+    { id: "copy-resume", label: "复制恢复命令", icon: <Terminal size={15} />, run: () => { void copy(claudeResumeCommand(item.cwd, item.id)); } },
+    { id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />, disabled: !canRevealLocalPath(),
+      reason: canRevealLocalPath() ? null : "仅可在本机 Finder 中显示本机会话", run: () => { void revealLocalPath(item.path).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); } },
+    { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !item.canDelete,
+      reason: item.deleteBlockReason, run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
+  ];
 
   return <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
     <aside className="provider-list">
@@ -134,15 +142,9 @@ export function ClaudeWorkspace() {
           selecting={batch.selecting}
           selected={item.sessionKey === selected?.sessionKey}
           renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
-          onSelect={() => { if (batch.selecting) { batch.toggle(item.sessionKey); return; } setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); }}
+          onSelect={event => batch.select(item.sessionKey, event, () => { setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); })}
           onRename={(next) => actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })}
-          menuActions={[
-            { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => {
-              void navigator.clipboard.writeText(item.id).then(() => setFeedback("已复制线程 ID")).catch(() => setFeedback("复制失败：剪贴板不可用"));
-            } },
-            { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !(item.canDelete),
-              reason: item.deleteBlockReason, run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
-          ]}
+          menuActions={menuActions(item)}
         ><strong>{claudeSessionLabel(item)}</strong><span>{item.id}</span><span>{item.cwd}</span><span className="session-status-row">{item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}<SessionSize size={item.storageSize} /></span></RenameableSession></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Claude Code 会话</div>}
@@ -155,9 +157,8 @@ export function ClaudeWorkspace() {
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
           <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
           <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
-            <button onClick={() => { void copyId(); }}><Copy size={15} />复制线程 ID</button>
             <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
-            <button disabled={!selected.canDelete || actions.preview.isPending} title={selected.deleteBlockReason ?? undefined} onClick={() => { actions.remove.reset(); actions.preview.mutate(selected.sessionKey, { onSuccess: setPreview }); }}><Trash2 size={15} />删除任务文件</button>
+            <ThreadMenuItems actions={menuActions(selected)} />
           </TaskMenu>
         </header>
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
