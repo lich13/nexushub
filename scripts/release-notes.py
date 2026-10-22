@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.7": [
+        "兼容 Claude 原生身份与版本字段的并存记录，修复合法会话无法改名、删除和通知扫描的问题。",
+        "Codex 官方删除成功后核验并清理 writer lock、shell snapshot 和 visualization 旁路；浏览器验收统一使用 Playwright 管理的浏览器。",
+    ],
     "1.3.6": [
         "Codex 支持压缩 rollout 的只读核验和官方整树删除，补齐明文与压缩历史引用复检",
         "修复 Claude 会话归属与专属文件管理，并将同回合过程折叠、最终答复和搜索定位分开显示。",
@@ -192,7 +196,40 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version == "1.3.6":
+    if version == "1.3.7":
+        sections = {
+            "版本概览": ["本版修复 Claude 身份兼容、Codex 删除旁路收尾和 Playwright 浏览器来源约束；API 协议保持 2，macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Claude 每条记录优先使用非空 `sessionId` 和 `version`；同记录的 snake 字段可作为回退，双值不同只保留兼容警告，不再误报身份冲突。跨记录身份冲突、父子关联异常和活动进程保护继续阻断管理操作。",
+                "Codex 删除预览纳入 `thread-writer-locks/<id>.lock`、`shell_snapshots/<id>.*` 和 `visualizations/**/<id>/`，分别展示路径、大小和预览指纹；官方删除成功并完成主数据复检后，按预览指纹有界清理旁路。",
+                "Playwright 配置只使用 `browserName`，全局启动探针核对真实可执行文件位于 Playwright 缓存，拒绝品牌渠道、本机 `executablePath`、外部连接和符号链接越界。浏览器回归与 macOS 有头性能检查交给 GitHub Actions。",
+            ],
+            "问题修复": [
+                "明文 helper 不可用时继续保留受限离线删除；官方请求失败或超时不回退本地 rollout，压缩历史仍禁止离线回退。",
+                "空结果、非终态结果和工具过程使用独立 fixture，保留最终回复被后续非终态结果撤销完成标记时 `assistant_phase=None` 的断言。",
+                "无关损坏 `.zst` 继续只产生警告；旁路残留、路径变化、权限错误或无法完整核验均返回失败和 residuals，不提前报告 succeeded。",
+            ],
+            "兼容性与迁移": [
+                "不修改 Claude、Codex 原生文件格式；身份、版本和旁路指纹只用于本机管理核验，API 协议仍为 2。",
+                "浏览器验收不依赖、不启动本机 Google Chrome；Playwright 内置发行物可能显示 Google Chrome for Testing，按实际缓存路径确认来源。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 `darwin-aarch64` 的 `latest.json`。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 `.sig` 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装不会自动启用 Claude hooks。保留现有配置、凭据、会话和回退材料。",
+                "正式删除前关闭目标线程的写入者，先检查三类旁路预览；本版不自动终止 codex 进程。",
+                "功能、视觉、原生选择器和真实会话删除仍待用户验收；浏览器回归和 macOS 有头性能由对应 GitHub Actions 运行。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
+    elif version == "1.3.6":
         sections = {
             "版本概览": ["本版完成 Codex 压缩历史安全删除、Claude 会话管理修复及 Claude 单回合过程折叠；API 协议保持 2，macOS App 仍是唯一界面。"],
             "功能调整": [
