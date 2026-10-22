@@ -56,12 +56,6 @@ impl DesktopHelper {
 
     /// No resume, turn or arbitrary method. Once submitted, the caller must
     /// inspect storage even on failure and must never fall back or retry.
-    pub async fn delete_thread(&self, id: &str) -> Result<()> {
-        uuid::Uuid::parse_str(id).map_err(|_| DesktopError::InvalidInput)?;
-        self.with_process("thread/delete", json!({"threadId":id}))
-            .await
-            .map(|_| ())
-    }
     pub async fn installed(codex_home: PathBuf) -> Result<Self> {
         let executable = crate::read_tasks::spawn_blocking(|| {
             let bundle = Path::new("/Applications/ChatGPT.app/Contents/Resources");
@@ -155,7 +149,7 @@ impl DesktopHelper {
         process.finish().await;
         // No verified helper error proves absence of a persistent thread.
         // Once submitted, never make an uncertain creation look retryable.
-        if matches!(method, "thread/start" | "thread/delete") && submitted && result.is_err() {
+        if method == "thread/start" && submitted && result.is_err() {
             return Err(DesktopError::OutcomeUnknown);
         }
         result

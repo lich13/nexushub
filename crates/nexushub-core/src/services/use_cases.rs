@@ -349,14 +349,6 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::plan_cleanup_execute_operation(self.platform, target, request)
     }
 
-    pub fn validate_expected_count(
-        self,
-        plan: &CleanupOperationPlan,
-        actual_count: u64,
-    ) -> Result<()> {
-        cleanup::validate_cleanup_expected_count(plan, actual_count)
-    }
-
     pub fn dry_run_archived(
         self,
         paths: &crate::codex::CodexPaths,
@@ -367,8 +359,9 @@ impl<'a> CleanupUseCases<'a> {
     pub fn execute_archived(
         self,
         paths: &crate::codex::CodexPaths,
+        candidates: &[crate::archive::HiddenThreadSelection],
     ) -> Result<cleanup::ArchiveDeleteResult> {
-        cleanup::execute_archived_with_capability(self.platform, paths)
+        cleanup::execute_archived_with_capability(self.platform, paths, candidates)
     }
 
     pub fn dry_run_hidden(

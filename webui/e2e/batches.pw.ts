@@ -20,7 +20,7 @@ test("batch archive confirms explicit keys, retains failed selections, and requi
   const boxes = page.locator(".session-checkbox");
   await boxes.nth(0).check();
   await boxes.nth(1).check();
-  await expect(page.getByText("已选 2 / 100", { exact: true })).toBeVisible();
+  await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -30,7 +30,7 @@ test("batch archive confirms explicit keys, retains failed selections, and requi
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   await dialog.getByRole("button", { name: "确认归档 2 项", exact: true }).click();
   await expect(page.getByText("已完成 1 项，未完成 1 项", { exact: true })).toBeVisible();
-  await expect(page.getByText("已选 1 / 100", { exact: true })).toBeVisible();
+  await expect(page.getByText("已选 1", { exact: true })).toBeVisible();
   expect(executed).toHaveLength(1);
   expect(executed[0].provider).toBe("codex");
   expect(executed[0].items).toHaveLength(2);
@@ -62,16 +62,16 @@ test("filter changes invalidate an in-flight batch preview and never select newl
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.locator(".search-box input").first().fill("");
   await page.getByRole("button", { name: "多选线程", exact: true }).click();
-  await expect(page.getByText("已选 0 / 100", { exact: true })).toBeVisible();
+  await expect(page.getByText("已选 0", { exact: true })).toBeVisible();
 });
 
 for (const provider of ["grok"] as const) {
-  test(`${provider} batch deletion uses distinct keys and excludes protected files on mobile`, async ({ page }) => {
+  test(`${provider} batch deletion uses distinct keys and reports failed locations on mobile`, async ({ page }) => {
     await mockApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
     const keys = ["grok-one", "grok-two"];
     await mockCommand(page, `${provider}.list`, args => keys.map((key, index) => ({ id: key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
-    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "活动状态不明", fingerprint: index === 0 ? "fixture" : null })) }));
+    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "无法定位线程目录", fingerprint: index === 0 ? "fixture" : null })) }));
     let executed: any;
     await mockCommand(page, "sessions.bulkExecute", args => {
       executed = args.request;
@@ -81,12 +81,12 @@ for (const provider of ["grok"] as const) {
     await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
     await page.getByRole("button", { name: "多选线程", exact: true }).click();
     await page.getByRole("button", { name: "全选当前结果", exact: true }).click();
-    await expect(page.getByText("已选 2 / 100", { exact: true })).toBeVisible();
+    await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "删除所选线程", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText("活动状态不明");
+    await expect(page.getByRole("dialog")).toContainText("无法定位线程目录");
     await assertNoOverflow(page);
     await page.getByRole("button", { name: "确认删除 1 项", exact: true }).click();
-    await expect(page.getByText("已选 1 / 100", { exact: true })).toBeVisible();
-    expect(executed.items).toEqual([{ sessionKey: keys[0], fingerprint: "fixture" }]);
+    await expect(page.getByText("已选 1", { exact: true })).toBeVisible();
+    expect(executed.items).toEqual([{ sessionKey: keys[0] }]);
   });
 }

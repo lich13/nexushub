@@ -44,12 +44,12 @@ describe("session selection", () => {
     for (const scope of ["remote", "other-provider", "other-filter"]) expect(syncSessionSelection(state, scope, visible)).toEqual(emptySessionSelection(scope));
     expect(emptySessionSelection(state.scope).anchor).toBeNull();
   });
-  test("overflow preserves selected items, caps at 100 and explains the limit", () => {
+  test("selection preserves all explicit items beyond one hundred", () => {
     const state = addSessionSelection(press(emptySessionSelection("local"), "kept", { metaKey: true }), Array.from({ length: 105 }, (_, i) => String(i)));
-    expect(state.keys).toHaveLength(100);
+    expect(state.keys).toHaveLength(106);
     expect(state.keys[0]).toBe("kept");
-    expect(state.notice).toContain("100");
-    expect(press(state, "kept").keys).toHaveLength(99);
+    expect(state.notice).toBeNull();
+    expect(press(state, "kept").keys).toHaveLength(105);
   });
 });
 test("Claude resume commands quote paths and IDs as literal shell arguments", () => {

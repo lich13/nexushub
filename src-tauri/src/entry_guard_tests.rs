@@ -368,7 +368,6 @@ mod tests {
         assert!(
             source.contains("NexusHubUseCases::new(state.platform()).cleanup()")
                 && source.contains(".execute_confirmed(")
-                && source.contains(".validate_expected_count(")
                 && source.contains(".dry_run_archived(")
                 && source.contains(".execute_archived(")
                 && source.contains(".dry_run_hidden(")
@@ -667,7 +666,6 @@ mod tests {
             ".execute_archived(",
             ".dry_run_hidden(",
             ".execute_hidden(",
-            ".validate_expected_count(",
             ".execute_confirmed(",
         ] {
             assert!(

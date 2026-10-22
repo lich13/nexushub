@@ -36,8 +36,8 @@ export type GrokHistoryEvent = {
 
 export type GrokSessionDetail = { timeline?: TimelineEntry[]; afterCursor?: string | null; history?: HistoryMetadata | null; totalEvents?: number; hasMore?: boolean; beforeCursor?: string | null; summary: GrokSessionSummary; events: GrokHistoryEvent[] };
 export type GrokDeletePreview = { id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
-export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint: string };
-export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number };
+export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint?: string };
+export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number; residuals?: string[] };
 
 export type ClaudeSessionSummary = {
   storageSize?: SessionStorageSize | null;
@@ -64,8 +64,8 @@ export type ClaudeSessionDetail = { timeline?: TimelineEntry[]; afterCursor?: st
 export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; paths?: string[]; fingerprint: string; fileCount: number; bytes: number; warnings?: string[] | null };
 export type ClaudeOwnershipProcess = { pid: number; role: string; registrationVerified: boolean; mismatchedFields: string[] };
 export type ClaudeOwnershipDiagnostics = { ownership: string; reasonCodes: string[]; processes: ClaudeOwnershipProcess[] };
-export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
-export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
+export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint?: string };
+export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number; residuals?: string[] };
 
 
 
@@ -339,6 +339,7 @@ export type ArchiveDeletePlan = {
 };
 
 export type ArchiveDeleteResult = {
+  items?: HiddenThreadItemResult[];
   before: ArchiveDeletePlan;
   after_total_threads: number;
   after_active_threads: number;
@@ -347,10 +348,10 @@ export type ArchiveDeleteResult = {
   deleted_rollout_files: number;
 };
 
-export type HiddenThreadSelection = { id: string; fingerprint: string | null };
+export type HiddenThreadSelection = { id: string; fingerprint?: string | null };
 export type HiddenThreadCandidate = HiddenThreadSelection & { title: string; allowed: boolean; reason: string | null };
-export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped" | "failed"; reason: string | null };
-export type CleanupExecuteRequest = { confirmed: boolean; expectedCount: number; candidates?: HiddenThreadSelection[] };
+export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped" | "failed"; reason: string | null; residuals?: string[] };
+export type CleanupExecuteRequest = { confirmed: boolean; expectedCount?: number; candidates?: HiddenThreadSelection[] };
 
 export type HiddenThreadDeletePlan = {
   scan?: HiddenScanProgress | null;

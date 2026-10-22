@@ -25,12 +25,12 @@ export async function dryRunArchiveDelete(): Promise<ArchiveDeletePlan> {
 }
 
 export async function startArchiveDelete(request: {
-  expectedCount: number;
+  candidates: import("../../types").HiddenThreadSelection[];
 }): Promise<ArchiveDeleteResult> {
   if (USE_DEMO) return demoArchiveDeleteResult();
   const confirmation = {
     confirmed: true,
-    expectedCount: request.expectedCount
+    candidates: request.candidates
   };
   return callCommand<ArchiveDeleteResult>(
     "cleanup.archiveExecute",

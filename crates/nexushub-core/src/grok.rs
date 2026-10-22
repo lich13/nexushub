@@ -1,12 +1,10 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     env,
     fs::{self, OpenOptions},
-    io::Read,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -123,7 +121,9 @@ pub fn list_grok_sessions(
             if !session.file_type()?.is_dir() {
                 continue;
             }
-            if let Ok(Some(summary)) = read_summary(&session.path()) {
+            if let Ok(Some(summary)) = read_summary(&session.path())
+                .or_else(|_| Ok::<_, anyhow::Error>(Some(fallback_summary(&session.path()))))
+            {
                 if needle.as_ref().is_some_and(|needle| {
                     !summary.title.to_ascii_lowercase().contains(needle)
                         && !summary.id.to_ascii_lowercase().contains(needle)
@@ -264,7 +264,13 @@ pub fn grok_session_page(
         None,
         &summary.id,
     ));
-    let path = summary.path.join("updates.jsonl");
+    let updates = summary.path.join("updates.jsonl");
+    let native = !updates.exists();
+    let path = if native {
+        summary.path.join("chat_history.jsonl")
+    } else {
+        updates
+    };
     if !path.exists() {
         return Ok(GrokSessionDetail {
             timeline: Some(Default::default()),
@@ -285,7 +291,11 @@ pub fn grok_session_page(
         true,
         |state, line, _, start| {
             if let Ok(value) = serde_json::from_slice::<Value>(line) {
-                state.push(value, start);
+                if native {
+                    state.push_native(value, start);
+                } else {
+                    state.push(value, start);
+                }
             }
             Ok(())
         },
@@ -405,6 +415,53 @@ struct GrokEvents {
     dirty: std::collections::BTreeSet<String>,
 }
 impl GrokReader {
+    fn push_native(&mut self, value: Value, start: u64) {
+        let kind = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if value.get("synthetic_reason").and_then(Value::as_str) == Some("system_reminder") {
+            return;
+        }
+        let content = value.get("content").cloned().unwrap_or(Value::Null);
+        let text = match &content {
+            Value::String(text) => text.clone(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter(|part| {
+                    part.get("type")
+                        .and_then(Value::as_str)
+                        .is_none_or(|kind| kind == "text")
+                })
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        match kind {
+            "user" => {
+                self.events.user_parts.clear();
+                let content = if let Value::String(text) = content { serde_json::json!({"type":"text","text":text}) } else { content };
+                self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"user_message_chunk","messageId":format!("native:{start}"),"content":content}), start);
+            }
+            "assistant" => {
+                if !text.is_empty() {
+                    self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"agent_message_chunk","messageId":format!("native:{start}"),"content":{"text":text}}), start);
+                }
+                for (index, call) in value.get("tool_calls").and_then(Value::as_array).into_iter().flatten().enumerate() {
+                    let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
+                    self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"tool_call","toolCallId":id,"title":call.get("name").or_else(||call.pointer("/function/name")),"status":"pending",
+                        "content":[{"content":{"text":call.get("arguments").or_else(||call.pointer("/function/arguments")).map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default()}}]}),start);
+                    if let Some(event) = self.events.events.last_mut() {
+                        if event.call_id.as_deref() == Some(id) { Arc::make_mut(event).id = format!("grok:{start}:tool:{index}"); }
+                    }
+                }
+            }
+            "tool_result" => self.push(serde_json::json!({"timestamp":value.get("timestamp"),"sessionUpdate":"tool_call_update","toolCallId":value.get("tool_call_id"),"status":"completed","content":[{"content":{"text":text}}]}), start),
+            _ => {},
+        }
+    }
+
     fn push(&mut self, value: Value, line_start: u64) {
         let GrokEvents {
             mut events,
@@ -541,7 +598,7 @@ impl GrokReader {
                     tool_indices.insert(id.clone(), events.len());
                 }
             }
-            if kind.ends_with("message_chunk") {
+            if kind.ends_with("message_chunk") && update.get("messageId").is_none() {
                 if let Some(previous) = events
                     .last_mut()
                     .filter(|event: &&mut Arc<GrokHistoryEvent>| event.kind == kind)
@@ -615,7 +672,7 @@ fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");
     if !file.is_file() {
-        return Ok(None);
+        return Ok(Some(fallback_summary(path)));
     }
     ensure!(
         !fs::symlink_metadata(&file)?.file_type().is_symlink(),
@@ -742,6 +799,7 @@ pub struct GrokDeletePreview {
 pub struct GrokDeleteRequest {
     pub id: String,
     pub confirmed: bool,
+    #[serde(default)]
     pub fingerprint: String,
 }
 
@@ -751,54 +809,55 @@ pub struct GrokDeleteResult {
     pub id: String,
     pub deleted: bool,
     pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub residuals: Vec<String>,
 }
 
-fn directory_fingerprint(path: &Path) -> Result<(String, usize, u64)> {
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(path).follow_links(false) {
-        let entry = entry?;
-        ensure!(
-            entry.depth() <= 16,
-            "Grok session exceeds directory depth limit"
-        );
-        ensure!(
-            !entry.file_type().is_symlink(),
-            "Grok session contains a symlink"
-        );
-        ensure!(
-            entry.file_type().is_file() || entry.file_type().is_dir(),
-            "Grok session contains a special file"
-        );
-        if entry.file_type().is_file() {
-            files.push(entry.into_path());
-        }
-        ensure!(files.len() <= 10_000, "Grok session exceeds file limit");
+fn fallback_summary(path: &Path) -> GrokSessionSummary {
+    let id = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    GrokSessionSummary {
+        id: id.clone(),
+        title: id,
+        cwd: String::new(),
+        path: path.into(),
+        updated_at: None,
+        message_count: 0,
+        last_message: None,
+        status: "unknown".into(),
+        deletion_eligibility: Some(GrokDeletionEligibility {
+            allowed: true,
+            reason: None,
+        }),
+        storage_size: None,
     }
-    files.sort();
-    let mut hash = Sha256::new();
-    let mut bytes = 0;
-    for file in &files {
-        let relative = file.strip_prefix(path)?;
-        hash.update(relative.as_os_str().as_encoded_bytes());
-        hash.update([0]);
-        let size = fs::metadata(file)?.len();
-        bytes += size;
-        ensure!(
-            bytes <= 512 * 1024 * 1024,
-            "Grok session exceeds deletion audit limit"
-        );
-        hash.update(size.to_le_bytes());
-        let mut source = fs::File::open(file)?;
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let count = source.read(&mut buffer)?;
-            if count == 0 {
-                break;
+}
+
+fn locate_sessions(paths: &GrokPaths, id: &str) -> Result<Vec<PathBuf>> {
+    crate::session_delete::valid_id(id)?;
+    let mut result = Vec::new();
+    let root = paths.sessions();
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(result),
+        Err(e) => return Err(e.into()),
+    };
+    for workspace in entries {
+        let workspace = workspace?;
+        if workspace.file_type()?.is_dir() {
+            let path = workspace.path().join(id);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => result.push(path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
             }
-            hash.update(&buffer[..count]);
         }
     }
-    Ok((hex::encode(hash.finalize()), files.len(), bytes))
+    result.sort();
+    Ok(result)
 }
 
 pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePreview> {
@@ -807,37 +866,27 @@ pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePrev
 
 pub(crate) struct DeletionContext<'a> {
     paths: &'a GrokPaths,
-    active: activity::Snapshot,
 }
-
 impl<'a> DeletionContext<'a> {
     pub(crate) fn new(paths: &'a GrokPaths) -> Self {
-        Self {
-            paths,
-            active: activity::Snapshot::capture(paths),
-        }
+        Self { paths }
     }
-
     pub(crate) fn summary(&self, id: &str) -> Result<GrokSessionSummary> {
-        resolve_session_with_activity(self.paths, id, &self.active)
+        let paths = locate_sessions(self.paths, id)?;
+        let path = paths.first().context("Grok session not found")?;
+        Ok(read_summary(path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fallback_summary(path)))
     }
-
     pub(crate) fn preview(&self, id: &str) -> Result<GrokDeletePreview> {
-        let session = self.summary(id)?;
-        self.active.ensure_deletable(&session)?;
-        ensure_grok_storage_writable(
-            session
-                .path
-                .parent()
-                .context("invalid Grok session parent")?,
-            "delete the selected session directory",
-        )?;
-        let (fingerprint, file_count, bytes) = directory_fingerprint(&session.path)?;
+        let paths = locate_sessions(self.paths, id)?;
+        let (file_count, bytes) = crate::session_delete::size(&paths);
         Ok(GrokDeletePreview {
-            id: session.id,
-            title: session.title,
-            path: session.path,
-            fingerprint,
+            id: id.into(),
+            title: id.into(),
+            path: paths.first().cloned().unwrap_or_default(),
+            fingerprint: String::new(),
             file_count,
             bytes,
         })
@@ -849,62 +898,26 @@ pub fn execute_grok_delete(
     request: GrokDeleteRequest,
 ) -> Result<GrokDeleteResult> {
     ensure!(request.confirmed, "Grok deletion requires confirmation");
-    let preview = preview_grok_delete(paths, &request.id)?;
-    ensure!(
-        preview.fingerprint == request.fingerprint,
-        "Grok task files changed; preview again"
-    );
-    let mut session = resolve_session(paths, &request.id)?;
-    let parent = preview
-        .path
-        .parent()
-        .context("invalid Grok session parent")?;
-    let retired = parent.join(format!(".nexushub-delete-{}", uuid::Uuid::new_v4()));
-    // Detach the selected directory so newly created session files cannot be deleted.
-    fs::rename(&preview.path, &retired).with_context(|| {
-        grok_storage_write_error(parent, "move the selected session into quarantine")
-    })?;
-    let check = (|| -> Result<()> {
-        session.path = retired.clone();
-        let active = activity::Snapshot::capture(paths);
-        active.ensure_deletable(&session)?;
-        ensure!(
-            directory_fingerprint(&retired)?.0 == preview.fingerprint,
-            "Grok task files changed during deletion"
-        );
-        Ok(())
-    })();
-    if let Err(error) = check {
-        let restored = if !preview.path.exists() && retired.exists() {
-            fs::rename(&retired, &preview.path).is_ok()
-        } else {
-            preview.path.exists()
-        };
-        let location = if restored { &preview.path } else { &retired };
-        return Err(error.context(format!(
-            "Grok deletion cancelled; recoverable files remain at {}",
-            location.display()
-        )));
+    let mut outcome = crate::session_delete::Outcome::default();
+    for path in locate_sessions(paths, &request.id)? {
+        outcome.remove(&path);
     }
-    if let Err(error) = fs::remove_dir_all(&retired) {
-        let restored = if !preview.path.exists() && retired.exists() {
-            fs::rename(&retired, &preview.path).is_ok()
-        } else {
-            preview.path.exists()
-        };
-        let location = if restored { &preview.path } else { &retired };
-        return Err(error).with_context(|| {
-            format!(
-                "{}; Grok deletion did not complete and recoverable files remain at {}",
-                grok_storage_write_error(parent, "remove the quarantined session"),
-                location.display()
-            )
-        });
-    }
+    let index = paths.home.join("active_sessions.json");
+    let ids = std::collections::BTreeSet::from([request.id.clone()]);
+    outcome.attempt(&index, || {
+        crate::session_delete::edit_json(&index, |value| match value {
+            Value::Array(rows) => rows.retain(|row| !crate::session_delete::has_id(row, &ids)),
+            Value::Object(rows) => rows
+                .retain(|key, row| !ids.contains(key) && !crate::session_delete::has_id(row, &ids)),
+            _ => {}
+        })
+    });
+    outcome.finish();
     Ok(GrokDeleteResult {
         id: request.id,
-        deleted: true,
-        bytes: preview.bytes,
+        deleted: outcome.residuals.is_empty(),
+        bytes: outcome.bytes,
+        residuals: outcome.residuals,
     })
 }
 

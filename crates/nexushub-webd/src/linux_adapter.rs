@@ -232,9 +232,8 @@ pub fn execute_cleanup_plan(
     match plan.target {
         cleanup_service::CleanupTarget::Archived => {
             let result = if plan.execute {
-                let before = cleanup.dry_run_archived(&paths)?;
-                cleanup.validate_expected_count(&plan, before.archived_threads)?;
-                let result = cleanup.execute_archived(&paths)?;
+                let candidates = cleanup_service::hidden_candidates(&plan)?;
+                let result = cleanup.execute_archived(&paths, &candidates)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
                     "archives.delete.execute",

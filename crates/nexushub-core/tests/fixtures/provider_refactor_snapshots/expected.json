@@ -48,18 +48,18 @@
         "revision": "runtime-epoch-1:784"
       },
       "summary": {
-        "canDelete": false,
+        "canDelete": true,
         "canRename": false,
         "cwd": "/synthetic/provider-refactor/workspace",
-        "deleteBlockReason": "会话含损坏记录，管理操作已禁用",
+        "deleteBlockReason": null,
         "formatVersion": "2.1.284",
         "id": "claude-damaged-snapshot",
         "lastMessage": "Recovered after malformed row.",
         "messageCount": 2,
         "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-damaged-project/transcript.jsonl",
-        "readError": "会话含损坏记录，管理操作已禁用",
-        "renameBlockReason": "会话含损坏记录，管理操作已禁用",
-        "sessionKey": "claude:fffa62c43f4e9467d94993a258acb6d9eeaaa2f6c5fc9aa387653ff005b0e359",
+        "readError": "会话含损坏记录，改名已禁用",
+        "renameBlockReason": "会话含损坏记录，改名已禁用",
+        "sessionKey": "claude:6855421497f46063d69d3ff10c0006cd4f764afd73151470f0449e0de1dfa169",
         "status": "unknown",
         "storageSize": {
           "bytes": null,
@@ -78,18 +78,18 @@
       "totalEvents": 2
     },
     "damagedSummary": {
-      "canDelete": false,
+      "canDelete": true,
       "canRename": false,
       "cwd": "/synthetic/provider-refactor/workspace",
-      "deleteBlockReason": "会话含损坏记录，管理操作已禁用",
+      "deleteBlockReason": null,
       "formatVersion": "2.1.284",
       "id": "claude-damaged-snapshot",
       "lastMessage": "Recovered after malformed row.",
       "messageCount": 2,
       "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-damaged-project/transcript.jsonl",
-      "readError": "会话含损坏记录，管理操作已禁用",
-      "renameBlockReason": "会话含损坏记录，管理操作已禁用",
-      "sessionKey": "claude:fffa62c43f4e9467d94993a258acb6d9eeaaa2f6c5fc9aa387653ff005b0e359",
+      "readError": "会话含损坏记录，改名已禁用",
+      "renameBlockReason": "会话含损坏记录，改名已禁用",
+      "sessionKey": "claude:6855421497f46063d69d3ff10c0006cd4f764afd73151470f0449e0de1dfa169",
       "status": "unknown",
       "storageSize": {
         "bytes": null,
@@ -225,7 +225,7 @@
         "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
         "readError": null,
         "renameBlockReason": null,
-        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "sessionKey": "claude:674aeb303de2571be7d024be947383bb00a109c660f87caa76af03bb2f5abbe3",
         "status": "recent",
         "storageSize": {
           "bytes": 3416,
@@ -331,7 +331,7 @@
         "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
         "readError": null,
         "renameBlockReason": null,
-        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "sessionKey": "claude:674aeb303de2571be7d024be947383bb00a109c660f87caa76af03bb2f5abbe3",
         "status": "recent",
         "storageSize": {
           "bytes": 3416,
@@ -365,7 +365,7 @@
       "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
       "readError": null,
       "renameBlockReason": null,
-      "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+      "sessionKey": "claude:674aeb303de2571be7d024be947383bb00a109c660f87caa76af03bb2f5abbe3",
       "status": "recent",
       "storageSize": {
         "bytes": 3416,
@@ -447,7 +447,7 @@
         "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
         "readError": null,
         "renameBlockReason": null,
-        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "sessionKey": "claude:674aeb303de2571be7d024be947383bb00a109c660f87caa76af03bb2f5abbe3",
         "status": "recent",
         "storageSize": {
           "bytes": 3416,

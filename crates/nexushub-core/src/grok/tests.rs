@@ -63,7 +63,7 @@ async fn grok_native_rename_failure_does_not_modify_session_files() {
             response
         );
         let (paths, session, executable) = native_fixture(&script);
-        let before = directory_fingerprint(&session.path).unwrap();
+        let before = directory_snapshot(&session.path).unwrap();
         assert!(rename_native(
             &executable,
             &paths,
@@ -73,7 +73,7 @@ async fn grok_native_rename_failure_does_not_modify_session_files() {
         )
         .await
         .is_err());
-        assert_eq!(directory_fingerprint(&session.path).unwrap(), before);
+        assert_eq!(directory_snapshot(&session.path).unwrap(), before);
         fs::remove_dir_all(paths.home).unwrap();
     }
 }
@@ -246,21 +246,10 @@ fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates(
 }
 
 #[test]
-fn grok_delete_revalidates_content_and_does_not_touch_workspace() {
+fn grok_delete_ignores_changed_content_and_does_not_touch_workspace() {
     let (paths, id, path) = fixture();
     let preview = preview_grok_delete(&paths, &id).unwrap();
     fs::write(path.join("updates.jsonl"), "{\"changed\":true}\n").unwrap();
-    assert!(execute_grok_delete(
-        &paths,
-        GrokDeleteRequest {
-            id: id.clone(),
-            confirmed: true,
-            fingerprint: preview.fingerprint
-        }
-    )
-    .is_err());
-    assert!(path.exists());
-    let preview = preview_grok_delete(&paths, &id).unwrap();
     let result = execute_grok_delete(
         &paths,
         GrokDeleteRequest {
@@ -277,7 +266,7 @@ fn grok_delete_revalidates_content_and_does_not_touch_workspace() {
 }
 
 #[test]
-fn grok_delete_preview_rejects_unterminated_activity_tail_without_modifying_native_files() {
+fn grok_delete_preview_accepts_unterminated_activity_tail_without_modifying_native_files() {
     let (paths, id, path) = fixture();
     let events = path.join("events.jsonl");
     let complete_turn = [
@@ -296,17 +285,16 @@ fn grok_delete_preview_rejects_unterminated_activity_tail_without_modifying_nati
     let original = format!("{complete_turn}\n{{\"type\":\"turn_started\"");
     fs::write(&events, &original).unwrap();
 
-    // The activity display may retain the last complete turn's status while the
-    // deletion boundary must reject an incomplete final native record.
+    // Activity display and deletion are independent.
     let listed = list_grok_sessions(&paths, 10, None).unwrap();
     assert_eq!(listed[0].status, "recent");
     let eligibility = listed[0].deletion_eligibility.as_ref().unwrap();
-    assert!(!eligibility.allowed);
-    assert!(eligibility.reason.is_some());
-    let before = directory_fingerprint(&path).unwrap();
-    assert!(preview_grok_delete(&paths, &id).is_err());
+    assert!(eligibility.allowed);
+    assert!(eligibility.reason.is_none());
+    let before = directory_snapshot(&path).unwrap();
+    assert!(preview_grok_delete(&paths, &id).is_ok());
     assert_eq!(fs::read(&events).unwrap(), original.as_bytes());
-    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+    assert_eq!(directory_snapshot(&path).unwrap(), before);
 
     fs::remove_dir_all(paths.home).unwrap();
 }
@@ -334,7 +322,7 @@ fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_file
             reason: None,
         })
     );
-    let before = directory_fingerprint(&path).unwrap();
+    let before = directory_snapshot(&path).unwrap();
     let preview = preview_grok_delete(&paths, &id).unwrap();
     let sessions = crate::services::sessions::SessionUseCases {
         codex: crate::codex::CodexPaths {
@@ -362,7 +350,7 @@ fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_file
     );
     assert_eq!(preview.id, id);
     assert_eq!(fs::read(&events).unwrap(), running.as_bytes());
-    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+    assert_eq!(directory_snapshot(&path).unwrap(), before);
 
     fs::remove_dir_all(paths.home).unwrap();
 }
@@ -397,16 +385,16 @@ fn grok_delete_preview_allows_a_valid_abnormal_terminal_turn() {
             reason: None,
         })
     );
-    let before = directory_fingerprint(&path).unwrap();
+    let before = directory_snapshot(&path).unwrap();
     assert!(preview_grok_delete(&paths, &id).is_ok());
     assert_eq!(fs::read(&events).unwrap(), native.as_bytes());
-    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+    assert_eq!(directory_snapshot(&path).unwrap(), before);
 
     fs::remove_dir_all(paths.home).unwrap();
 }
 
 #[test]
-fn grok_delete_preview_rejects_corrupt_activity_records() {
+fn grok_delete_preview_accepts_corrupt_activity_records() {
     let (paths, id, path) = fixture();
     let events = path.join("events.jsonl");
     let corrupt = b"not-json\n";
@@ -415,16 +403,16 @@ fn grok_delete_preview_rejects_corrupt_activity_records() {
     let listed = list_grok_sessions(&paths, 10, None).unwrap();
     assert_eq!(listed[0].status, "unknown");
     let eligibility = listed[0].deletion_eligibility.as_ref().unwrap();
-    assert!(!eligibility.allowed);
-    assert!(eligibility.reason.is_some());
-    assert!(preview_grok_delete(&paths, &id).is_err());
+    assert!(eligibility.allowed);
+    assert!(eligibility.reason.is_none());
+    assert!(preview_grok_delete(&paths, &id).is_ok());
     assert_eq!(fs::read(&events).unwrap(), corrupt);
 
     fs::remove_dir_all(paths.home).unwrap();
 }
 
 #[test]
-fn grok_delete_rejects_active_and_unconfirmed_sessions() {
+fn grok_delete_requires_confirmation_and_cleans_active_registrations() {
     let (paths, id, path) = fixture();
     let preview = preview_grok_delete(&paths, &id).unwrap();
     assert!(execute_grok_delete(
@@ -441,8 +429,24 @@ fn grok_delete_rejects_active_and_unconfirmed_sessions() {
         serde_json::to_vec(&serde_json::json!({id.clone(): {}})).unwrap(),
     )
     .unwrap();
-    assert!(preview_grok_delete(&paths, &id).is_err());
-    assert!(path.exists());
+    assert!(preview_grok_delete(&paths, &id).is_ok());
+    let result = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id: id.clone(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!path.exists());
+    assert_eq!(
+        fs::read_to_string(paths.home.join("active_sessions.json"))
+            .unwrap()
+            .trim(),
+        "{}"
+    );
     fs::remove_dir_all(paths.home).unwrap();
 }
 
@@ -474,10 +478,23 @@ fn grok_registration_without_process_identity_does_not_prove_running() {
 
 #[cfg(unix)]
 #[test]
-fn grok_delete_rejects_symlink_in_session() {
+fn grok_delete_unlinks_symlink_in_session() {
     let (paths, id, path) = fixture();
     std::os::unix::fs::symlink("/tmp", path.join("escape")).unwrap();
-    assert!(preview_grok_delete(&paths, &id).is_err());
+    assert!(
+        execute_grok_delete(
+            &paths,
+            GrokDeleteRequest {
+                id,
+                confirmed: true,
+                fingerprint: String::new()
+            }
+        )
+        .unwrap()
+        .deleted
+    );
+    assert!(!path.exists());
+    assert!(Path::new("/tmp").exists());
     fs::remove_dir_all(paths.home).unwrap();
 }
 
@@ -570,6 +587,140 @@ fn user_chunks_keep_images_and_boundaries_with_stable_ids() {
             .as_ref()
             .unwrap()
             .id
+    );
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+pub(super) fn directory_snapshot(path: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let mut result = walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| {
+            (
+                e.path().strip_prefix(path).unwrap().into(),
+                fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    result.sort();
+    Ok(result)
+}
+
+#[test]
+fn native_system_only_history_is_empty_and_updates_remain_preferred() {
+    let (paths, id, path) = fixture();
+    fs::remove_file(path.join("updates.jsonl")).unwrap();
+    fs::write(path.join("chat_history.jsonl"), "{\"type\":\"system\",\"content\":\"fixture\"}\n{\"type\":\"user\",\"synthetic_reason\":\"system_reminder\",\"content\":\"fixture\"}\n").unwrap();
+    assert!(grok_session_detail(&paths, &id, None)
+        .unwrap()
+        .events
+        .is_empty());
+    fs::write(
+        path.join("chat_history.jsonl"),
+        "{\"type\":\"user\",\"content\":\"native fixture\"}\n",
+    )
+    .unwrap();
+    fs::write(path.join("updates.jsonl"),"{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"text\":\"updates fixture\",\"type\":\"text\"}}\n").unwrap();
+    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    assert_eq!(detail.events.len(), 1);
+    assert_eq!(detail.events[0].text.as_deref(), Some("updates fixture"));
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn deletion_locates_all_workspaces_with_missing_or_corrupt_summaries() {
+    let (paths, id, path) = fixture();
+    fs::write(path.join("summary.json"), "{broken").unwrap();
+    let other = paths.sessions().join("another-workspace").join(&id);
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("unknown"), "fixture").unwrap();
+    fs::write(
+        paths.home.join("active_sessions.json"),
+        serde_json::json!([{ "session_id":id,"pid":123},{"session_id":"retained","pid":456}])
+            .to_string(),
+    )
+    .unwrap();
+    let preview = preview_grok_delete(&paths, &id).unwrap();
+    assert_eq!(preview.file_count, 3);
+    assert!(
+        execute_grok_delete(
+            &paths,
+            GrokDeleteRequest {
+                id: id.clone(),
+                confirmed: true,
+                fingerprint: "old fingerprint".into()
+            }
+        )
+        .unwrap()
+        .deleted
+    );
+    assert!(!path.exists());
+    assert!(!other.exists());
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &fs::read_to_string(paths.home.join("active_sessions.json")).unwrap()
+        )
+        .unwrap(),
+        serde_json::json!([{ "session_id":"retained","pid":456 }])
+    );
+    assert!(
+        execute_grok_delete(
+            &paths,
+            GrokDeleteRequest {
+                id,
+                confirmed: true,
+                fingerprint: String::new()
+            }
+        )
+        .unwrap()
+        .deleted
+    );
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn native_history_fallback_preserves_messages_tools_and_paging_without_system_context() {
+    let (paths, id, path) = fixture();
+    fs::remove_file(path.join("updates.jsonl")).unwrap();
+    let rows = [
+        serde_json::json!({"type":"system","content":"hidden fixture"}),
+        serde_json::json!({"type":"user","synthetic_reason":"system_reminder","content":"hidden reminder"}),
+        serde_json::json!({"type":"user","content":"question"}),
+        serde_json::json!({"type":"assistant","content":"checking","tool_calls":[{"id":"call","name":"Read","arguments":"{}"}]}),
+        serde_json::json!({"type":"tool_result","tool_call_id":"call","content":"tool output"}),
+        serde_json::json!({"type":"reasoning","encrypted_content":"hidden"}),
+        serde_json::json!({"type":"assistant","content":"answer"}),
+    ];
+    fs::write(
+        path.join("chat_history.jsonl"),
+        rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let latest = grok_session_page(&paths, &id, None, Some(2), None, None).unwrap();
+    assert!(latest.has_more);
+    assert_eq!(latest.total_events, 4);
+    let all = grok_session_detail(&paths, &id, None).unwrap();
+    assert_eq!(all.events.len(), 4);
+    assert_eq!(all.events[0].text.as_deref(), Some("question"));
+    assert_eq!(all.events[2].detail.as_deref(), Some("tool output"));
+    assert_eq!(all.events[2].status.as_deref(), Some("completed"));
+    let before = latest.before_cursor.clone().unwrap();
+    let older = grok_session_page(&paths, &id, None, Some(2), Some(&before), None).unwrap();
+    assert_eq!(older.events.len(), 2);
+    use std::io::Write;
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path.join("chat_history.jsonl"))
+            .unwrap(),
+        "{}",
+        serde_json::json!({"type":"user","content":"next question"})
+    )
+    .unwrap();
+    assert_eq!(
+        grok_session_detail(&paths, &id, None).unwrap().events.len(),
+        5
     );
     fs::remove_dir_all(paths.home).unwrap();
 }

@@ -189,9 +189,8 @@ pub(crate) fn archive_delete_execute_with_state(
     let paths = state.codex_paths();
     let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Archived, request)?;
-    let dry_run = cleanup.dry_run_archived(&paths)?;
-    cleanup.validate_expected_count(&plan, dry_run.archived_threads)?;
-    cleanup.execute_archived(&paths)
+    let candidates = nexushub_core::services::cleanup::hidden_candidates(&plan)?;
+    cleanup.execute_archived(&paths, &candidates)
 }
 
 #[cfg(test)]
@@ -489,18 +488,18 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_archive_execute_accepts_confirmed_matching_count() {
+    fn cleanup_archive_execute_accepts_confirmed_targets_without_matching_count() {
         let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
 
         let result = archive_delete_execute_with_state(
             &state,
             DesktopCleanupExecuteRequest {
                 confirmed: true,
-                expected_count: Some(0),
-                candidates: None,
+                expected_count: Some(99),
+                candidates: Some(Vec::new()),
             },
         )
-        .expect("confirmed archive cleanup with matching count should execute");
+        .expect("confirmed archive cleanup with explicit targets should execute");
 
         assert_eq!(result.before.archived_threads, 0);
         assert_eq!(result.after_archived_threads, 0);
@@ -521,14 +520,14 @@ mod tests {
         .expect_err("hidden cleanup execute must be bound to preview candidates")
         .to_string();
 
-        assert!(err.contains("预览候选"), "{err}");
+        assert!(err.contains("线程列表"), "{err}");
     }
 
     #[test]
-    fn cleanup_hidden_execute_rejects_candidate_count_mismatch() {
+    fn cleanup_hidden_execute_ignores_legacy_count() {
         let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
 
-        let err = hidden_delete_execute_with_state(
+        let result = hidden_delete_execute_with_state(
             &state,
             DesktopCleanupExecuteRequest {
                 confirmed: true,
@@ -536,10 +535,9 @@ mod tests {
                 candidates: Some(Vec::new()),
             },
         )
-        .expect_err("hidden cleanup execute must reject a mismatched candidate count")
-        .to_string();
+        .expect("explicit targets determine execution");
 
-        assert!(err.contains("候选数"), "{err}");
+        assert_eq!(result.deleted_threads, 0);
     }
 
     fn settings_source_before_test_module() -> &'static str {

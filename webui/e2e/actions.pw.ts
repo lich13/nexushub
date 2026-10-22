@@ -77,7 +77,7 @@ test("archive and hidden cleanup require previews, explicit confirmation, and vi
   await archive.getByRole("button", { name: "确认清理归档", exact: true }).click();
   await expect(archive.locator(".form-error")).toContainText("Fixture count changed");
   expect(executed).toHaveLength(1);
-  expect(executed[0].expectedCount).toBeGreaterThan(0);
+  expect(executed[0].candidates.length).toBeGreaterThan(0);
   const hidden = page.locator(".panel").filter({ has: page.getByText("隐藏线程清理", { exact: true }) });
   await expect(hidden.getByRole("button", { name: "清理隐藏线程", exact: true })).toBeDisabled();
   await hidden.getByRole("button", { name: "扫描隐藏线程", exact: true }).click();

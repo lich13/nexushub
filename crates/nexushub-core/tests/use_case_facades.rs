@@ -211,7 +211,7 @@ fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
     let request = CleanupExecuteRequest {
         confirmed: true,
         expected_count: Some(8),
-        candidates: None,
+        candidates: Some(Vec::new()),
     };
     let linux_plan = linux
         .cleanup()
@@ -231,7 +231,7 @@ fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
     assert_eq!(linux_plan.confirmation.expected_count, Some(8));
     assert_eq!(
         linux_plan.confirmation.payload,
-        json!({"confirmed": true, "expectedCount": 8, "candidates": null})
+        json!({"confirmed": true, "expectedCount": 8, "candidates": []})
     );
 
     std::fs::remove_dir_all(mac_home).unwrap();

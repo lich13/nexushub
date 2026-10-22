@@ -657,8 +657,57 @@ fn push_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{json_corpus, strip_memory_metadata};
+    use super::*;
     use serde_json::json;
+
+    #[test]
+    fn grok_native_history_search_uses_visible_messages_and_tool_results() {
+        let root =
+            std::env::temp_dir().join(format!("nexushub-native-search-{}", uuid::Uuid::new_v4()));
+        let id = uuid::Uuid::new_v4().to_string();
+        let grok = grok::GrokPaths {
+            home: root.join("grok"),
+        };
+        let directory = grok.sessions().join("workspace").join(&id);
+        std::fs::create_dir_all(&directory).unwrap();
+        let rows = [
+            json!({"type":"system","content":"hidden needle"}),
+            json!({"type":"user","content":"visible needle"}),
+            json!({"type":"assistant","tool_calls":[{"id":"tool","name":"Read","arguments":"{}"}]}),
+            json!({"type":"tool_result","tool_call_id":"tool","content":"result needle"}),
+        ];
+        std::fs::write(
+            directory.join("chat_history.jsonl"),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let service = SearchUseCases {
+            codex: codex::CodexPaths::new(root.join("codex")),
+            claude: claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+            grok,
+        };
+        let results = service
+            .search(SessionSearchRequest {
+                provider: SessionProvider::Grok,
+                scope: SearchScope::Thread,
+                session_key: Some(id),
+                query: "needle".into(),
+                cursor: None,
+                limit: None,
+            })
+            .unwrap();
+        assert_eq!(results.results.len(), 2);
+        assert!(results
+            .results
+            .iter()
+            .all(|item| !item.snippet.contains("hidden")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn removes_memory_blocks_but_keeps_code_examples() {

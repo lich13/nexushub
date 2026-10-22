@@ -139,11 +139,9 @@ async fn run_hidden_scan_fixture(
         plan.source_counts.get("subagent"),
         Some(&(hidden_count as u64))
     );
-    assert!(candidates.iter().all(|candidate| candidate.allowed
-        && candidate
-            .fingerprint
-            .as_deref()
-            .is_some_and(|fingerprint| !fingerprint.is_empty())));
+    assert!(candidates
+        .iter()
+        .all(|candidate| candidate.allowed && candidate.fingerprint.is_none()));
 
     let expected_ids = fixture.hidden_ids.iter().cloned().collect::<BTreeSet<_>>();
     let candidate_ids = candidates

@@ -1,9 +1,6 @@
 //! Ephemeral, bounded cleanup scans. No native files or persistent jobs are written.
 use super::{HiddenThreadCandidate, HiddenThreadDeletePlan};
-use crate::{
-    codex::CodexPaths,
-    scan_work::{MemoryBudget, MemoryLease, ScanWork},
-};
+use crate::{codex::CodexPaths, scan_work::ScanWork};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -63,7 +60,6 @@ struct JobState {
     items: Vec<HiddenThreadCandidate>,
     phase: HiddenScanPhase,
     error: Option<String>,
-    memory: MemoryLease,
 }
 
 struct ScanJob {
@@ -80,7 +76,6 @@ struct ScanJob {
 
 static JOBS: LazyLock<Mutex<HashMap<String, Arc<ScanJob>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static MEMORY: LazyLock<Arc<MemoryBudget>> = LazyLock::new(|| Arc::new(MemoryBudget::default()));
 static SLOTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(2)));
 static ACTIVE_SOURCES: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -104,14 +99,6 @@ impl Drop for SourceLease {
             sources.remove(&self.0);
         }
     }
-}
-
-pub(crate) fn candidate_memory(candidate: &HiddenThreadCandidate) -> usize {
-    512 + (candidate.id.len()
-        + candidate.title.len()
-        + candidate.fingerprint.as_ref().map_or(0, String::len)
-        + candidate.reason.as_ref().map_or(0, String::len))
-    .saturating_mul(4)
 }
 
 fn empty_plan() -> HiddenThreadDeletePlan {
@@ -197,7 +184,7 @@ pub async fn request(
             .clone()
             .try_acquire_owned()
             .context("扫描任务已达上限，请稍后重试")?;
-        let work = ScanWork::new(MEMORY.clone(), false);
+        let work = ScanWork::new(false);
         let active = SourceLease::acquire(source)?;
         return crate::read_tasks::spawn_blocking(move || {
             let _slot = slot;
@@ -234,7 +221,7 @@ pub async fn request(
                 .clone()
                 .try_acquire_owned()
                 .context("扫描任务已达上限，请稍后重试")?;
-            let work = ScanWork::new(MEMORY.clone(), true);
+            let work = ScanWork::new(true);
             let job = Arc::new(ScanJob {
                 id: uuid::Uuid::new_v4().to_string(),
                 source,
@@ -248,7 +235,6 @@ pub async fn request(
                     items: Vec::new(),
                     phase: HiddenScanPhase::Preparing,
                     error: None,
-                    memory: work.lease(),
                 }),
                 work,
             });
@@ -290,7 +276,6 @@ pub async fn request(
                             .lock()
                             .map_err(|_| anyhow::anyhow!("扫描状态不可用"))?;
                         if let Some(candidate) = candidate {
-                            state.memory.grow(candidate_memory(&candidate))?;
                             state.items.push(candidate);
                             state.phase = HiddenScanPhase::Scanning;
                         } else {
@@ -404,7 +389,6 @@ mod tests {
                     .collect(),
                 phase: HiddenScanPhase::Scanning,
                 error: None,
-                memory: work.lease(),
             }),
             work,
         }

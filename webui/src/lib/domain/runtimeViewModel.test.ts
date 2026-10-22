@@ -101,7 +101,7 @@ function grokSession(overrides: Partial<GrokSessionSummary> = {}): GrokSessionSu
 }
 
 describe("runtime view-model helpers", () => {
-  test("arms hidden deletion only when integrity is sound and a preview candidate is allowed", () => {
+  test("arms hidden deletion for located candidates regardless of legacy protection", () => {
     expect(canStartHiddenThreadDelete(hiddenPlan())).toBe(true);
 
     const blocked = hiddenPlan();
@@ -111,8 +111,8 @@ describe("runtime view-model helpers", () => {
       allowed: false,
       reason: "thread is running"
     }));
-    expect(canStartHiddenThreadDelete(blocked)).toBe(false);
-    expect(canStartHiddenThreadDelete({ ...hiddenPlan(), integrity: "corrupt" })).toBe(false);
+    expect(canStartHiddenThreadDelete(blocked)).toBe(true);
+    expect(canStartHiddenThreadDelete({ ...hiddenPlan(), integrity: "corrupt" })).toBe(true);
   });
 
   test("requires a complete, non-stopped scan before allowing hidden deletion", () => {
@@ -158,7 +158,7 @@ describe("runtime view-model helpers", () => {
     expect(canStartHiddenThreadDelete(completedWithMissingCandidates)).toBe(false);
   });
 
-  test("Grok deletion eligibility overrides status and legacy records fall back to recent", () => {
+  test("Grok deletion ignores activity and legacy protection", () => {
     expect(canPreviewGrokDelete(grokSession({
       status: "running",
       deletionEligibility: { allowed: true, reason: null }
@@ -166,9 +166,9 @@ describe("runtime view-model helpers", () => {
     expect(canPreviewGrokDelete(grokSession({
       status: "recent",
       deletionEligibility: { allowed: false, reason: "fixture active task" }
-    }))).toBe(false);
+    }))).toBe(true);
     expect(canPreviewGrokDelete(grokSession({ status: "recent" }))).toBe(true);
-    expect(canPreviewGrokDelete(grokSession({ status: "running" }))).toBe(false);
+    expect(canPreviewGrokDelete(grokSession({ status: "running" }))).toBe(true);
     expect(canPreviewGrokDelete(grokSession({ status: "recent", deletionEligibility: null }))).toBe(true);
   });
 

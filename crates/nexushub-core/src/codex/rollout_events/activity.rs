@@ -321,25 +321,6 @@ pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
     Ok(scan.latest_message)
 }
 
-pub(crate) fn rollout_waiting_for_reply(path: &Path, expected: &str) -> Result<bool> {
-    use crate::codex::rollout_file::{RolloutReader, MAX_BYTES, MAX_LINE_BYTES};
-    let mut reader = RolloutReader::new(path, MAX_BYTES)?;
-    let first = reader
-        .next_record(MAX_LINE_BYTES)?
-        .context("线程缺少身份记录")?;
-    anyhow::ensure!(
-        first["type"] == "session_meta" && first["payload"]["id"] == expected,
-        "线程文件身份不匹配"
-    );
-    let mut state = ScanState::default();
-    state.push(first);
-    while let Some(record) = reader.next_record(MAX_LINE_BYTES)? {
-        state.push(record);
-    }
-    anyhow::ensure!(!state.scan.identity_conflict, "线程记录身份冲突");
-    Ok(state.summary().reply_needed)
-}
-
 pub fn rollout_hook_stop_message(path: &Path, turn_id: Option<&str>) -> Result<Option<String>> {
     Ok(rollout_hook_stop_message_with_source(path, turn_id)?.map(|(message, _)| message))
 }
@@ -863,77 +844,7 @@ pub(super) fn request_user_input_resolution_matches(
     payload.get("type").and_then(Value::as_str) == Some("function_call_output")
 }
 
-/// Destructive management needs explicit native terminal evidence, never file age.
-pub(crate) fn rollout_delete_evidence(
-    path: &Path,
-    expected_id: &str,
-    work: &crate::scan_work::ScanWork,
-) -> Result<Vec<u8>> {
-    use sha2::{Digest, Sha256};
-    use std::io::BufReader;
-    let mut reader = BufReader::new(work.reader(File::open(path)?));
-    let mut digest = Sha256::new();
-    let mut state = ScanState::default();
-    let mut state_memory = work.lease();
-    let mut terminal = false;
-    let mut turn_context = None;
-    let mut first = true;
-    while let Some((line, _memory)) = crate::scan_work::read_record(&mut reader, work)? {
-        digest.update(&line);
-        if first {
-            anyhow::ensure!(line.len() <= 1024 * 1024, "线程文件头过大");
-            let header: Value = serde_json::from_slice(&line).context("线程文件头损坏")?;
-            anyhow::ensure!(
-                header.get("type").and_then(Value::as_str) == Some("session_meta"),
-                "未知线程文件格式"
-            );
-            anyhow::ensure!(
-                header.pointer("/payload/id").and_then(Value::as_str) == Some(expected_id),
-                "线程文件身份与选中 ID 不一致"
-            );
-            first = false;
-        }
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let mut value: Value =
-            serde_json::from_slice(&line).context("线程记录损坏或尚未写入完整")?;
-        normalize_canonical_turn(&mut value, &mut turn_context);
-        let kind = rollout_event_type(&value);
-        if is_turn_terminal_event(kind) || kind == "task_complete" {
-            terminal = true;
-        }
-        if matches!(kind, "task_started" | "turn_started" | "turn/started") {
-            terminal = false;
-        }
-        state.push(value);
-        state_memory.resize(
-            8192 + state
-                .scan
-                .latest_message
-                .as_ref()
-                .map_or(0, |text| text.len().saturating_mul(8))
-                + state
-                    .async_questions
-                    .calls
-                    .iter()
-                    .map(|call| call.retained_bytes().saturating_mul(4))
-                    .sum::<usize>()
-                + state.pending_tool_turns.len().saturating_mul(1024)
-                + state.active_tasks.len().saturating_mul(1024),
-        )?;
-    }
-    let scan = state.summary();
-    anyhow::ensure!(!first && !scan.identity_conflict, "线程文件身份无法确认");
-    anyhow::ensure!(!scan.running, "线程文件仍有运行信号，暂不能删除");
-    anyhow::ensure!(
-        terminal && scan.active_turn_id.is_none() && !scan.reply_needed,
-        "线程终态无法确认，暂不能删除"
-    );
-    Ok(digest.finalize().to_vec())
-}
-
-/// Destructive management needs explicit native terminal evidence, never file age.
+/// Archive/restore retain explicit native terminal evidence.
 pub(crate) fn rollout_has_confirmed_inactive_state(path: &Path) -> Result<bool> {
     let scan = scan_rollout(path, 1)?;
     if scan.running || scan.active_turn_id.is_some() || scan.reply_needed {

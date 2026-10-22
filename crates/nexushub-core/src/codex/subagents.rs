@@ -214,58 +214,6 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
     Ok(graph)
 }
 
-/// A complete native subtree for an explicit management preview. Unlike the
-/// reader, deletion must reject missing edges instead of showing a partial list.
-pub(crate) fn deletion_tree(paths: &CodexPaths, root: &str) -> Result<Vec<String>> {
-    validate_key(root)?;
-    let graph = read_graph(paths)?;
-    ensure!(graph.contains_key(root), "线程不存在");
-    let mut pending = vec![(root.to_string(), 0)];
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    while let Some((id, depth)) = pending.pop() {
-        ensure!(
-            depth <= MAX_DEPTH && seen.len() < MAX_RECORDS,
-            "子线程树超出核验上限"
-        );
-        ensure!(seen.insert(id.clone()), "子线程关联存在循环");
-        let record = &graph[&id];
-        ensure!(record.parents.len() <= 1, "子线程存在多个父线程");
-        if id == root {
-            ensure!(record.parents.is_empty(), "请选择主线程预览整树删除");
-        }
-        let mut children: Vec<_> = graph
-            .values()
-            .filter(|child| child.parents.contains(&id))
-            .map(|child| child.id.clone())
-            .collect();
-        children.sort();
-        pending.extend(children.into_iter().rev().map(|child| (child, depth + 1)));
-        result.push(id);
-    }
-    let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let cols = columns(&conn, "thread_spawn_edges")?;
-    if !cols.is_empty() {
-        ensure!(
-            cols.contains("parent_thread_id") && cols.contains("child_thread_id"),
-            "原生子线程关联格式不支持"
-        );
-        let mut statement =
-            conn.prepare("SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges")?;
-        let edges = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for edge in edges {
-            let (parent, child) = edge?;
-            ensure!(
-                !seen.contains(&parent) || seen.contains(&child),
-                "子线程索引不完整，请在原生应用中修复后重试"
-            );
-        }
-    }
-    Ok(result)
-}
-
 fn validate_key(key: &str) -> Result<()> {
     ensure!(
         !key.is_empty()

@@ -471,6 +471,13 @@
       "ArchiveDeleteResult": {
         "fields": [
           {
+            "name": "items",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < HiddenThreadItemResult >"
+          },
+          {
             "name": "before",
             "serde": [],
             "type": "ArchiveDeletePlan"
@@ -518,7 +525,9 @@
           },
           {
             "name": "fingerprint",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "Option < String >"
           },
           {
@@ -692,6 +701,13 @@
             "name": "reason",
             "serde": [],
             "type": "Option < String >"
+          },
+          {
+            "name": "residuals",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -706,7 +722,9 @@
           },
           {
             "name": "fingerprint",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "Option < String >"
           }
         ],
@@ -943,7 +961,9 @@
           },
           {
             "name": "fingerprint",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "String"
           }
         ],
@@ -968,6 +988,13 @@
             "name": "bytes",
             "serde": [],
             "type": "u64"
+          },
+          {
+            "name": "residuals",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -3392,7 +3419,9 @@
           },
           {
             "name": "fingerprint",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "String"
           }
         ],
@@ -3417,6 +3446,13 @@
             "name": "bytes",
             "serde": [],
             "type": "u64"
+          },
+          {
+            "name": "residuals",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -7255,8 +7291,17 @@
           },
           {
             "name": "fingerprint",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "String"
+          },
+          {
+            "name": "descendants",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -9818,9 +9863,8 @@
         "fn cleanup_confirmation_message (target : CleanupTarget) -> & 'static str",
         "fn validate_cleanup_execute_confirmation (target : CleanupTarget , request : & CleanupExecuteRequest ,) -> Result < () >",
         "fn hidden_candidates (plan : & CleanupOperationPlan ,) -> Result < Vec < archive :: HiddenThreadSelection > >",
-        "fn validate_cleanup_expected_count (plan : & CleanupOperationPlan , actual_count : u64 ,) -> Result < () >",
         "fn dry_run_archived_with_capability (platform : & PlatformPaths , paths : & CodexPaths ,) -> Result < ArchiveDeletePlan >",
-        "fn execute_archived_with_capability (platform : & PlatformPaths , paths : & CodexPaths ,) -> Result < ArchiveDeleteResult >",
+        "fn execute_archived_with_capability (platform : & PlatformPaths , paths : & CodexPaths , candidates : & [archive :: HiddenThreadSelection] ,) -> Result < ArchiveDeleteResult >",
         "fn dry_run_hidden_with_capability (platform : & PlatformPaths , paths : & CodexPaths ,) -> Result < HiddenThreadDeletePlan >",
         "fn execute_hidden_with_capability (platform : & PlatformPaths , paths : & CodexPaths , candidates : & [archive :: HiddenThreadSelection] ,) -> Result < HiddenThreadDeleteResult >"
       ]
@@ -10670,7 +10714,7 @@
         "SessionBatchRequest": "exporttypeSessionBatchRequest={provider:SessionProvider;operation:SessionOperation;sessionKeys:string[];includeDescendants?:boolean};",
         "SessionBatchItem": "exporttypeSessionBatchItem={sessionKey:string;id:string;title:string;paths:string[];bytes:number;allowed:boolean;reason:string|null;fingerprint:string|null;descendants?:string[];warnings?:string[]};",
         "SessionBatchPreview": "exporttypeSessionBatchPreview={provider:SessionProvider;operation:SessionOperation;items:SessionBatchItem[]};",
-        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint:string}>;confirmed:boolean;includeDescendants?:boolean};",
+        "SessionBatchExecuteRequest": "exporttypeSessionBatchExecuteRequest={provider:SessionProvider;operation:SessionOperation;items:Array<{sessionKey:string;fingerprint?:string;descendants?:string[]}>;confirmed:boolean;includeDescendants?:boolean};",
         "SessionBatchResult": "exporttypeSessionBatchResult={items:Array<{sessionKey:string;status:\"succeeded\"|\"blocked\"|\"failed\";message:string|null;deletedIds?:string[];residuals?:string[]}>};",
         "SessionAttachmentRequest": "exporttypeSessionAttachmentRequest={rootThreadId?:string;provider:SessionProvider;sessionKey:string;messageId:string;attachmentId:string};",
         "SessionAttachmentResponse": "exporttypeSessionAttachmentResponse={mimeType:string;base64:string};"
@@ -10764,8 +10808,8 @@
         "GrokHistoryEvent": "exporttypeGrokHistoryEvent={id?:string;userMessage?:UserMessageContent|null;callId?:string;status?:string;detail?:string;timestamp?:string|null;kind:string;text?:string|null;method?:string|null;};",
         "GrokSessionDetail": "exporttypeGrokSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;totalEvents?:number;hasMore?:boolean;beforeCursor?:string|null;summary:GrokSessionSummary;events:GrokHistoryEvent[]};",
         "GrokDeletePreview": "exporttypeGrokDeletePreview={id:string;title:string;path:string;fingerprint:string;fileCount:number;bytes:number};",
-        "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint:string};",
-        "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number};",
+        "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint?:string};",
+        "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number;residuals?:string[]};",
         "ClaudeSessionSummary": "exporttypeClaudeSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;readWarning?:string|null;canRename:boolean;renameBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;};",
         "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null;assistantPhase?:\"intermediate\"|\"final\"|null};",
         "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
@@ -10773,8 +10817,8 @@
         "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
         "ClaudeOwnershipProcess": "exporttypeClaudeOwnershipProcess={pid:number;role:string;registrationVerified:boolean;mismatchedFields:string[]};",
         "ClaudeOwnershipDiagnostics": "exporttypeClaudeOwnershipDiagnostics={ownership:string;reasonCodes:string[];processes:ClaudeOwnershipProcess[]};",
-        "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint:string};",
-        "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number};",
+        "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint?:string};",
+        "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number;residuals?:string[]};",
         "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",
         "CodexMessage": "exporttypeCodexMessage={role:string;kind:string;text:string;created_at?:string|null;};",
         "UserInputOption": "exporttypeUserInputOption={label:string;description?:string|null;};",
@@ -10802,11 +10846,11 @@
         "UpdateStatus": "exporttypeUpdateStatus={current_version:string;latest_version?:string|null;update_available?:boolean|null;channel:string;method:UpdateExecutionMethod;state:UpdateState;failure_category?:string|null;recommended_action:string;capabilities:string[];};",
         "JobRecord": "exporttypeJobRecord={id:string;kind:string;status:string;title:string;thread_id?:string|null;turn_id?:string|null;started_at:number;finished_at?:number|null;exit_code?:number|null;output:string;error?:string|null;analysis?:string|null;explanation?:string|null;failure_analysis?:{category:string;explanation:string;suggestions:string[];}|null;};",
         "ArchiveDeletePlan": "exporttypeArchiveDeletePlan={total_threads:number;active_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;archived_ids:string[];integrity:string;};",
-        "ArchiveDeleteResult": "exporttypeArchiveDeleteResult={before:ArchiveDeletePlan;after_total_threads:number;after_active_threads:number;after_archived_threads:number;after_integrity:string;deleted_rollout_files:number;};",
-        "HiddenThreadSelection": "exporttypeHiddenThreadSelection={id:string;fingerprint:string|null};",
+        "ArchiveDeleteResult": "exporttypeArchiveDeleteResult={items?:HiddenThreadItemResult[];before:ArchiveDeletePlan;after_total_threads:number;after_active_threads:number;after_archived_threads:number;after_integrity:string;deleted_rollout_files:number;};",
+        "HiddenThreadSelection": "exporttypeHiddenThreadSelection={id:string;fingerprint?:string|null};",
         "HiddenThreadCandidate": "exporttypeHiddenThreadCandidate=HiddenThreadSelection&{title:string;allowed:boolean;reason:string|null};",
-        "HiddenThreadItemResult": "exporttypeHiddenThreadItemResult={id:string;status:\"deleted\"|\"skipped\"|\"failed\";reason:string|null};",
-        "CleanupExecuteRequest": "exporttypeCleanupExecuteRequest={confirmed:boolean;expectedCount:number;candidates?:HiddenThreadSelection[]};",
+        "HiddenThreadItemResult": "exporttypeHiddenThreadItemResult={id:string;status:\"deleted\"|\"skipped\"|\"failed\";reason:string|null;residuals?:string[]};",
+        "CleanupExecuteRequest": "exporttypeCleanupExecuteRequest={confirmed:boolean;expectedCount?:number;candidates?:HiddenThreadSelection[]};",
         "HiddenThreadDeletePlan": "exporttypeHiddenThreadDeletePlan={scan?:HiddenScanProgress|null;total_threads:number;visible_threads:number;hidden_threads:number;archived_threads:number;session_index_lines:number;rollout_files:number;hidden_ids:string[];candidates:HiddenThreadCandidate[];hidden_source_counts:Record<string,number>;integrity:string;};",
         "HiddenScanRequest": "exporttypeHiddenScanRequest={mode?:\"start\"|\"poll\"|\"cancel\";scanId?:string;cursor?:number;limit?:number};",
         "HiddenScanProgress": "exporttypeHiddenScanProgress={id:string;phase:\"preparing\"|\"scanning\"|\"complete\"|\"stopping\"|\"stopped\"|\"failed\";processed:number;total:number;cursor:number;nextCursor:number;hasMore:boolean;error:string|null;};",

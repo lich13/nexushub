@@ -88,7 +88,6 @@ while IFS= read -r line; do
         printf '{{"id":%s,"result":{{"data":[],"nextCursor":null}}}}\n' "$request_id"
       fi ;;
 {create_case}
-    *'"method":"thread/delete"'*) printf '{{"id":%s,"result":{{}}}}\n' "$request_id" ;;
   esac
 done
 "#,
@@ -137,52 +136,6 @@ impl Drop for HelperFixture {
 }
 
 const GENERATED_CHUNK_BYTES: usize = 8 * 1024;
-
-#[tokio::test(flavor = "current_thread")]
-async fn delete_uses_only_initialize_and_fixed_management_method() {
-    let _test = HELPER_TEST.lock().await;
-    let fixture = HelperFixture::new(false);
-    fixture
-        .helper()
-        .delete_thread("11111111-1111-4111-8111-111111111111")
-        .await
-        .unwrap();
-    let methods: Vec<_> = fixture
-        .records()
-        .iter()
-        .map(|(_, message)| message["method"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(methods, ["initialize", "initialized", "thread/delete"]);
-    assert!(matches!(
-        fixture.helper().delete_thread("not-a-native-id").await,
-        Err(DesktopError::InvalidInput)
-    ));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn delete_disconnect_is_unknown_and_is_not_resubmitted() {
-    let _test = HELPER_TEST.lock().await;
-    let fixture = HelperFixture::for_create(CreateReply::Disconnected);
-    let script = fs::read_to_string(&fixture.executable)
-        .unwrap()
-        .replace("thread/start", "thread/delete");
-    fs::write(&fixture.executable, script).unwrap();
-    assert!(matches!(
-        fixture
-            .helper()
-            .delete_thread("11111111-1111-4111-8111-111111111111")
-            .await,
-        Err(DesktopError::OutcomeUnknown)
-    ));
-    assert_eq!(
-        fixture
-            .records()
-            .iter()
-            .filter(|(_, message)| message["method"] == "thread/delete")
-            .count(),
-        1
-    );
-}
 
 struct GeneratedReader {
     prefix: &'static [u8],

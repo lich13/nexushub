@@ -57,14 +57,14 @@ fn status_needs_live_native_owner_and_unfinished_primary_turn() {
     let active = f.snapshot(Some(live()));
     assert_eq!(active.status(&f.1), "running");
     assert!(active.ensure_not_open(&f.1).is_err());
-    assert!(active.ensure_deletable(&f.1).is_err());
+    assert!(active.ensure_deletable(&f.1).is_ok());
     assert_eq!(f.snapshot(None).status(&f.1), "unknown");
     for end in [END, "{\"type\":\"turn_ended\",\"outcome\":\"cancelled\"}\n"] {
         f.events(&(f.start() + end));
         assert_eq!(active.status(&f.1), "recent");
         // An idle but open native session must still block deletion.
         assert!(active.ensure_not_open(&f.1).is_err());
-        assert!(active.ensure_deletable(&f.1).is_err());
+        assert!(active.ensure_deletable(&f.1).is_ok());
         let exited = f.snapshot(None);
         assert_eq!(exited.status(&f.1), "recent");
         assert!(exited.ensure_not_open(&f.1).is_ok());
@@ -106,12 +106,12 @@ fn process_identity_start_time_and_permissions_gate_ownership() {
     ] {
         let snapshot = f.snapshot(Some(process));
         assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
-        assert!(snapshot.ensure_deletable(&f.1).is_err());
+        assert!(snapshot.ensure_deletable(&f.1).is_ok());
     }
     let mut snapshot = f.snapshot(Some(live()));
     snapshot.processes = None;
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
-    assert!(snapshot.ensure_deletable(&f.1).is_err());
+    assert!(snapshot.ensure_deletable(&f.1).is_ok());
     snapshot = f.snapshot(Some(live()));
     snapshot.registrations.as_mut().unwrap()[0].cwd = Some("/different-workspace".into());
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
@@ -222,7 +222,7 @@ fn bounded_reads_resume_without_poisoning_a_line_at_the_budget_boundary() {
 fn list_and_detail_share_exited_registration_result_without_changing_native_files() {
     let f = Fixture::new();
     f.events(&(f.start() + END));
-    let before = super::super::directory_fingerprint(&f.1.path).unwrap();
+    let before = super::super::tests::directory_snapshot(&f.1.path).unwrap();
     fs::write(f.0.home.join("active_sessions.json"), serde_json::json!([{
         "session_id":f.1.id, "pid":std::process::id(), "opened_at":"2000-01-01T00:00:00Z", "cwd":"/work"
     }]).to_string()).unwrap();
@@ -239,7 +239,7 @@ fn list_and_detail_share_exited_registration_result_without_changing_native_file
     );
     assert!(super::super::preview_grok_delete(&f.0, &f.1.id).is_ok());
     assert_eq!(
-        super::super::directory_fingerprint(&f.1.path).unwrap(),
+        super::super::tests::directory_snapshot(&f.1.path).unwrap(),
         before
     );
 }

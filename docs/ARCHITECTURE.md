@@ -8,8 +8,8 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| Codex | 原生 state/index/rollout/log 读取与身份核验，受保护的管理操作，以及本机主线程的原生桌面协作 |
-| Claude Code | 递归发现、分支历史、原生进程身份、受保护的改名和单会话删除 |
+| Codex | 原生 state/index/rollout/log 读取、归档恢复、直接删除，以及本机主线程的原生桌面协作 |
+| Claude Code | 递归发现、分支历史、原生进程身份、改名与按文件名定位的直接删除 |
 | Grok Build | 原生目录发现、主回合历史、登记与进程校验、改名及定向删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
 | NexusHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
@@ -117,17 +117,17 @@ Goal 仅支持状态显示与原生操作入口，直接创建、修改、暂停
 
 ### Claude Code
 
-opaque session key 绑定相对 transcript 位置和原生 ID，同名 ID 互不混淆；子智能体文件不作为独立主会话。详情按稳定事件身份分页，保留分支和原生事件顺序。兼容常见 2.x user/assistant、标题、工具、queue/history/usage、compaction、API 请求辅助、会话设置、续接及已核实 system subtype。兼容 warning 仅展示，未知记录不伪造完成或权限；损坏、半行、身份冲突、路径和权限异常继续阻止写操作。
+opaque session key 绑定项目相对路径和文件名身份，同名 ID 互不混淆；子智能体文件不作为独立主会话。详情按稳定事件身份分页，保留分支和原生事件顺序。兼容常见 2.x user/assistant、标题、工具、queue/history/usage、compaction、API 请求辅助、会话设置、续接及已核实 system subtype。兼容 warning 仅展示，未知记录不伪造完成或权限；损坏、半行、身份冲突、路径和权限异常继续阻止改名。
 
-原生会话登记结合会话 ID、PID、进程身份、启动标识和主机进程域判断占用，打开 transcript 与显式恢复参数补充证据；PID 复用或不匹配登记不能证明占用。已明确属于其他会话的进程不锁住同 cwd 的全部历史会话；证据不足仅阻止可能受影响目标。不使用静默时间窗口，有明确非活跃证据时遗留 turn_open 不永久禁止管理。canRename、canDelete 及原因独立，执行前再次核验归属和指纹。
+原生会话登记结合会话 ID、PID、进程身份、启动标识和主机进程域判断占用，打开 transcript 与显式恢复参数补充证据；PID 复用或不匹配登记不能证明占用。已明确属于其他会话的进程不锁住同 cwd 的全部历史会话。不使用静默时间窗口。占用及版本判断用于改名；canDelete 保持可用，删除不依赖这些判断。
 
-改名仅追加原生 `custom-title`。删除预览绑定主 transcript 及经验证同名目录的完整文件集合，包括 subagents、工具结果和元数据；子代理以原生父会话关联核验，允许自身不同 sessionId。全部目标一起隔离、复检，移除前发现新增文件、链接或归属变化即停止并恢复隔离项；不沿 continued-in 删除其他主会话，不删除工作目录或共享存储。
+改名仅追加原生 `custom-title`，执行前核验归属和指纹。删除按文件名定位主 transcript、同名目录和原生旁路，专属目录包括 subagents、工具结果和元数据；共享索引只移除对应记录。删除范围详见下方管理与隐藏扫描。
 
 ### Grok Build
 
 活动快照用一轮进程表校验登记数组/对象、原生可执行文件身份与进程启动时间。退出、僵尸或复用 PID 不能证明仍运行。只有活跃归属与未结束主回合同时成立才显示运行；不可读、损坏和身份不确定保持未知。
 
-冷读消费完整历史，不截取尾部；增量缓存保留文件身份、ctime 和前缀锚点。可选 `deletionEligibility` 与活动显示分离：没有经验证原生占用、记录完整有效时，缺少历史结束事件仍可预览；登记或身份不明、损坏和未完成写入继续保护。列表和批量预览复用进程快照，执行及隔离后重新采集占用并核验指纹，包括仍打开但闲置的会话。
+冷读消费完整历史，不截取尾部；增量缓存保留文件身份、ctime 和前缀锚点。优先读取 updates.jsonl，缺失时使用 chat_history.jsonl。可选 `deletionEligibility` 保留协议兼容并返回可删除；删除按原生目录定位，不采集进程快照或核验指纹。
 
 ## 消息、搜索与界面状态
 
@@ -151,23 +151,21 @@ opaque session key 绑定相对 transcript 位置和原生 ID，同名 ID 互不
 
 文件链接在浏览器解析 URL 前从原始 Markdown target 提取，剥离行列后缀并按线程 cwd 解析相对路径。远程只复制，本机 macOS 通过 Tauri opener 在 Finder 定位。`plans.save` 始终是本地 Downloads 导出，校验有界 Markdown 文件名/正文并独占创建，不覆盖既有下载、不经过远程 HTTP。
 
-## 管理安全与隐藏扫描
+## 管理与隐藏扫描
 
-批量请求只接受明确 Provider keys，预览和执行逐项返回结果。三种 Provider 共用 useSessionSelection，点击事件从 RenameableSession 和复选框传入；⌘ 切换单项、Shift 按可见顺序追加区间，键盘点击按普通选择处理。最多 100 项，切换机器／Provider／筛选或退出多选清空选择和锚点，轮询只移除消失项。列表、详情与批量复用管理资格，复制与写操作的资格独立。
+三种 Provider 共用 useSessionSelection。⌘ 切换单项、Shift 按可见顺序追加区间，切换机器／Provider／筛选或退出多选清空选择。轮询不选择新行。删除没有批量数量上限；归档、恢复保留原有规则，客户端按 100 项分批提交。
 
-Codex 普通和归档线程显式删除允许 metadata-only／header-only 空线程及无活跃 owner 或 writer 的待回复线程，后者必须提示丢弃问题。按原生命名识别传统、_rolloutId 及归档文件；压缩文件无法核验目标或外部历史引用时整项阻止。由原生父子关联建立完整子树，深度、扫描预算、循环、多父链、缺失关系及外部历史分支引用均严格核验。指纹绑定机器、范围、全部线程／rollout 身份、文件、关联和索引；执行前变化须重新预览。
+删除预览仅定位和展示目标，一次确认后以提交的 ID 集合执行。删除不读取正文核验资格，也不依据活动进程、writer 锁、终态、版本、身份字段冲突、指纹、外部引用或官方接口可用性阻止执行。旧 fingerprint 字段仍可接收但可省略，API 协议保持 2。目录流式遍历，没有文件大小、深度或文件数量业务上限；符号链接只删除链接本身，共享文件只移除目标记录。
 
-新客户端检查 codex_delete_tree 能力并在预览和执行中显式传 includeDescendants=true；默认 false 的旧请求不能隐式级联。SessionBatchItem 增加可选 descendants／warnings，SessionBatchItemResult 增加 deletedIds／residuals。ClaudeDeletePreview 保留 path 并增加完整 paths。客户端按实际删除 ID 清理详情和缓存；归档、恢复和隐藏清理不继承删除条件的放宽。
+Codex 依据原生父子关系生成后代集合，循环去重；includeDescendants 和 SessionBatchSelection.descendants 明确传递确认范围。执行不再发现新后代，也不扩大到引用目标历史的其他线程。直接清理普通／归档 rollout、压缩副本、writer 锁、shell snapshots、visualizations、原生数据库、分页历史和名称索引，不调用 helper。归档、恢复仍使用原有指纹和状态规则。
 
-短生命周期原生 helper 只调用固定 thread/delete 管理方法；桌面 IPC 不冒充删除转发，Linux 复用配置的原生程序。helper 不恢复线程、启动回合或停止用户进程。官方请求提交后错误或超时均不回退、不自动重试，不承诺整树事务回滚。仅官方路径预先不可用、结构与引用可完整核验的旧格式单线程保留隔离、哈希和回滚路径；未知结构或不支持的分页历史拒绝离线删除。
+Claude 的稳定定位键由项目相对路径和文件名身份生成，与正文解析独立。删除主 JSONL、同名专属目录、按 ID 定位的 file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 直接删除各工作区下的目标 ID 目录，并移除 active_sessions.json 对应登记；摘要缺失或损坏不阻止定位。
 
-完成后统一核验全部文件、threads、关联索引、名称索引及按线程／rollout ID 存储的分页历史；仅完整通过返回 succeeded。残留或无法核验返回 failed，明确部分结果或未知范围与下一步，路径只出现在操作结果中。一棵树为一个结果单位，独立项可继续，共享存储完整性故障停止受影响操作。
+单条、批量、归档清理和隐藏清理共用删除实现。cleanup.archiveExecute 和 cleanup.hiddenExecute 使用 candidates 固定目标，expectedCount 不参与执行判断。缺失文件视为完成；权限、文件系统和数据库失败返回逐项 failed/residuals，继续处理其他目标，不回滚整批。数据库修改按目标事务执行。原生程序之后新写入的数据在刷新后显示，不启动重复删除任务。
 
-`cleanup.hiddenDryRun` 固定扫描开始时的候选，集中读取一次数据库元数据、会话索引和原生目录，建立引用映射；逐项流式核验终态、身份和完整指纹。取消检查间隔最多 64KiB。可选 start/poll/cancel、扫描 ID 与游标复用原 action；无参数保持原完整响应，重复游标返回相同已发布结果，扫描中发布完整页，完成/停止发布尾页。
+cleanup.hiddenDryRun 保留 start/poll/cancel、扫描 ID 与游标和旧完整响应。只扫描元数据及原生父子关系，不核验正文或指纹；每页最多 100 项，候选总数没有业务上限。同源最多一个活动扫描，进程最多两个上下文；五分钟无请求释放。界面加载完整确认范围后允许执行，停止结果不能执行，切换机器隔离迟到响应。
 
-扫描每页最多 100 项，同源最多一个活动扫描，进程最多两个上下文，共用 64MiB 预算；连续五分钟无请求取消释放。前端顺序取页、分页显示结果，完整快照才允许确认清理；停止保留已显示结果但禁用执行，切换机器隔离迟到响应。
-
-`cleanup.hiddenExecute.candidates` 是执行边界，`expectedCount` 比较候选长度而非全局隐藏数；旧无候选请求不能执行。每项重新核验后用 savepoint 执行，项目级错误跳过并继续，公共数据库/索引/存储故障回滚整批；提交前复核暂存与数据库完整性，不加入预览后新增的线程。Linux/Tauri 共用有界后台，不改原生登记或终止用户进程解除保护。
+Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；缺少 cwd 或版本不产生读取失败。Grok 优先读取 updates.jsonl，缺失时读取 chat_history.jsonl，映射用户、助手和工具调用／结果，复用分页、增量缓存、搜索和时间线。系统提示、system_reminder 和加密推理不作为普通对话展示。
 
 ## 远程连接与认证
 

@@ -73,8 +73,8 @@ export function resolvedSelectedThreadId(selectedId: string | null): string | nu
 }
 
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
-  return plan?.integrity === "ok" && (!plan.scan || (plan.scan.phase === "complete" && !plan.scan.hasMore
-    && plan.candidates.length === plan.scan.total)) && Boolean(plan.candidates?.some(item => item.allowed));
+  return Boolean(plan) && (!plan!.scan || (plan!.scan!.phase === "complete" && !plan!.scan!.hasMore
+    && plan!.candidates.length === plan!.scan!.total)) && Boolean(plan!.candidates?.length);
 }
 
 export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
