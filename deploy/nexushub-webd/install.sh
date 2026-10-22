@@ -448,7 +448,7 @@ install_provider_session_write_paths() {
   local source_dir rendered
   source_dir="$(script_dir)"
   rendered="$(mktemp)"
-  if ! python3 "${source_dir}/provider-session-write-paths.py" "${ENV_FILE}" "${rendered}"; then
+  if ! python3 "${source_dir}/provider-session-write-paths.py" "${ENV_FILE}" "${CONFIG_FILE}" "${rendered}"; then
     rm -- "${rendered}"
     die "invalid custom provider session root in ${ENV_FILE}"
   fi

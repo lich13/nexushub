@@ -4,7 +4,7 @@ NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网�
 
 部署时从仓库外显式提供 SSH 主机、HTTPS 域名和归档路径。域名、主机、API Key、用户会话和配置不写入 Git。
 
-默认 Linux 配置、Codex 包装器及 systemd 写入白名单假设宿主普通用户为 `ubuntu`，并保留 root 与 ubuntu 的既有会话根。其他用户布局需在部署前核对配置及准确的会话写入路径；不能把整个 home 或凭据目录加入写入白名单。
+默认 Linux 配置、Codex 包装器及 systemd 写入白名单假设宿主普通用户为 `ubuntu`，并保留 root 与 ubuntu 的既有会话根。其他用户布局沿用 Provider 环境变量与 Codex home 配置；写入范围限制在 Provider 数据根，不开放整个用户 home。
 
 ## 服务与隔离
 
@@ -15,7 +15,7 @@ NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网�
 - 日志：`/var/log/nexushub-webd/`
 - 监听：仅回环地址；反向代理只转发 `api/rpc/` 和 `healthz`，其他路径返回 404
 
-保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Provider 会话根只有在配置存在时才加入精确的 `ReadWritePaths`；新增目录或修改自定义根目录后，需要重新生成 drop-in、执行 `daemon-reload` 并重启服务。
+保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
 
 Grok 原生 leader 使用 `/var/lib/nexushub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
 
@@ -66,7 +66,7 @@ App 的“更新与维护”页面在本机目标显示“本机 App 更新”�
 ```bash
 sudo /usr/local/bin/nexushub-webd --version
 sudo systemctl is-active nexushub-webd
-sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths
+sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths -p ReadOnlyPaths
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 

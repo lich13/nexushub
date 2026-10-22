@@ -8,6 +8,7 @@ export function ClaudeProcessView({ group, children }: { group: ClaudeProcessGro
   const position = useContext(DisclosureRevealContext);
   const reveal = Boolean(position && (group.sourceIds.includes(position) || group.entries.some(entry => entry.kind === "item"
     ? entry.key === position || entry.sourceIds.includes(position)
+    : entry.kind === "metadata" ? entry.group.sourceIds.includes(position)
     : entry.group.commands.some(command => command.id === position || command.sourceIds.includes(position)))));
   return <ActivityDetails className="execution-group claude-process-group" stateKey={group.stateKey} timelineId={group.id} initiallyOpen={false} reveal={reveal} summary={<>
     <Brain size={17} aria-hidden="true" /><span className="activity-label">过程</span>

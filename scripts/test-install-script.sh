@@ -50,18 +50,23 @@ unit = (root / "deploy/nexushub-webd/systemd.service").read_text()
 for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/nexushub-webd/grok-leader.sock", "ProtectHome=read-only", "ProtectSystem=full", "PrivateTmp=true"]:
     if boundary not in unit:
         raise SystemExit("native Grok runtime isolation boundary missing")
-if "/root/.grok " in next(line for line in unit.splitlines() if line.startswith("ReadWritePaths=")):
-    raise SystemExit("provider credentials must not become writable")
-if "-/root/.claude/projects" not in unit or "/root/.claude " in unit:
-    raise SystemExit("Claude write scope must include only optional projects")
+write_paths = next(line for line in unit.splitlines() if line.startswith("ReadWritePaths="))
+read_paths = next(line for line in unit.splitlines() if line.startswith("ReadOnlyPaths="))
+for provider in (".grok", ".claude"):
+    if f"-/root/{provider} " not in write_paths:
+        raise SystemExit("provider data root must support atomic shared-index replacement")
 import importlib.util
 import sys
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/nexushub-webd/provider-session-write-paths.py")
 provider_paths = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(provider_paths)
-if provider_paths.custom_session_roots({"CLAUDE_CONFIG_DIR": "/srv/example-claude"}) != [Path("/srv/example-claude/projects")]:
-    raise SystemExit("custom Claude projects whitelist missing")
+for key, provider in (("GROK_HOME", ".grok"), ("CLAUDE_CONFIG_DIR", ".claude")):
+    for name in provider_paths.PROTECTED_FILES[key]:
+        if f"-/root/{provider}/{name}" not in read_paths:
+            raise SystemExit("provider settings or credential protection missing")
+if provider_paths.custom_session_roots({"CLAUDE_CONFIG_DIR": "/srv/example-claude"}) != [Path("/srv/example-claude")]:
+    raise SystemExit("custom Claude data-root whitelist missing")
 if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
     raise SystemExit("default Claude root must use optional unit entry")
 if ".pi" in unit or provider_paths.custom_session_roots({"PI_CODING_AGENT_DIR": "/srv/fixture-pi", "PI_CODING_AGENT_SESSION_DIR": "/srv/fixture-pi-sessions"}):
@@ -120,6 +125,7 @@ PY
 
 shellcheck deploy/nexushub-webd/install.sh deploy/nexushub-webd/update.sh deploy/nexushub-webd/rollback.sh scripts/deploy-cloud.sh
 python3 scripts/test-install-safety.py
+python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py
 node --test scripts/test-security-audit.mjs
 python3 scripts/check-workspaces.py

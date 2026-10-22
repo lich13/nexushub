@@ -121,3 +121,23 @@ test("a running tool has a visible indicator without mounting its output", () =>
   expect(html).toContain("thread-running-indicator");
   expect(html).not.toContain("Unfinished input");
 });
+
+test("automatic preamble and summaries fold without bubbles and keep search and pagination aliases", () => {
+  const preamble = [
+    event("snapshot", "file-history-snapshot", { turnId: null, text: "文件历史快照", detail: "Snapshot fixture" }),
+    event("settings", "atis-latch", { turnId: null, text: "会话设置", detail: "Settings fixture" })
+  ];
+  const later = [event("request", "user_message", { text: "/plan\nActual request" }), event("compact", "compaction", { text: "Compaction fixture" })];
+  const closed = render([...preamble, ...later], "metadata");
+  expect(closed.html).toContain("系统活动");
+  expect(closed.html).toContain("压缩摘要");
+  expect(closed.html).not.toContain("Snapshot fixture");
+  expect(closed.html).not.toContain("Compaction fixture");
+  expect(closed.html.match(/user-message-bubble/g)).toHaveLength(1);
+  const partial = render([preamble[1], ...later], "metadata-paging");
+  toggle(partial.details[0]);
+  expect(render([...preamble, ...later], "metadata-paging").details[0].props.open).toBe(true);
+  const found = render([...preamble, ...later], "metadata-search", "snapshot");
+  expect(found.html).toContain("Snapshot fixture");
+  expect(found.html).not.toContain("Compaction fixture");
+});

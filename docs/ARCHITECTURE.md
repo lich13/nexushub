@@ -177,7 +177,7 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 
 `ServerConfig` 在配置加载及绑定前验证回环监听；允许 IPv4 127.0.0.0/8、IPv6 ::1，IPv4 映射地址按其 IPv4 值判断。拒绝发生于数据库打开、后台任务启动及配置迁移写回之前，错误不回显输入；原有默认端口和旧回环端口迁移保留。
 
-服务端只接受一个 `x-api-key`，保存 SHA-256 摘要并常量时间比较；失败限流与审计不含凭据，合法 Key 不被失败尝试锁死。来源 IP 是现有安全审计内容。CLI 轮换立即使旧 Key 失效，撤销拒绝所有业务 RPC。systemd 保持文件系统隔离，只为已配置 Provider 根开放精确 `ReadWritePaths`，缺少 Claude 目录不阻止启动。
+服务端只接受一个 `x-api-key`，保存 SHA-256 摘要并常量时间比较；失败限流与审计不含凭据，合法 Key 不被失败尝试锁死。来源 IP 是现有安全审计内容。CLI 轮换立即使旧 Key 失效，撤销拒绝所有业务 RPC。systemd 保持文件系统隔离，为 Provider 数据根开放精确 `ReadWritePaths`，使共享索引的同目录临时文件和原子替换可用；Grok／Claude 的凭据与配置使用可选 `ReadOnlyPaths`。安装器同时读取 Provider 环境变量及 Codex home 配置，缺少 Provider 目录不阻止启动。共享 JSON／JSONL 没有目标记录时不创建临时文件、不重写原文件。
 
 更新任务与 Probe helper 使用内部 `ProcessCommand` 的 program/args 直接启动，不执行配置 shell 字符串。现行和完整匹配的历史默认更新命令映射到固定包装器及参数；自定义 shell、环境赋值、管道、重定向和命令替换返回固定错误。任务名称、状态、输出处理、互斥与审计字段保留；备份清理直接运行固定 Python 参数，保留最近三份。序列化 command 字段仅保留兼容展示，不改变 wire shape；Hook/配置文本的 shell_quote 统一实现并保留既有引用策略。
 

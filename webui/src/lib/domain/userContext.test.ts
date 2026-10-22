@@ -1,6 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { projectUserMessage } from "./userContext";
 
+test("native automatic wrappers fold while mixed requests and literal examples remain visible", () => {
+  for (const tag of ["local-command-stdout", "local-command-stderr", "local-command-caveat", "task-notification", "system-reminder", "system_reminder"]) {
+    const wrapper = `<${tag}>Automatic fixture</${tag}>`;
+    expect(projectUserMessage(wrapper)).toEqual({ text: "", contextBlocks: [{ kind: "runtime", text: wrapper }] });
+    expect(projectUserMessage(`${wrapper}\nRequest\n  exact spaces`).text).toBe("\nRequest\n  exact spaces");
+    for (const literal of [`\`\`\`xml\n${wrapper}\n\`\`\``, `> ${wrapper}`, `<${tag}>Incomplete`]) {
+      expect(projectUserMessage(literal)).toEqual({ text: literal, contextBlocks: [] });
+    }
+  }
+});
+
 const agents = [
   "# AGENTS.md instructions for the synthetic workspace",
   "<INSTRUCTIONS>",

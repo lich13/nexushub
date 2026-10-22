@@ -165,7 +165,7 @@ export function ClaudeWorkspace() {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
-        {selected.readWarning && <div className="task-feedback" role="status">{selected.readWarning}</div>}
+        {selected.readWarning && <DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><ActivityDetails className="task-feedback" summary="读取提示" initiallyOpen={false} stateKey="read-warning">{() => <div>{selected.readWarning}</div>}</ActivityDetails></DisclosureScope.Provider>}
         {!selected.readError && selected.renameBlockReason && <div className="task-feedback" role="status">{selected.renameBlockReason}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
         {connection.target === "local" && actions.diagnostics.variables === selected.sessionKey && <>
           {actions.diagnostics.error && <div className="form-error" role="alert">{actions.diagnostics.error.message}</div>}
@@ -206,6 +206,8 @@ function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event
 export function renderClaudeEvents(entries: ClaudeRenderItem[], title: string): ReactNode {
   return entries.map(entry => entry.kind === "process"
     ? <ClaudeProcessView key={entry.process.id} group={entry.process}>{() => renderClaudeEvents(entry.process.entries, title)}</ClaudeProcessView>
+    : entry.kind === "metadata"
+    ? <ActivityDetails key={entry.group.id} className="execution-group claude-metadata-group" stateKey={entry.group.id} stateAliases={entry.group.sourceIds.map(id => `claude-metadata:${id}`)} timelineId={entry.group.id} timelineAliases={entry.group.sourceIds} initiallyOpen={false} summary={<span className="tool-title">{entry.group.label}</span>}>{() => renderClaudeEvents(entry.group.entries, title)}</ActivityDetails>
     : entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
     : <ClaudeEvent key={entry.key} activityId={entry.key} event={entry.item} title={title} timelineAliases={entry.sourceIds} />);

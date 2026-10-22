@@ -3,7 +3,7 @@ use anyhow::{ensure, Context, Result};
 use serde_json::Value;
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Seek, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -164,9 +164,19 @@ pub(crate) fn filter_jsonl(path: &Path, remove: impl Fn(&Value) -> bool) -> Resu
     let Some(source) = open_shared(path)? else {
         return Ok(());
     };
+    let mut reader = BufReader::new(source);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            return Ok(());
+        }
+        if serde_json::from_slice::<Value>(&line).is_ok_and(|value| remove(&value)) {
+            break;
+        }
+    }
+    reader.rewind()?;
     replace(path, |output| {
-        let mut reader = BufReader::new(source);
-        let mut line = Vec::new();
         loop {
             line.clear();
             if reader.read_until(b'\n', &mut line)? == 0 {
@@ -187,7 +197,11 @@ pub(crate) fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> Result<()
     };
     let mut value: Value =
         serde_json::from_reader(BufReader::new(source)).context("无法读取共享索引")?;
+    let original = value.clone();
     edit(&mut value);
+    if value == original {
+        return Ok(());
+    }
     replace(path, |output| {
         serde_json::to_writer(&mut *output, &value)?;
         output.write_all(b"\n")?;
@@ -209,6 +223,50 @@ pub(crate) fn has_id(value: &Value, ids: &std::collections::BTreeSet<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_indexes_only_replace_when_selected_records_exist() {
+        let root = std::env::temp_dir().join(format!("nexushub-index-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let json = root.join("active_sessions.json");
+        let jsonl = root.join("history.jsonl");
+        let json_bytes = b"[ {\"id\": \"other\"}, {\"id\": \"selected\"} ]\n";
+        let jsonl_bytes = b"{\"id\":\"other\"}\r\n{\"id\":\"selected\"}\npartial fixture";
+        fs::write(&json, json_bytes).unwrap();
+        fs::write(&jsonl, jsonl_bytes).unwrap();
+        let before = [fs::metadata(&json).unwrap(), fs::metadata(&jsonl).unwrap()];
+        edit_json(&json, |_| {}).unwrap();
+        filter_jsonl(&jsonl, |row| row["id"] == "absent").unwrap();
+        assert_eq!(fs::read(&json).unwrap(), json_bytes);
+        assert_eq!(fs::read(&jsonl).unwrap(), jsonl_bytes);
+        for (path, metadata) in [&json, &jsonl].into_iter().zip(before) {
+            let after = fs::metadata(path).unwrap();
+            assert_eq!(metadata.modified().unwrap(), after.modified().unwrap());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(metadata.ino(), after.ino());
+            }
+        }
+        edit_json(&json, |value| {
+            value
+                .as_array_mut()
+                .unwrap()
+                .retain(|row| row["id"] != "selected")
+        })
+        .unwrap();
+        filter_jsonl(&jsonl, |row| row["id"] == "selected").unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&json).unwrap()).unwrap(),
+            serde_json::json!([{ "id": "other" }])
+        );
+        assert_eq!(
+            fs::read(&jsonl).unwrap(),
+            b"{\"id\":\"other\"}\r\npartial fixture"
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn deletion_has_no_transcript_size_depth_or_file_count_limit() {
