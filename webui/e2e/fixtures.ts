@@ -87,7 +87,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "grok.detail": () => ({ summary: grok[0], events: [{ kind: "user_message_chunk", text: "Check the isolated fixture." }, { kind: "assistant_message_chunk", text: "## Result\n\nReadable response with a [link](https://example.com).\n\n```sh\nprintf test\n```" }] }),
         "grok.rename": () => { grok = grok.map((item) => ({ ...item, title: args.title })); return grok[0]; },
         "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
-        "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "fixture-fingerprint") throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
+        "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.id !== grok[0]?.id) throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
         "claude.list": () => [],
 
       };

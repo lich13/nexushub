@@ -198,7 +198,7 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
 fn digest(value: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(value.as_ref()))
 }
-type LocatedSessions = HashMap<String, (PathBuf, PathBuf)>;
+type LocatedSessions = HashMap<(PathBuf, String), PathBuf>;
 static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessions>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 fn key_for(root: &Path, path: &Path, _id: &str) -> String {
@@ -211,12 +211,13 @@ fn key_for(root: &Path, path: &Path, _id: &str) -> String {
         ))
     );
     if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
-        if cache.len() >= 20_000 && !cache.contains_key(&key) {
+        let cache_key = (root.to_path_buf(), key.clone());
+        if cache.len() >= 20_000 && !cache.contains_key(&cache_key) {
             cache.clear();
         }
-        cache
-            .entry(key.clone())
-            .or_insert_with(|| (root.into(), path.into()));
+        // Keep the path scoped by its project root. The same relative
+        // filename can exist in several machines or concurrent fixtures.
+        cache.insert(cache_key, path.into());
     }
     key
 }
@@ -281,12 +282,11 @@ fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
         .projects
         .canonicalize()
         .unwrap_or_else(|_| paths.projects.clone());
-    if let Some(path) = LOCATED_SESSIONS.lock().ok().and_then(|cache| {
-        cache
-            .get(key)
-            .filter(|(source, _)| source == &root)
-            .map(|(_, path)| path.clone())
-    }) {
+    if let Some(path) = LOCATED_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned())
+    {
         if crate::session_delete::within(&root, &path) {
             return Ok(path);
         }
@@ -323,12 +323,10 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
         .projects
         .canonicalize()
         .context("未发现 Claude 会话")?;
-    let located = LOCATED_SESSIONS.lock().ok().and_then(|cache| {
-        cache
-            .get(key)
-            .filter(|(source, _)| source == &root)
-            .map(|(_, path)| path.clone())
-    });
+    let located = LOCATED_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&(root.clone(), key.to_owned())).cloned());
     if let Some(path) = located {
         // Revalidate every native identity, including the ancestor chain. The
         // lookup stores only paths discovered by our own bounded directory scan.
