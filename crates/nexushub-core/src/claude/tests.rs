@@ -1696,44 +1696,67 @@ fn empty_success_result_uses_this_turn_text_and_never_tool_use_or_cancelled_turn
         "Fixture final reply"
     );
     for reason in ["tool_use", "pause_turn", "refusal"] {
-        answer["message"]["stop_reason"] = json!(reason);
-        f.write(&[user.clone(), answer.clone(), result.clone()]);
-        assert!(
-            reader::read(&f.file).unwrap().native_events.is_empty(),
-            "implicit {reason}"
-        );
-        let mut explicit = result.clone();
-        explicit["stop_reason"] = json!(reason);
-        f.write(&[user.clone(), answer.clone(), explicit.clone()]);
-        assert!(
-            reader::read(&f.file).unwrap().native_events.is_empty(),
-            "{reason}"
-        );
-        answer["message"]["stop_reason"] = json!("end_turn");
-        f.write(&[user.clone(), answer.clone(), explicit]);
-        assert!(
-            reader::read(&f.file).unwrap().native_events.is_empty(),
-            "later result overrides completion: {reason}"
-        );
-        assert_eq!(
-            reader::read(&f.file)
-                .unwrap()
-                .events
-                .iter()
-                .find(|event| event.id == "a1:0")
-                .unwrap()
-                .assistant_phase,
-            None
-        );
+        for scenario in ["implicit", "explicit", "override-completion"] {
+            // Each behavior has its own native file identity. In-place writes
+            // of tool_use/end_turn have equal lengths and can share filesystem
+            // timestamps; cache rewrite behavior has separate regression tests.
+            let f = Fixture::new();
+            let user = f.row("u1", None, "user", json!("Fixture request"));
+            let mut answer = f.row(
+                "a1",
+                Some("u1"),
+                "assistant",
+                json!([{"type":"text","text":"Fixture reply"}]),
+            );
+            let prior_terminal = scenario == "override-completion";
+            answer["message"]["stop_reason"] =
+                json!(if prior_terminal { "end_turn" } else { reason });
+            f.write(&[user, answer]);
+            if prior_terminal {
+                let initial = reader::read(&f.file).unwrap();
+                assert_eq!(initial.native_events.len(), 1);
+                assert_eq!(
+                    initial.events.last().unwrap().assistant_phase,
+                    Some(ClaudeAssistantPhase::Final)
+                );
+            }
+            let mut terminal = result.clone();
+            if scenario != "implicit" {
+                terminal["stop_reason"] = json!(reason);
+            }
+            f.append(&terminal);
+            let parsed = reader::read(&f.file).unwrap();
+            assert!(parsed.native_events.is_empty(), "{scenario}: {reason}");
+            assert_eq!(
+                parsed
+                    .events
+                    .iter()
+                    .find(|event| event.id == "a1:0")
+                    .unwrap()
+                    .assistant_phase,
+                if !prior_terminal && reason == "tool_use" {
+                    Some(ClaudeAssistantPhase::Intermediate)
+                } else {
+                    None
+                },
+                "{scenario}: {reason}"
+            );
+        }
     }
-    answer["message"]["stop_reason"] = json!("end_turn");
+    let f = Fixture::new();
     f.write(&[
-        user.clone(),
-        answer,
+        f.row("u1", None, "user", json!("Cancelled request")),
+        f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"text","text":"Cancelled reply"}]),
+        ),
         json!({"type":"system","subtype":"cancelled"}),
         result,
     ]);
     assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+    let f = Fixture::new();
     f.complete();
     f.append(&f.row("u2", Some("a1"), "user", json!("New request")));
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
