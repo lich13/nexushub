@@ -18,8 +18,8 @@ export default defineConfig({
   ],
   webServer: {
     command: process.env.NEXUSHUB_BROWSER_PREVIEW === "1"
-      ? "corepack pnpm@12.11.2 exec vite preview --host 127.0.0.1 --port 5197 --strictPort"
-      : "VITE_USE_REAL_API=1 corepack pnpm@12.11.2 dev --host 127.0.0.1 --port 5197 --strictPort",
+      ? "pnpm exec vite preview --host 127.0.0.1 --port 5197 --strictPort"
+      : "VITE_USE_REAL_API=1 pnpm dev --host 127.0.0.1 --port 5197 --strictPort",
     url: "http://127.0.0.1:5197",
     reuseExistingServer: false
   }
