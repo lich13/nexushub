@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.8，核心提交为 [`5ffd995`](https://github.com/lich13/nexushub/commit/5ffd995e2a4b27ed5deace6e28e0e7deedf8b90e)，基线为 `cffb3e9 / v1.3.7`。本轮统一三个 Provider 的直接删除，补齐线程专属旁路与共享索引清理，修复 Claude 空会话及 Grok 原生历史读取。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.8，核心提交为 [`c645e44`](https://github.com/lich13/nexushub/commit/c645e44885a43f34ebddefb3e3f172c84a38a88b)，基线为 `cffb3e9 / v1.3.7`。本轮统一三个 Provider 的直接删除，补齐线程专属旁路与共享索引清理，修复 Claude 空会话及 Grok 原生历史读取。API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -23,7 +23,7 @@
 
 ## 必要验证
 
-以下证据覆盖 1.3.8 核心实现至 `5ffd995`；完整回归、跨平台构建和正式发布门禁以本提交对应的 GitHub Actions 为准。
+以下证据覆盖 1.3.8 核心实现至 `c645e44`；完整回归、跨平台构建和正式发布门禁以本提交对应的 GitHub Actions 为准。
 
 | 范围 | 已通过证据 |
 |---|---|
@@ -39,7 +39,7 @@
 
 ## 正式交付
 
-1.3.8 已同步现有 manifest 和两份 lock 中的自身版本，发布说明使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。正式 CI、Release、部署和安装结果在本节补记。
+1.3.8 已同步现有 manifest 和两份 lock 中的自身版本，发布说明使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。核心修复提交 [`c645e44`](https://github.com/lich13/nexushub/commit/c645e44885a43f34ebddefb3e3f172c84a38a88b) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39840632543)（macOS WebKit 性能作业重跑后）全绿；[`v1.3.8` Release CI](https://github.com/lich13/nexushub/actions/runs/39843284210) 全绿并发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.8)。已使用正式 Linux 服务包部署远端 API，版本为 1.3.8、service 为 active、health 为 `{"ok":true}`；已使用正式 macOS ARM64 DMG 原地安装 App，bundle 版本为 1.3.8 且启动成功，没有保留旧副本。收尾未创建预览服务或 SSH 转发；两个真实样例未执行删除，保留待用户验收。
 
 上一版交付记录：提交 [`51dfcd5`](https://github.com/lich13/nexushub/commit/51dfcd5225eef215b4dade342d4330d3ad42159f) 的 [三项主 CI](https://github.com/lich13/nexushub/actions/runs/39585391199) 全绿，`v1.3.5` 的 [Release CI](https://github.com/lich13/nexushub/actions/runs/39586479754) 全绿并发布 [八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.5)。已使用正式 Linux 资产升级远端 API，服务版本、健康、公开 healthz、未授权 API 和退役路径检查通过；已安装正式 macOS ARM64 App，版本为 1.3.5 且启动成功。部署和安装保留既有回退材料，未自动启用 Claude hooks。
 
