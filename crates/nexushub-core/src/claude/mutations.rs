@@ -87,17 +87,24 @@ struct ChildIdentity {
 impl ChildIdentity {
     fn record(&mut self, row: &Value) -> Result<()> {
         ensure!(row.is_object(), "子代理原生记录不是对象");
-        for (fields, ids) in [
-            (["parentSessionId", "parent_session_id"], &mut self.parents),
-            (["sessionId", "session_id"], &mut self.sessions),
-        ] {
-            for field in fields {
-                if let Some(value) = row.get(field) {
-                    let id = value
-                        .as_str()
-                        .filter(|id| !id.is_empty())
-                        .context("子代理身份字段损坏")?;
-                    ids.insert(id.into());
+        for field in ["parentSessionId", "parent_session_id"] {
+            if let Some(value) = row.get(field) {
+                let id = value
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("子代理身份字段损坏")?;
+                self.parents.insert(id.into());
+            }
+        }
+        // These fields can describe different identities in the same native
+        // record. Match the main reader's precedence, retaining cross-record
+        // conflicts and strict parent association checks.
+        for field in ["sessionId", "session_id"] {
+            if let Some(value) = row.get(field) {
+                let id = value.as_str().context("子代理身份字段损坏")?;
+                if !id.is_empty() {
+                    self.sessions.insert(id.into());
+                    break;
                 }
             }
         }
