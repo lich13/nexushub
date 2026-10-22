@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.9": [
+        "修复 Grok 和 Claude 删除共享索引时的 systemd 只读错误，按配置开放数据根并继续保护凭据与配置。",
+        "Claude 命令回显、通知和上下文归入默认折叠的系统活动，保留真实输入、搜索与分页定位。",
+    ],
     "1.3.8": [
         "统一 Codex、Claude Code 和 Grok 的直接删除入口，移除活动、锁、版本、指纹和内容完整性限制，补齐线程专属旁路与共享索引清理。",
         "修复 Claude 空会话读取，并在 Grok 缺少 updates.jsonl 时读取原生 chat_history.jsonl，系统提示和加密推理不作为普通对话显示。",
@@ -199,6 +203,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.9":
+        sections = {
+            "版本概览": ["本版修复三种 Provider 删除共享记录时的写入边界，并整理 Claude Code 自动内容；API 协议保持 2，macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Codex、Claude Code 和 Grok 的单条、批量、归档清理及隐藏清理继续使用固定确认目标和逐项结果。主文件缺失时继续处理可定位旁路；权限或数据库错误明确报告并继续其他目标。",
+                "systemd 为 Grok、Claude 的默认或自定义数据根提供同目录原子替换权限，同时将凭据和配置保持只读；自定义 Codex home 也纳入写入路径。共享 JSON／JSONL 没有命中目标时不重写文件。",
+                "Claude 完整命令包装显示为斜杠命令和原始参数。命令回显、任务通知、系统提醒、自动上下文和压缩摘要不再制造用户气泡、用户时间线标记或新回合；相邻活动在原位置默认折叠，并保留搜索、复制、分页定位与展开状态。",
+                "Probe 中的 Claude Hook 使用一致的状态、间距和操作样式，显示安装状态与命令数量，移除常驻说明；安装、修复、移除仍保留确认。",
+            ],
+            "问题修复": [
+                "修复 Grok active_sessions.json 与 Claude 共享登记文件所在目录只读导致的原子替换失败；未命中索引时不再触发无效写入。",
+                "自动 Claude 记录不再清除待处理工具或被当成新的用户输入；混合请求保留原始换行、附件、代码示例和空格。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，不增加 RPC，也不改写原生 Provider 会话文件。安装器读取 Provider 环境变量及 Codex home 配置；缺少 Provider 根目录不会阻止服务启动。",
+                "Grok 和 Claude 配置／凭据继续受只读保护，服务保留现有 systemd 隔离。没有匹配记录的共享索引保持原样。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 `darwin-aarch64` 的 `latest.json`。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 `.sig` 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装不会自动启用 Claude hooks。保留现有配置、凭据与 Provider 会话。",
+                "使用专用合成会话验证三平台删除；打开 Claude 会话检查真实输入、折叠的系统活动和搜索分页，再到 Probe 检查 Hook 样式。真实会话删除与日常视觉体验待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.8":
         sections = {
