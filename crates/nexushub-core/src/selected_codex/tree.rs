@@ -4,6 +4,8 @@ use super::*;
 use crate::codex::rollout_file::{self, RolloutName, MAX_BYTES};
 use std::collections::BTreeMap;
 
+mod sidecars;
+
 const MAX_FILES: usize = 20_000;
 
 #[cfg(test)]
@@ -18,6 +20,7 @@ pub struct TreePreview {
     pub warnings: Vec<String>,
     rollouts: BTreeSet<String>,
     files: BTreeMap<PathBuf, String>,
+    sidecars: sidecars::Inventory,
     legacy: bool,
 }
 
@@ -173,30 +176,49 @@ fn add_file(files: &mut BTreeMap<PathBuf, String>, path: PathBuf, owner: &str) -
 }
 
 /// Native writers take the coordination lock before opening their per-thread
-/// lock. Probe under that same coordination lock; never remove lock files.
-fn check_writers(paths: &CodexPaths, ids: &[String], files: &[PathBuf]) -> Result<bool> {
+/// lock. Retain both kinds of handles while cleaning up idle per-thread locks.
+fn lock_writers(paths: &CodexPaths, ids: &[String]) -> Result<Option<Vec<fs::File>>> {
     let directory = paths.home.join("thread-writer-locks");
     if directory.try_exists()? {
         ensure_safe_path(&paths.home, &directory)?;
         let coordination = directory.join(".coordination.lock");
         ensure_safe_path(&paths.home, &coordination)?;
-        let guard = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(coordination)?;
+        let open_lock = |path: &Path| -> Result<fs::File> {
+            ensure_safe_path(&paths.home, path)?;
+            let mut options = fs::OpenOptions::new();
+            options.read(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            }
+            let file = options.open(path)?;
+            ensure!(file.metadata()?.is_file(), "原生 writer 锁类型无法核验");
+            Ok(file)
+        };
+        let guard = open_lock(&coordination)?;
         guard
             .try_lock()
             .map_err(|_| anyhow::anyhow!("原生线程归属正在变化，请稍后重新预览"))?;
+        let mut guards = vec![guard];
         for id in ids {
             let path = directory.join(format!("{id}.lock"));
             if !path.try_exists()? {
                 continue;
             }
             ensure_safe_path(&paths.home, &path)?;
-            let lock = fs::OpenOptions::new().read(true).write(true).open(path)?;
+            let lock = open_lock(&path)?;
             lock.try_lock()
                 .map_err(|_| anyhow::anyhow!("线程树仍有原生活跃 owner 或写入者，请关闭后重试"))?;
+            guards.push(lock);
         }
+        return Ok(Some(guards));
+    }
+    Ok(None)
+}
+
+fn check_writers(paths: &CodexPaths, ids: &[String], files: &[PathBuf]) -> Result<bool> {
+    if lock_writers(paths, ids)?.is_some() {
         return Ok(true);
     }
     // Old stores lack native writer locks. Do not infer inactivity from mtime.
@@ -576,11 +598,17 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
         });
     warnings.sort();
     warnings.dedup();
+    let sidecars = sidecars::scan(paths, &ids)?;
+    bytes += sidecars.bind(&mut digest)?;
+    let mut selected_paths: Vec<_> = files.keys().cloned().collect();
+    selected_paths.extend(sidecars.paths().cloned());
+    selected_paths.sort();
+    selected_paths.dedup();
     Ok(TreePreview {
         selected: SelectedCodexPreview {
             id: id.into(),
             title,
-            paths: files.keys().cloned().collect(),
+            paths: selected_paths,
             bytes,
             fingerprint: hex::encode(digest.finalize()),
         },
@@ -588,6 +616,7 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
         warnings,
         rollouts,
         files,
+        sidecars,
         legacy,
     })
 }
@@ -659,7 +688,7 @@ pub fn execute(
         preview.selected.fingerprint == fingerprint,
         "线程树、历史或引用已变化，请重新预览"
     );
-    let operation: Result<()> = native_delete(paths, &preview, include_descendants);
+    let operation = native_delete(paths, &preview, include_descendants);
     let mut outcome = match verify(paths, &preview) {
         Ok(result) => result,
         Err(_) => DeleteOutcome {
@@ -668,16 +697,16 @@ pub fn execute(
             ..Default::default()
         },
     };
-    if outcome.storage_failure {
-        return Ok(outcome);
-    }
-    if operation.is_err() {
+    let cleanup =
+        matches!(operation, Ok(true)) && !outcome.storage_failure && outcome.residuals.is_empty();
+    if operation.is_err() && !outcome.storage_failure {
         outcome.error =
             Some("原生删除未确认完整完成；已复检可核验的数据，请检查残留后重新预览".into());
     }
-    if !outcome.residuals.is_empty() {
+    sidecars::finish(paths, &preview, cleanup, &mut outcome);
+    if !outcome.residuals.is_empty() && outcome.error.is_none() {
         outcome.error =
-            Some("删除未完成，仍有文件或原生记录残留；请在原生应用中检查并重新预览".into());
+            Some("删除未完成，仍有历史、原生记录或旁路内容残留；请检查残留后重新预览".into());
     }
     Ok(outcome)
 }
@@ -686,14 +715,14 @@ fn native_delete(
     paths: &CodexPaths,
     preview: &TreePreview,
     include_descendants: bool,
-) -> Result<()> {
+) -> Result<bool> {
     #[cfg(test)]
     if let Some(result) = TEST_DELETE.with(|slot| {
         slot.borrow_mut()
             .as_mut()
             .map(|delete| delete(paths, preview))
     }) {
-        return result;
+        return result.map(|()| true);
     }
     #[cfg(unix)]
     {
@@ -711,16 +740,23 @@ fn native_delete(
             );
             return runtime
                 .block_on(helper.delete_thread(&preview.selected.id))
+                .map(|()| true)
                 .map_err(Into::into);
         }
     }
+    offline_delete(paths, preview)
+}
+
+// Called only when no official delete request could be submitted. A failed or
+// timed-out submitted request returns above and can never enter this fallback.
+fn offline_delete(paths: &CodexPaths, preview: &TreePreview) -> Result<bool> {
     ensure!(preview.legacy, "官方删除接口不可用，当前存储不允许离线回退");
     // Keep the previous transaction/quarantine implementation only for fully
     // verified legacy terminal singletons. Release our in-process lock before
     // invoking it would create a race, so use its already-locked inner path.
     let old = snapshot(paths, &open(paths, false)?, &preview.selected.id, None)?;
     super::execute_with_expected_archive_locked(paths, &preview.selected.id, &old.fingerprint, None)
-        .map(|_| ())
+        .map(|_| false)
 }
 
 #[cfg(test)]
