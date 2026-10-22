@@ -2,7 +2,7 @@
 use super::*;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Stamp {
     directory: bool,
     bytes: u64,
@@ -104,7 +104,16 @@ impl Inventory {
     }
 
     pub(super) fn bind(&self, digest: &mut Sha256) -> Result<u64> {
-        digest.update(serde_json::to_vec(&self.entries)?);
+        for (path, stamp) in &self.entries {
+            digest.update(serde_json::to_vec(&(
+                path,
+                stamp.directory,
+                stamp.bytes,
+                stamp.modified,
+            ))?);
+            #[cfg(unix)]
+            digest.update(serde_json::to_vec(&stamp.identity)?);
+        }
         Ok(self.entries.values().map(|stamp| stamp.bytes).sum())
     }
 
