@@ -1575,6 +1575,26 @@ fn list_threads_hides_db_rows_with_missing_rollout_path() {
 }
 
 #[test]
+fn list_threads_keeps_rows_after_native_compression() {
+    let root = unique_temp_dir("compressed-rollout-path");
+    let rollout = root
+        .join("sessions/rollout-2026-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl");
+    fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    fs::write(
+        crate::codex::rollout_file::compressed_path(&rollout),
+        zstd::stream::encode_all(b"{\"type\":\"session_meta\"}\n".as_slice(), 0).unwrap(),
+    )
+    .unwrap();
+    write_thread_db(&root, "compressed-thread", &rollout, 1, 0);
+    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    assert!(rows.iter().any(|thread| thread.id == "compressed-thread"));
+    assert!(thread_detail(&CodexPaths::new(&root), "compressed-thread")
+        .unwrap()
+        .is_some());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn list_threads_does_not_read_rollout_outside_codex_home() {
     let root = unique_temp_dir("external-rollout-path");
     let external = unique_temp_dir("external-rollout-content");

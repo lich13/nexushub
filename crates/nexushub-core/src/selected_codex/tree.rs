@@ -1,10 +1,10 @@
 //! Explicit subtree deletion. Archive and hidden-cleanup retain their separate
 //! terminal-state rules. Native storage is read here, never migrated.
 use super::*;
-use std::collections::{BTreeMap, HashMap};
+use crate::codex::rollout_file::{self, RolloutName, MAX_BYTES};
+use std::collections::BTreeMap;
 
 const MAX_FILES: usize = 20_000;
-const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 #[cfg(test)]
 type NativeDelete = Box<dyn FnMut(&CodexPaths, &TreePreview) -> Result<()>>;
@@ -32,41 +32,16 @@ pub struct DeleteOutcome {
 #[derive(Debug)]
 struct Rollout {
     path: PathBuf,
-    thread: String,
+    files: Vec<PathBuf>,
+    named_thread: String,
+    thread: Option<String>,
     id: String,
     base: Option<String>,
-}
-
-fn rollout_name(path: &Path) -> Option<(String, String)> {
-    let name = path.file_name()?.to_str()?;
-    let plain = name
-        .strip_suffix(".zst")
-        .unwrap_or(name)
-        .strip_suffix(".jsonl")?;
-    let plain = plain.strip_prefix("rollout-")?;
-    let (thread_part, rollout) = plain
-        .rsplit_once('_')
-        .map_or((plain, None), |(left, right)| (left, Some(right)));
-    let thread = thread_part.get(thread_part.len().checked_sub(36)?..)?;
-    uuid::Uuid::parse_str(thread).ok()?;
-    let rollout = rollout.unwrap_or(thread);
-    uuid::Uuid::parse_str(rollout).ok()?;
-    Some((thread.into(), rollout.into()))
-}
-
-fn header(path: &Path) -> Result<Value> {
-    let mut line = String::new();
-    BufReader::new(fs::File::open(path)?)
-        .take(1024 * 1024)
-        .read_line(&mut line)?;
-    let value: Value = serde_json::from_str(&line).context("原生历史文件头无法核验")?;
-    ensure!(value["type"] == "session_meta", "未知原生历史格式");
-    Ok(value)
+    metadata_valid: bool,
 }
 
 fn scan_rollouts(paths: &CodexPaths) -> Result<Vec<Rollout>> {
-    let mut result = Vec::new();
-    let mut seen = HashMap::new();
+    let mut candidates: BTreeMap<PathBuf, (RolloutName, Vec<PathBuf>)> = BTreeMap::new();
     let mut count = 0;
     for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
         if !root.try_exists()? {
@@ -90,44 +65,52 @@ fn scan_rollouts(paths: &CodexPaths) -> Result<Vec<Rollout>> {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let Some((named_thread, id)) = rollout_name(entry.path()) else {
+            let Some(name) = RolloutName::parse(entry.path()) else {
                 continue;
             };
-            ensure!(
-                entry.path().extension().is_none_or(|e| e != "zst"),
-                "发现压缩历史，当前版本无法完整核验引用，请在原生应用中处理"
-            );
-            let value = header(entry.path())?;
-            let thread = value
-                .pointer("/payload/id")
-                .and_then(Value::as_str)
-                .context("原生历史缺少身份")?;
-            ensure!(thread == named_thread, "原生历史文件名与线程身份不一致");
-            ensure!(
-                seen.insert(id.clone(), entry.path().to_path_buf())
-                    .is_none(),
-                "原生 rollout 身份重复，引用无法确认"
-            );
-            let base = value
-                .pointer("/payload/history_base/thread_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            if !value["payload"]["history_base"].is_null() {
-                ensure!(base.is_some(), "未知历史分支引用格式");
-            }
-            result.push(Rollout {
-                path: entry.path().into(),
-                thread: thread.into(),
-                id,
-                base,
-            });
+            candidates
+                .entry(rollout_file::plain_path(entry.path()))
+                .or_insert_with(|| (name, Vec::new()))
+                .1
+                .push(entry.path().into());
         }
     }
-    result.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(result)
+    Ok(candidates
+        .into_iter()
+        .map(|(path, (name, mut files))| {
+            files.sort();
+            // Native reference indexing prefers plaintext when both exist.
+            // Every physical target is still independently validated below.
+            let value = rollout_file::header(&files[0]).ok();
+            let thread = value
+                .as_ref()
+                .and_then(|v| v["payload"]["id"].as_str())
+                .map(str::to_owned);
+            let base_value = value.as_ref().map(|v| &v["payload"]["history_base"]);
+            let base = base_value
+                .and_then(|v| v["thread_id"].as_str())
+                .map(str::to_owned);
+            let metadata_valid = thread.as_ref() == Some(&name.thread_id)
+                && base_value.is_some_and(|v| {
+                    v.is_null()
+                        || base
+                            .as_ref()
+                            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                });
+            Rollout {
+                path,
+                files,
+                named_thread: name.thread_id,
+                thread,
+                id: name.rollout_id,
+                base,
+                metadata_valid,
+            }
+        })
+        .collect())
 }
 
-fn file_digest(paths: &CodexPaths, path: &Path, expected: &str) -> Result<(String, u64)> {
+fn file_digest(paths: &CodexPaths, path: &Path, expected: &str) -> Result<(String, u64, bool)> {
     ensure_safe_path(&paths.home, path)?;
     let before = fs::symlink_metadata(path)?;
     ensure!(
@@ -139,34 +122,25 @@ fn file_digest(paths: &CodexPaths, path: &Path, expected: &str) -> Result<(Strin
         use std::os::unix::fs::MetadataExt;
         ensure!(before.nlink() == 1, "线程文件存在硬链接");
     }
-    let mut reader = BufReader::new(fs::File::open(path)?);
+    let waiting = crate::codex::rollout_waiting_for_reply(path, expected)?;
+    let mut reader = rollout_file::open(path)?.take(MAX_BYTES + 1);
     let mut digest = Sha256::new();
-    let mut line = String::new();
-    let mut first = true;
+    let mut buffer = [0; 64 * 1024];
+    let mut total = 0;
     loop {
-        line.clear();
-        let read = reader.by_ref().take(8 * 1024 * 1024).read_line(&mut line)?;
+        let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        ensure!(
-            line.ends_with('\n'),
-            "线程存在半行或超大记录，请关闭原生写入后重试"
-        );
-        let row: Value = serde_json::from_str(&line).context("线程记录损坏")?;
-        if first {
-            ensure!(
-                row["type"] == "session_meta" && row["payload"]["id"] == expected,
-                "线程文件身份不匹配"
-            );
-            first = false;
-        }
-        digest.update(line.as_bytes());
+        total += read as u64;
+        ensure!(total <= MAX_BYTES, "线程文件超出读取上限");
+        digest.update(&buffer[..read]);
     }
-    ensure!(!first, "线程缺少身份记录");
     let after = fs::symlink_metadata(path)?;
     ensure!(
-        before.len() == after.len() && before.modified()? == after.modified()?,
+        total == before.len()
+            && before.len() == after.len()
+            && before.modified()? == after.modified()?,
         "线程在核验期间发生变化"
     );
     #[cfg(unix)]
@@ -186,7 +160,16 @@ fn file_digest(paths: &CodexPaths, path: &Path, expected: &str) -> Result<(Strin
         digest.update(before.ctime().to_le_bytes());
         digest.update(before.ctime_nsec().to_le_bytes());
     }
-    Ok((hex::encode(digest.finalize()), before.len()))
+    Ok((hex::encode(digest.finalize()), before.len(), waiting))
+}
+
+fn add_file(files: &mut BTreeMap<PathBuf, String>, path: PathBuf, owner: &str) -> Result<()> {
+    ensure!(
+        files.get(&path).is_none_or(|existing| existing == owner),
+        "线程文件归属冲突"
+    );
+    files.insert(path, owner.into());
+    Ok(())
 }
 
 /// Native writers take the coordination lock before opening their per-thread
@@ -358,40 +341,12 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
         crate::codex::codex_task_identity(paths, id)? == crate::codex::CodexTaskIdentity::Main,
         "主线程身份无法核验"
     );
-    let scanned = scan_rollouts(paths)?;
     let mut rollouts: BTreeSet<_> = ids.iter().cloned().collect();
     let mut files = BTreeMap::new();
-    for file in &scanned {
-        if ids.contains(&file.thread) {
-            rollouts.insert(file.id.clone());
-            files.insert(file.path.clone(), file.thread.clone());
-        }
-    }
     let mut digest = Sha256::new();
     digest.update(paths.home.as_os_str().as_encoded_bytes());
     digest.update([u8::from(include_descendants)]);
     digest.update(serde_json::to_vec(&ids)?);
-    for file in &scanned {
-        if !ids.contains(&file.thread) {
-            ensure!(
-                !file
-                    .base
-                    .as_ref()
-                    .is_some_and(|base| rollouts.contains(base)),
-                "其他线程仍引用目标历史分支，请先在原生应用中处理引用"
-            );
-        }
-        // Unrelated trees may change (including earlier batch deletions).
-        // Incoming references are rechecked above, target lineage is bound here.
-        if ids.contains(&file.thread) {
-            digest.update(serde_json::to_vec(&(
-                &file.path,
-                &file.thread,
-                &file.id,
-                &file.base,
-            ))?);
-        }
-    }
     let index = read_index(paths)?;
     for line in index.lines().filter(|l| !l.trim().is_empty()) {
         let row: Value = serde_json::from_str(line)?;
@@ -404,7 +359,7 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
                 .filter(|p| !p.is_empty())
             {
                 let owner = row["id"].as_str().context("会话索引身份缺失")?;
-                files.insert(PathBuf::from(path), owner.into());
+                add_file(&mut files, PathBuf::from(path), owner)?;
             }
         }
     }
@@ -434,9 +389,77 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
             );
         }
         if let Some(path) = row["rollout_path"].as_str().filter(|p| !p.is_empty()) {
-            files.insert(PathBuf::from(path), member.clone());
+            add_file(&mut files, PathBuf::from(path), member)?;
         }
     }
+    // Establish candidates from all identity sources before interpreting any
+    // metadata failure. A broken target header must never become a skipped file.
+    let metadata_paths: BTreeSet<_> = files.keys().map(|p| rollout_file::plain_path(p)).collect();
+    let scanned = scan_rollouts(paths)?;
+    let mut rollout_counts = BTreeMap::new();
+    for file in &scanned {
+        *rollout_counts.entry(&file.id).or_insert(0) += 1;
+    }
+    let is_target = |file: &Rollout| {
+        ids.contains(&file.named_thread)
+            || file
+                .thread
+                .as_ref()
+                .is_some_and(|thread| ids.contains(thread))
+            || metadata_paths.contains(&file.path)
+    };
+    for file in scanned.iter().filter(|file| is_target(file)) {
+        ensure!(file.metadata_valid, "目标历史文件头损坏或身份冲突");
+        ensure!(
+            ids.contains(&file.named_thread),
+            "目标文件与线程元数据归属冲突"
+        );
+        ensure!(
+            rollout_counts[&file.id] == 1,
+            "目标 rollout 身份重复，引用无法确认"
+        );
+        rollouts.insert(file.id.clone());
+        for path in &file.files {
+            add_file(&mut files, path.clone(), &file.named_thread)?;
+        }
+        digest.update(serde_json::to_vec(&(
+            &file.path,
+            &file.named_thread,
+            &file.id,
+            &file.base,
+        ))?);
+    }
+    let skipped = scanned
+        .iter()
+        .filter(|file| !is_target(file) && !file.metadata_valid)
+        .count();
+    for file in scanned
+        .iter()
+        .filter(|file| !is_target(file) && file.metadata_valid)
+    {
+        ensure!(
+            !file
+                .base
+                .as_ref()
+                .is_some_and(|base| rollouts.contains(base)),
+            "其他线程仍引用目标历史分支，请先在原生应用中处理引用"
+        );
+    }
+    // Database/index paths may precede a native compression conversion. Include
+    // both representations, including dangling links, in the safety checks.
+    for (path, owner) in files.clone() {
+        for sibling in [
+            rollout_file::plain_path(&path),
+            rollout_file::compressed_path(&path),
+        ] {
+            match fs::symlink_metadata(&sibling) {
+                Ok(_) => add_file(&mut files, sibling, &owner)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    let logical_paths: BTreeSet<_> = files.keys().map(|p| rollout_file::plain_path(p)).collect();
     let mut statement =
         conn.prepare("SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL")?;
     for row in statement.query_map([], |row| {
@@ -444,7 +467,8 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
     })? {
         let (other, path) = row?;
         ensure!(
-            ids.contains(&other) || !files.contains_key(Path::new(&path)),
+            ids.contains(&other)
+                || !logical_paths.contains(&rollout_file::plain_path(Path::new(&path))),
             "文件仍被其他线程元数据引用"
         );
     }
@@ -459,22 +483,23 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
                 row["id"]
                     .as_str()
                     .is_some_and(|id| ids.iter().any(|member| member == id))
-                    || !files.contains_key(Path::new(path)),
+                    || !logical_paths.contains(&rollout_file::plain_path(Path::new(path))),
                 "文件仍被其他会话索引引用"
             );
         }
     }
     let mut bytes = 0;
     let mut warnings = Vec::new();
+    if skipped > 0 {
+        warnings.push(format!(
+            "已跳过 {skipped} 份无法读取或核验的无关历史元数据；仅允许官方接口删除"
+        ));
+    }
     for (path, owner) in &files {
         ensure!(
             path.starts_with(paths.sessions_dir())
                 || path.starts_with(paths.home.join("archived_sessions")),
             "线程路径超出原生历史目录"
-        );
-        ensure!(
-            path.extension().is_none_or(|e| e != "zst"),
-            "目标包含压缩历史，本轮不支持删除"
         );
         // Metadata-only threads may legitimately have no rollout. Missing
         // files do not make traversal components or dangling links safe.
@@ -498,10 +523,15 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
             digest.update(serde_json::to_vec(&(path, "missing"))?);
             continue;
         }
-        let (hash, size) = file_digest(paths, path, owner)?;
-        digest.update(serde_json::to_vec(&(path, hash))?);
+        let name = RolloutName::parse(path).context("目标历史文件名无法核验")?;
+        ensure!(name.thread_id == *owner, "目标历史文件名与线程身份冲突");
+        let (hash, size, waiting) = file_digest(paths, path, owner)?;
+        digest.update(serde_json::to_vec(&(path, owner, &name.rollout_id, hash))?);
         bytes += size;
-        if crate::codex::rollout_waiting_for_reply(path)? {
+        if waiting
+            && (!rollout_file::is_compressed(path)
+                || !rollout_file::plain_path(path).try_exists()?)
+        {
             warnings.push("将丢弃待回复的问题".into());
         }
     }
@@ -531,9 +561,13 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
         )?)?);
     }
     let legacy = !modern
+        && skipped == 0
+        && !files.keys().any(|p| rollout_file::is_compressed(p))
         && history.is_none()
         && ids.len() == 1
-        && scanned.iter().all(|r| r.base.is_none() && r.id == r.thread)
+        && scanned
+            .iter()
+            .all(|r| r.base.is_none() && r.thread.as_ref() == Some(&r.id))
         && related.keys().all(|t| {
             matches!(
                 t.as_str(),
@@ -569,13 +603,25 @@ fn verify(paths: &CodexPaths, preview: &TreePreview) -> Result<DeleteOutcome> {
     let index = read_index(paths)?;
     let mut result = DeleteOutcome::default();
     for path in preview.files.keys() {
-        if path.try_exists()? {
-            result.residuals.push(path.display().to_string());
+        match fs::symlink_metadata(path) {
+            Ok(_) => result.residuals.push(path.display().to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
     }
     for file in scanned {
-        if preview.ids.contains(&file.thread) && !preview.files.contains_key(&file.path) {
-            result.residuals.push(file.path.display().to_string());
+        if preview.ids.contains(&file.named_thread)
+            || file
+                .thread
+                .as_ref()
+                .is_some_and(|thread| preview.ids.contains(thread))
+            || preview.rollouts.contains(&file.id)
+        {
+            for path in file.files {
+                if !preview.files.contains_key(&path) {
+                    result.residuals.push(path.display().to_string());
+                }
+            }
         }
     }
     for table in related.keys() {
