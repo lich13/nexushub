@@ -83,6 +83,23 @@ impl Fixture {
         }
         compressed
     }
+    fn sidecars(&self, id: &str) -> Vec<PathBuf> {
+        let lock = self
+            .paths
+            .home
+            .join(format!("thread-writer-locks/{id}.lock"));
+        let snapshot = self.paths.home.join(format!("shell_snapshots/{id}.sh"));
+        let visualization = self
+            .paths
+            .home
+            .join(format!("visualizations/2026/01/01/{id}"));
+        fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        fs::create_dir_all(visualization.join("assets")).unwrap();
+        fs::write(&lock, "").unwrap();
+        fs::write(&snapshot, "synthetic snapshot").unwrap();
+        fs::write(visualization.join("assets/page.html"), "synthetic visual").unwrap();
+        vec![lock, snapshot, visualization]
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -562,6 +579,320 @@ fn partial_native_failure_and_unknown_result_never_retry_or_fallback() {
         assert!(result.error.is_some());
         assert_eq!(calls.get(), 1);
         assert!(f.file(ROOT, None).exists());
+    }
+}
+
+#[test]
+fn sidecars_are_previewed_and_cleaned_for_the_whole_confirmed_tree() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    f.add(CHILD, Some(ROOT), true);
+    f.add(OTHER, None, true);
+    let selected: Vec<_> = f
+        .sidecars(ROOT)
+        .into_iter()
+        .chain(f.sidecars(CHILD))
+        .collect();
+    let retained = f.sidecars(OTHER);
+    let similar = f
+        .paths
+        .home
+        .join(format!("shell_snapshots/{ROOT}-other.sh"));
+    fs::write(&similar, "retained").unwrap();
+    let plan = preview(&f.paths, ROOT, true).unwrap();
+    assert!(selected
+        .iter()
+        .all(|path| plan.selected.paths.contains(path)));
+    assert!(retained
+        .iter()
+        .all(|path| !plan.selected.paths.contains(path)));
+    let bytes: u64 = plan
+        .selected
+        .paths
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.len())
+        .sum();
+    assert_eq!(plan.selected.bytes, bytes);
+    f.native(remove_native);
+    let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+    assert!(result.error.is_none(), "{result:?}");
+    assert!(result.residuals.is_empty());
+    assert_eq!(result.deleted_ids, [ROOT, CHILD]);
+    assert!(selected.iter().all(|path| !path.exists()));
+    assert!(retained.iter().all(|path| path.exists()));
+    assert!(similar.exists());
+    assert!(f
+        .paths
+        .home
+        .join("thread-writer-locks/.coordination.lock")
+        .exists());
+    assert!(f.paths.home.join("visualizations/2026/01/01").is_dir());
+}
+
+#[test]
+fn sidecar_changes_require_a_new_preview_before_any_official_request() {
+    for change in ["modify", "new"] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        let files = f.sidecars(ROOT);
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        let target = if change == "modify" {
+            files[1].clone()
+        } else {
+            files[1].with_extension("zsh")
+        };
+        fs::write(target, "changed snapshot").unwrap();
+        f.native(|_, _| panic!("must not submit an invalidated preview"));
+        assert!(execute(&f.paths, ROOT, true, &plan.selected.fingerprint).is_err());
+        assert!(f.file(ROOT, None).exists());
+    }
+}
+
+#[test]
+fn batch_sidecar_failure_is_not_succeeded_and_does_not_block_other_items() {
+    use crate::services::sessions::*;
+    let f = Fixture::new();
+    for id in [ROOT, OTHER] {
+        f.add(id, None, true);
+        f.sidecars(id);
+    }
+    let api = SessionUseCases {
+        platform: crate::platform::PlatformPaths::for_kind(crate::platform::PlatformKind::Macos),
+        codex: f.paths.clone(),
+        grok: crate::grok::GrokPaths {
+            home: f.paths.home.join("unused-grok"),
+        },
+        claude: crate::claude::ClaudePaths {
+            config: f.paths.home.join("unused-claude"),
+            projects: f.paths.home.join("unused-claude/projects"),
+        },
+    };
+    let plan = api
+        .bulk_preview(SessionBatchRequest {
+            provider: SessionProvider::Codex,
+            operation: SessionOperation::Delete,
+            session_keys: vec![ROOT.into(), OTHER.into()],
+            include_descendants: true,
+        })
+        .unwrap();
+    assert!(plan.items.iter().all(|item| item.allowed));
+    f.native(|paths, preview| {
+        remove_native(paths, preview)?;
+        if preview.selected.id == ROOT {
+            fs::write(
+                paths.home.join(format!("shell_snapshots/{ROOT}.sh")),
+                "changed after request",
+            )?;
+        }
+        Ok(())
+    });
+    let result = api
+        .bulk_execute(SessionBatchExecuteRequest {
+            provider: SessionProvider::Codex,
+            operation: SessionOperation::Delete,
+            confirmed: true,
+            include_descendants: true,
+            items: plan
+                .items
+                .into_iter()
+                .map(|item| SessionBatchSelection {
+                    session_key: item.session_key,
+                    fingerprint: item.fingerprint.unwrap(),
+                })
+                .collect(),
+        })
+        .unwrap();
+    assert_eq!(result.items[0].status, "failed");
+    assert_eq!(result.items[0].deleted_ids, [ROOT]);
+    assert!(result.items[0]
+        .residuals
+        .iter()
+        .any(|path| path.ends_with(&format!("{ROOT}.sh"))));
+    assert_eq!(result.items[1].status, "succeeded");
+    assert!(result.items[1].residuals.is_empty());
+}
+
+#[test]
+fn deep_visualizations_fail_closed_without_truncating_the_inventory() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let mut path = f.paths.home.join("visualizations");
+    for _ in 0..34 {
+        path = path.join("nested");
+    }
+    fs::create_dir_all(path.join(ROOT)).unwrap();
+    assert!(preview(&f.paths, ROOT, true)
+        .unwrap_err()
+        .to_string()
+        .contains("上限"));
+    assert!(f.file(ROOT, None).exists());
+}
+
+#[test]
+fn official_failure_or_primary_residuals_never_clean_sidecars() {
+    for failure in ["rejected", "partial", "residual", "unverifiable"] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        let sidecars = f.sidecars(ROOT);
+        f.native(move |paths, preview| {
+            match failure {
+                "rejected" => anyhow::bail!("synthetic official failure"),
+                "partial" => {
+                    remove_native(paths, preview)?;
+                    anyhow::bail!("synthetic unknown result")
+                }
+                "unverifiable" => {
+                    remove_native(paths, preview)?;
+                    fs::write(paths.state_db(), "unreadable native database")?;
+                }
+                _ => {}
+            }
+            Ok(())
+        });
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+        assert!(result.error.is_some(), "{failure}: {result:?}");
+        assert!(sidecars.iter().all(|path| path.exists()));
+        assert!(sidecars
+            .iter()
+            .all(|path| result.residuals.contains(&path.display().to_string())));
+        if failure == "rejected" || failure == "residual" {
+            assert!(f.file(ROOT, None).exists());
+        }
+    }
+}
+
+#[test]
+fn changed_and_new_sidecars_after_official_success_remain_failed_residuals() {
+    for change in ["modify", "new"] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        let files = f.sidecars(ROOT);
+        let target = if change == "modify" {
+            files[1].clone()
+        } else {
+            files[1].with_extension("zsh")
+        };
+        let changed = target.clone();
+        f.native(move |paths, preview| {
+            remove_native(paths, preview)?;
+            fs::write(&changed, "preserve post-request content")?;
+            Ok(())
+        });
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+        assert!(result.error.is_some());
+        assert_eq!(result.deleted_ids, [ROOT]);
+        assert!(result.residuals.contains(&target.display().to_string()));
+        assert_eq!(
+            fs::read_to_string(target).unwrap(),
+            "preserve post-request content"
+        );
+        assert!(!files[0].exists());
+        assert!(!files[2].exists());
+    }
+}
+
+#[test]
+fn writer_reappearing_after_official_success_protects_all_sidecars() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let files = f.sidecars(ROOT);
+    let lock_path = files[0].clone();
+    let held_lock = Rc::new(std::cell::RefCell::new(None));
+    let retained_lock = held_lock.clone();
+    f.native(move |paths, preview| {
+        remove_native(paths, preview)?;
+        let lock = fs::File::options()
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        lock.lock()?;
+        *retained_lock.borrow_mut() = Some(lock);
+        Ok(())
+    });
+    let plan = preview(&f.paths, ROOT, true).unwrap();
+    let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+    assert!(result.error.unwrap().contains("活跃写入者"));
+    assert_eq!(result.deleted_ids, [ROOT]);
+    assert!(files.iter().all(|path| path.exists()));
+    assert!(held_lock.borrow().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn sidecar_links_and_replaced_ancestors_cannot_delete_outside_content() {
+    use std::os::unix::fs::symlink;
+    for replace_after_request in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        let files = f.sidecars(ROOT);
+        let outside = f.paths.home.join("retained-workspace");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("precious.txt"), "retained").unwrap();
+        if !replace_after_request {
+            symlink(&outside, files[2].join("linked")).unwrap();
+            assert!(preview(&f.paths, ROOT, true).is_err());
+        } else {
+            let target = files[2].clone();
+            let outside_copy = outside.clone();
+            f.native(move |paths, preview| {
+                remove_native(paths, preview)?;
+                fs::rename(&target, target.with_extension("retained"))?;
+                symlink(&outside_copy, &target)?;
+                Ok(())
+            });
+            let plan = preview(&f.paths, ROOT, true).unwrap();
+            let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+            assert!(result.error.is_some());
+            assert!(result.residuals.contains(&files[2].display().to_string()));
+            assert!(fs::symlink_metadata(&files[2])
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
+        assert_eq!(
+            fs::read_to_string(outside.join("precious.txt")).unwrap(),
+            "retained"
+        );
+    }
+}
+
+#[test]
+fn helper_unavailable_retains_safe_plaintext_fallback_but_never_compressed_fallback() {
+    for compressed in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        fs::remove_file(f.paths.home.join("thread-writer-locks/.coordination.lock")).unwrap();
+        fs::remove_dir(f.paths.home.join("thread-writer-locks")).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(f.file(ROOT, None))
+            .unwrap();
+        use std::io::Write;
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn"}})
+        )
+        .unwrap();
+        drop(file);
+        if compressed {
+            f.compress(&f.file(ROOT, None), false);
+        }
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        assert_eq!(plan.legacy, !compressed);
+        let result = offline_delete(&f.paths, &plan);
+        if compressed {
+            assert!(result.is_err());
+            assert!(f.file(ROOT, None).with_extension("jsonl.zst").exists());
+        } else {
+            assert!(!result.unwrap());
+            assert!(!f.file(ROOT, None).exists());
+            assert!(verify(&f.paths, &plan).unwrap().residuals.is_empty());
+        }
     }
 }
 
