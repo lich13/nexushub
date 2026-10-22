@@ -6,6 +6,20 @@ use nexushub_core::{
     services::use_cases::NexusHubUseCases,
 };
 
+#[tauri::command(rename = "claude.ownershipDiagnostics")]
+pub async fn claudeOwnershipDiagnostics(
+    session_key: String,
+) -> Result<nexushub_core::claude::ClaudeOwnershipDiagnostics, String> {
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+            .claude()
+            .ownership_diagnostics(&session_key)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 #[tauri::command(rename = "claude.list")]
 pub async fn listClaudeSessions(
     q: Option<String>,

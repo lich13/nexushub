@@ -111,6 +111,39 @@ pub struct ClaudeDeletePreview {
     pub fingerprint: String,
     pub file_count: usize,
     pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeOwnershipProcess {
+    pub pid: u32,
+    pub role: String,
+    pub registration_verified: bool,
+    pub mismatched_fields: Vec<String>,
+}
+
+/// Local diagnostics deliberately exclude transcript content, paths and argv.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeOwnershipDiagnostics {
+    pub ownership: String,
+    pub reason_codes: Vec<String>,
+    pub processes: Vec<ClaudeOwnershipProcess>,
+}
+
+pub fn claude_ownership_diagnostics(
+    paths: &ClaudePaths,
+    key: &str,
+) -> Result<ClaudeOwnershipDiagnostics> {
+    let (path, parsed) = resolve(paths, key)
+        .map_err(|_| anyhow::anyhow!("Claude 会话定位或内容无法核验 [evidence_conflict]"))?;
+    Ok(
+        mutations::deletion_assessment(&parsed, &path, &activity::Snapshot::capture(paths))
+            .map_err(|_| anyhow::anyhow!("Claude 专属内容无法核验 [evidence_conflict]"))?
+            .diagnostics(),
+    )
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -285,15 +318,14 @@ fn summary(
     parsed: &Parsed,
     snapshot: &activity::Snapshot,
 ) -> Result<ClaudeSessionSummary> {
-    let owner = snapshot.ownership(parsed, path);
+    let assessment = snapshot.assess(parsed, path);
+    let owner = assessment.ownership;
     let fatal_reason = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
     let warning_reason = (!parsed.warnings.is_empty()).then(|| parsed.warnings.join("；"));
     let reason = if let Some(reason) = fatal_reason.clone() {
         Some(reason)
-    } else if owner != activity::Ownership::Inactive {
-        Some("Claude 会话仍被原生进程占用或归属无法确认，请关闭后重试".into())
     } else {
-        None
+        assessment.block_reason()
     };
     let status = if !parsed.issues.is_empty() {
         "unknown"
@@ -316,11 +348,18 @@ fn summary(
             .err()
             .map(|e| e.to_string())
     });
-    let delete_reason = reason.or_else(|| {
-        mutations::check_delete_path(paths, path)
-            .err()
-            .map(|e| e.to_string())
-    });
+    let delete_reason = reason
+        .or_else(|| {
+            mutations::check_delete_path(paths, path)
+                .err()
+                .map(|e| e.to_string())
+        })
+        .or_else(
+            || match mutations::deletion_assessment(parsed, path, snapshot) {
+                Ok(assessment) => assessment.block_reason(),
+                Err(error) => Some(error.to_string()),
+            },
+        );
     Ok(ClaudeSessionSummary {
         storage_size: None,
         id: parsed.id.clone(),

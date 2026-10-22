@@ -65,6 +65,8 @@ export const contractDtoNames = [
   "GrokMutationResponse",
   "GrokRenameRequest",
   "GrokSessionRequest",
+  "ClaudeOwnershipDiagnostics",
+  "ClaudeOwnershipProcess",
   "ClaudeHooksRequest",
   "ClaudeHooksStatus",
   "ClaudeHooksAction",

@@ -40,6 +40,14 @@
       "rust": "crates/nexushub-core/src/claude.rs#ClaudeSessionSummary",
       "ts": "webui/src/types.ts#ClaudeSessionSummary"
     },
+    "ClaudeOwnershipDiagnostics": {
+      "rust": "crates/nexushub-core/src/claude.rs#ClaudeOwnershipDiagnostics",
+      "ts": "webui/src/types.ts#ClaudeOwnershipDiagnostics"
+    },
+    "ClaudeOwnershipProcess": {
+      "rust": "crates/nexushub-core/src/claude.rs#ClaudeOwnershipProcess",
+      "ts": "webui/src/types.ts#ClaudeOwnershipProcess"
+    },
     "ClaudeRenameRequest": {
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
@@ -889,6 +897,13 @@
             "name": "bytes",
             "serde": [],
             "type": "u64"
+          },
+          {
+            "name": "warnings",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < Vec < String > >"
           }
         ],
         "kind": "struct",
@@ -1023,6 +1038,57 @@
               "serde (default , skip_serializing_if = \"Option::is_none\")"
             ],
             "type": "Option < crate :: user_message :: UserMessage >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "ClaudeOwnershipDiagnostics": {
+        "fields": [
+          {
+            "name": "ownership",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "reason_codes",
+            "serde": [],
+            "type": "Vec < String >"
+          },
+          {
+            "name": "processes",
+            "serde": [],
+            "type": "Vec < ClaudeOwnershipProcess >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "ClaudeOwnershipProcess": {
+        "fields": [
+          {
+            "name": "pid",
+            "serde": [],
+            "type": "u32"
+          },
+          {
+            "name": "role",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "registration_verified",
+            "serde": [],
+            "type": "bool"
+          },
+          {
+            "name": "mismatched_fields",
+            "serde": [],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -10210,6 +10276,7 @@
     "src-tauri/src/commands/claude.rs": {
       "json": [],
       "signatures": [
+        "async fn claudeOwnershipDiagnostics (session_key : String ,) -> Result < nexushub_core :: claude :: ClaudeOwnershipDiagnostics , String >",
         "async fn listClaudeSessions (q : Option < String > , limit : Option < usize > ,) -> Result < Vec < nexushub_core :: claude :: ClaudeSessionSummary > , String >",
         "async fn getClaudeSession (session_key : String , limit : Option < usize > , before : Option < String > ,) -> Result < nexushub_core :: claude :: ClaudeSessionDetail , String >",
         "async fn renameClaudeSession (session_key : String , title : String ,) -> Result < nexushub_core :: claude :: ClaudeSessionSummary , String >",
@@ -10461,6 +10528,7 @@
         "callCommand(\"claude.detail\",{sessionKey,limit:160,before})",
         "callCommand(\"claude.rename\",{sessionKey,title})",
         "callCommand(\"claude.deletePreview\",{sessionKey})",
+        "invokeNative<ClaudeOwnershipDiagnostics>(\"claude.ownershipDiagnostics\",{sessionKey})",
         "callCommand(\"claude.deleteExecute\",{request})"
       ]
     },
@@ -10677,7 +10745,9 @@
         "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null};",
         "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
         "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
-        "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number};",
+        "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",
+        "ClaudeOwnershipProcess": "exporttypeClaudeOwnershipProcess={pid:number;role:string;registrationVerified:boolean;mismatchedFields:string[]};",
+        "ClaudeOwnershipDiagnostics": "exporttypeClaudeOwnershipDiagnostics={ownership:string;reasonCodes:string[];processes:ClaudeOwnershipProcess[]};",
         "ClaudeDeleteRequest": "exporttypeClaudeDeleteRequest={sessionKey:string;confirmed:boolean;fingerprint:string};",
         "ClaudeDeleteResult": "exporttypeClaudeDeleteResult={sessionKey:string;deleted:boolean;bytes:number};",
         "ThreadSummary": "exporttypeThreadSummary={storageSize?:SessionStorageSize|null;id:string;title:string;status:ThreadStatus;updated_at?:string|null;archived_at?:string|null;message_count:number;latest_message?:string|null;cwd?:string|null;model?:string|null;rollout_path?:string|null;active_turn_id?:string|null;active_job_id?:string|null;pending_elicitation?:PendingElicitation|null;last_event_kind?:string|null;thread_source?:string|null;threadSource?:string|null;source_kind?:string|null;sourceKind?:string|null;parent_thread_id?:string|null;parentThreadId?:string|null;source?:unknown;agent_nickname?:string|null;agentNickname?:string|null;agent_role?:string|null;agentRole?:string|null;agent_path?:string|null;agentPath?:string|null;has_user_event?:number|boolean|null;hasUserEvent?:number|boolean|null;first_user_message?:string|null;firstUserMessage?:string|null;preview?:string|null;};",

@@ -64,6 +64,8 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "GrokMutationResponse",
     "GrokRenameRequest",
     "GrokSessionRequest",
+    "ClaudeOwnershipDiagnostics",
+    "ClaudeOwnershipProcess",
     "ClaudeHooksRequest",
     "ClaudeHooksStatus",
     "ClaudeHooksAction",
