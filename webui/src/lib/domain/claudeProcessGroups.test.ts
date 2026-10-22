@@ -18,7 +18,7 @@ test("one native turn preserves process order, paired tool aliases, and a separa
     event("final", "assistant_message", { assistantPhase: "final", text: "Final answer" }),
     event("duration", "system", { role: "turn_duration" })
   ]);
-  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "item"]);
+  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "metadata"]);
   const group = process(result);
   expect(group.sourceIds).toEqual(["think", "explain", "call", "result"]);
   expect(group.entries.map(entry => entry.kind)).toEqual(["item", "item", "group"]);

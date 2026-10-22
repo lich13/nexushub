@@ -5,6 +5,9 @@ import { literalMarkdownRanges, visibleMarkdown } from "./visibleMarkdown";
 type Projection = { text: string; contextBlocks: UserContextBlock[] };
 type Range = { start: number; end: number };
 const tags: readonly [string, UserContextBlock["kind"]][] = [
+  ["local-command-stdout", "runtime"], ["local-command-stderr", "runtime"],
+  ["local-command-caveat", "runtime"], ["task-notification", "runtime"],
+  ["system-reminder", "runtime"], ["system_reminder", "runtime"],
   ["environment_context", "environment"], ["permissions instructions", "runtime"],
   ["app-context", "runtime"], ["collaboration_mode", "runtime"],
   ["skills_instructions", "runtime"], ["plugins_instructions", "runtime"],

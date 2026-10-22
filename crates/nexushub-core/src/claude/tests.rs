@@ -71,6 +71,135 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn native_commands_and_automatic_context_preserve_the_real_prompt_and_pending_tools() {
+    let f = Fixture::new();
+    let args = "Keep line one\n  keep indentation 🙂";
+    let mut request = f.row("request", None, "user", json!(format!("<command-name>/plan</command-name>\n <command-message>plan</command-message>\n <command-args>{args}</command-args>")));
+    request["promptId"] = json!("native-prompt");
+    let mut echo = f.row(
+        "echo",
+        Some("request"),
+        "user",
+        json!("<local-command-stdout>Enabled plan mode</local-command-stdout>"),
+    );
+    echo["promptId"] = json!("native-prompt");
+    let mut meta = f.row(
+        "meta",
+        Some("echo"),
+        "user",
+        json!("Automatic context fixture"),
+    );
+    meta["isMeta"] = json!(true);
+    let call = f.row(
+        "call",
+        Some("meta"),
+        "assistant",
+        json!([{"type":"tool_use","id":"read-fixture","name":"Read","input":{}}]),
+    );
+    let notice = f.row(
+        "notice",
+        Some("call"),
+        "user",
+        json!(
+            "<task-notification><summary>Background fixture complete</summary></task-notification>"
+        ),
+    );
+    let result = f.row(
+        "result",
+        Some("notice"),
+        "user",
+        json!([{"type":"tool_result","tool_use_id":"read-fixture","content":"Fixture output"}]),
+    );
+    let answer = f.row(
+        "answer",
+        Some("result"),
+        "assistant",
+        json!("Finished fixture"),
+    );
+    let mut compact = f.row(
+        "compact",
+        Some("answer"),
+        "user",
+        json!("Long summary fixture"),
+    );
+    compact["isCompactSummary"] = json!(true);
+    f.write(&[request, echo, meta, call, notice, result, answer, compact]);
+    let parsed = reader::read(&f.file).unwrap();
+    let users: Vec<_> = parsed
+        .events
+        .iter()
+        .filter(|e| e.kind == "user_message")
+        .collect();
+    assert_eq!(users.len(), 1);
+    assert_eq!(
+        users[0].user_message.as_ref().unwrap().text,
+        format!("/plan\n{args}")
+    );
+    assert!(parsed
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("request")));
+    assert!(parsed
+        .events
+        .iter()
+        .any(|e| e.kind == "tool_call" && e.status.as_deref() == Some("completed")));
+    assert!(parsed.events.iter().any(|e| e.kind == "compaction"));
+    assert_eq!(parsed.prompts.len(), 1);
+    assert!(!parsed.prompts["native-prompt"].ambiguous);
+    assert_eq!(parsed.native_events.len(), 1);
+    assert!(!parsed.turn_open);
+}
+
+#[test]
+fn automatic_only_sessions_do_not_open_turns_and_command_examples_stay_literal() {
+    let f = Fixture::new();
+    f.write(&[
+        f.row("context", None, "user", json!("<system-reminder>Fixture reminder</system-reminder>")),
+        json!({"type":"attachment","attachment":{"type":"instructions","files":[{"content":"Preserved instruction fixture"}]}}),
+    ]);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(!parsed.turn_open);
+    assert!(parsed.prompts.is_empty());
+    assert!(parsed
+        .events
+        .iter()
+        .all(|e| e.kind != "user_message" && e.turn_id.is_none()));
+    let instructions = parsed.events.last().unwrap().user_message.as_ref().unwrap();
+    assert_eq!(
+        instructions.context_blocks[0].kind,
+        crate::user_message::UserContextKind::Instructions
+    );
+    assert_eq!(
+        instructions.context_blocks[0].text,
+        "Preserved instruction fixture"
+    );
+    for body in [
+        "```xml\n<command-name>/plan</command-name><command-message>plan</command-message><command-args>Example</command-args>\n```",
+        "> <local-command-stdout>Example</local-command-stdout>",
+        "    <command-name>/plan</command-name><command-message>plan</command-message><command-args>Indented example</command-args>",
+        "<local-command-stdout>Incomplete",
+        "<command-name>/plan</command-name><command-args>Incomplete command</command-args>",
+    ] {
+        f.write(&[f.row("user", None, "user", json!(body))]);
+        let parsed = reader::read(&f.file).unwrap();
+        assert_eq!(parsed.events[0].kind, "user_message");
+        assert_eq!(parsed.events[0].user_message.as_ref().unwrap().text, body);
+    }
+    f.write(&[f.row(
+        "mixed",
+        None,
+        "user",
+        json!(
+            "<system-reminder>Automatic fixture</system-reminder>\nActual request\n  exact spaces"
+        ),
+    )]);
+    let parsed = reader::read(&f.file).unwrap();
+    let user = parsed.events[0].user_message.as_ref().unwrap();
+    assert_eq!(user.text, "\nActual request\n  exact spaces");
+    assert_eq!(user.context_blocks.len(), 1);
+}
+
+#[test]
 fn discovers_multiple_projects_and_duplicate_native_ids_without_subagents() {
     let f = Fixture::new();
     f.complete();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the managed systemd drop-in for custom native provider session roots."""
+"""Render native data roots and read-only provider settings for the service."""
 
 from __future__ import annotations
 
@@ -7,11 +7,18 @@ import os
 from pathlib import Path
 import shlex
 import sys
+import tomllib
 
 
 DEFAULT_ROOTS = {
-    Path("/root/.grok/sessions"),
-    Path("/root/.claude/projects"),
+    Path("/root/.codex"),
+    Path("/home/ubuntu/.codex"),
+    Path("/root/.grok"),
+    Path("/root/.claude"),
+}
+PROTECTED_FILES = {
+    "GROK_HOME": ("auth.json", "config.toml", "endpoint.env", "sandbox.toml", "trusted_folders.toml"),
+    "CLAUDE_CONFIG_DIR": (".credentials.json", ".claude.json", "settings.json", "settings.local.json"),
 }
 FORBIDDEN_ROOTS = {
     Path("/"),
@@ -22,6 +29,7 @@ FORBIDDEN_ROOTS = {
     Path("/var"),
 }
 SUPPORTED_KEYS = {
+    "CODEX_HOME",
     "GROK_HOME",
     "CLAUDE_CONFIG_DIR",
 }
@@ -62,41 +70,54 @@ def normalize_session_root(value: str, source: str) -> Path:
     current = Path("/")
     for part in path.parts[1:]:
         current /= part
-        if current.exists() and current.is_symlink():
+        if current.is_symlink():
             raise ValueError(f"{source} traverses a symlink: {current}")
     return path
 
 
-def custom_session_roots(values: dict[str, str]) -> list[Path]:
-    roots: list[Path] = []
-    if grok_home := values.get("GROK_HOME"):
-        roots.append(normalize_session_root(str(Path(grok_home) / "sessions"), "GROK_HOME"))
-    if claude_config := values.get("CLAUDE_CONFIG_DIR"):
-        roots.append(normalize_session_root(str(Path(claude_config) / "projects"), "CLAUDE_CONFIG_DIR"))
-    return sorted(set(roots) - DEFAULT_ROOTS, key=str)
+def configured_roots(values: dict[str, str], config: dict | None = None) -> dict[str, Path]:
+    roots = {
+        key: normalize_session_root(value, key)
+        for key, value in values.items()
+        if key in SUPPORTED_KEYS and not (key == "CODEX_HOME" and value == "auto")
+    }
+    configured = (config or {}).get("codex", {}).get("home", "")
+    if configured not in ("", "auto"):
+        roots["configured_codex"] = normalize_session_root(configured, "codex.home")
+    return roots
+
+
+def custom_session_roots(values: dict[str, str], config: dict | None = None) -> list[Path]:
+    return sorted(set(configured_roots(values, config).values()) - DEFAULT_ROOTS, key=str)
 
 
 def systemd_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return '"' + value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render(values: dict[str, str]) -> str:
-    roots = custom_session_roots(values)
+def render(values: dict[str, str], config: dict | None = None) -> str:
+    roots = custom_session_roots(values, config)
     if not roots:
         return ""
     lines = ["[Service]"]
     lines.extend(f"ReadWritePaths={systemd_quote('-' + str(root))}" for root in roots)
+    for key, root in configured_roots(values, config).items():
+        if root not in DEFAULT_ROOTS:
+            for name in PROTECTED_FILES.get(key, ()):
+                lines.append(f"ReadOnlyPaths={systemd_quote('-' + str(root / name))}")
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: provider-session-write-paths.py ENV_FILE OUTPUT", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("usage: provider-session-write-paths.py ENV_FILE CONFIG_FILE OUTPUT", file=sys.stderr)
         return 2
     env_path = Path(sys.argv[1])
-    output_path = Path(sys.argv[2])
+    config_path = Path(sys.argv[2])
+    output_path = Path(sys.argv[3])
     try:
-        output = render(parse_environment_file(env_path))
+        config = tomllib.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+        output = render(parse_environment_file(env_path), config)
     except (OSError, ValueError) as error:
         print(f"provider session write path error: {error}", file=sys.stderr)
         return 1

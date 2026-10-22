@@ -10,6 +10,12 @@ pub(super) struct Projection {
 // These are native context envelopes, not arbitrary XML. Actions, cancellations
 // and question replies have their own presentation and are deliberately absent.
 const TAGS: &[(&str, UserContextKind)] = &[
+    ("local-command-stdout", UserContextKind::Runtime),
+    ("local-command-stderr", UserContextKind::Runtime),
+    ("local-command-caveat", UserContextKind::Runtime),
+    ("task-notification", UserContextKind::Runtime),
+    ("system-reminder", UserContextKind::Runtime),
+    ("system_reminder", UserContextKind::Runtime),
     ("environment_context", UserContextKind::Environment),
     ("permissions instructions", UserContextKind::Runtime),
     ("app-context", UserContextKind::Runtime),

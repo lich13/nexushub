@@ -346,7 +346,7 @@ class InstallSafetyTests(unittest.TestCase):
         binary.write_text("#!/bin/sh\nprintf '%s\\n' 'nexushub-webd 1.2.3'\n", encoding="utf-8")
         binary.chmod(0o755)
         next_config = self.root / "next-config"
-        next_config.write_text("new config\n", encoding="utf-8")
+        next_config.write_text('[codex]\nhome = "auto"\n', encoding="utf-8")
         next_env = self.root / "next-env"
         next_env.write_text("SYNTHETIC_KEY=value\n", encoding="utf-8")
         call_log = self.root / "systemctl.log"

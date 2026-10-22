@@ -623,63 +623,86 @@ impl Parser {
             let parts = content.as_array().cloned().unwrap_or_else(|| {
                 vec![serde_json::json!({"type":"text","text":content.as_str().unwrap_or("")})]
             });
-            let visible_user = kind == "user"
+            let has_user_content = kind == "user"
                 && parts
                     .iter()
                     .any(|p| matches!(field(p, "type"), "text" | "image" | "document"));
-            if visible_user {
-                // Keep earlier terminal events so an incremental polling cursor
-                // can catch up after several turns between scans.
-                let prompt = field(record, "promptId");
-                if !prompt.is_empty() {
-                    let entry =
-                        self.parsed
-                            .prompts
-                            .entry(prompt.into())
-                            .or_insert_with(|| ClaudePrompt {
+            if has_user_content {
+                let (user, compact) = super::presentation::user_content(&key, record, &parts);
+                let automatic = record["isMeta"] == true
+                    || compact
+                    || (user.text.trim().is_empty() && user.attachments.is_empty());
+                if automatic {
+                    let body = user
+                        .context_blocks
+                        .iter()
+                        .map(|block| block.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let (role, title) = if body.trim_start().starts_with("<local-command-") {
+                        ("local_command", "命令输出")
+                    } else if body.trim_start().starts_with("<task-notification>") {
+                        ("task_notification", "任务通知")
+                    } else {
+                        ("native_context", "上下文")
+                    };
+                    let mut e = event(
+                        key.clone(),
+                        record,
+                        if compact { "compaction" } else { "system" },
+                        Some(if compact { "压缩摘要" } else { title }.into()),
+                        &self.turn,
+                    );
+                    e.role = Some(role.into());
+                    e.detail = Some(bounded(&body));
+                    e.user_message = Some(user);
+                    if !body.trim().is_empty() {
+                        self.parsed.events.push(Arc::new(e));
+                    }
+                } else {
+                    // Keep earlier terminal events so an incremental polling cursor
+                    // can catch up after several turns between scans.
+                    let prompt = field(record, "promptId");
+                    if !prompt.is_empty() {
+                        let entry = self.parsed.prompts.entry(prompt.into()).or_insert_with(|| {
+                            ClaudePrompt {
                                 turn_id: key.clone(),
                                 timestamp_ms: millis(field(record, "timestamp")).unwrap_or(0),
                                 ambiguous: false,
                                 cancelled: false,
-                            });
-                    entry.ambiguous |= entry.turn_id != key;
-                }
-                self.turn = Some(key.clone());
-                self.parsed.turn_open = true;
-                self.parsed.last_turn_at = millis(field(record, "timestamp"));
-                self.pending.clear();
-                self.questions.clear();
-                self.permission_calls.clear();
-                self.calls.clear();
-                self.last_assistant_text = None;
-                self.last_stop_reason.clear();
-                self.last_assistant_events.clear();
-                if uuid.is_empty() {
-                    issue(&mut self.parsed, "原生消息身份缺失，通知和改名已禁用");
-                }
-                let user_parts = Value::Array(
-                    parts
-                        .iter()
-                        .filter(|p| field(p, "type") != "tool_result")
-                        .cloned()
-                        .collect(),
-                );
-                let user = crate::user_message::parse_user_message(&key, &user_parts);
-                if self.first_user.is_none() {
-                    let title = crate::user_message::summary_text(&user.text);
-                    if !title.trim().is_empty() {
-                        self.first_user = Some(title.chars().take(120).collect::<String>());
+                            }
+                        });
+                        entry.ambiguous |= entry.turn_id != key;
                     }
+                    self.turn = Some(key.clone());
+                    self.parsed.turn_open = true;
+                    self.parsed.last_turn_at = millis(field(record, "timestamp"));
+                    self.pending.clear();
+                    self.questions.clear();
+                    self.permission_calls.clear();
+                    self.calls.clear();
+                    self.last_assistant_text = None;
+                    self.last_stop_reason.clear();
+                    self.last_assistant_events.clear();
+                    if uuid.is_empty() {
+                        issue(&mut self.parsed, "原生消息身份缺失，通知和改名已禁用");
+                    }
+                    if self.first_user.is_none() {
+                        let title = crate::user_message::summary_text(&user.text);
+                        if !title.trim().is_empty() {
+                            self.first_user = Some(title.chars().take(120).collect::<String>());
+                        }
+                    }
+                    let mut e = event(
+                        key.clone(),
+                        record,
+                        "user_message",
+                        Some(bounded(&user.text)),
+                        &self.turn,
+                    );
+                    e.user_message = Some(user);
+                    self.parsed.events.push(Arc::new(e));
                 }
-                let mut e = event(
-                    key.clone(),
-                    record,
-                    "user_message",
-                    Some(bounded(&user.text)),
-                    &self.turn,
-                );
-                e.user_message = Some(user);
-                self.parsed.events.push(Arc::new(e));
             }
             if kind == "user" {
                 if let Some(plan) = record
@@ -1042,6 +1065,7 @@ impl Parser {
                         | "cancelled"
                         | "canceled"
                         | "api_error"
+                        | "local_command"
                 );
                 let mut e = event(
                     key,
@@ -1223,6 +1247,49 @@ impl Parser {
                 &self.turn,
             );
             e.detail = Some(printable(record));
+            if kind == "attachment" {
+                let attachment = &record["attachment"];
+                e.role = Some("native_context".into());
+                e.text = Some(
+                    match field(attachment, "type") {
+                        "instructions" => "指令",
+                        "async_hook_response" => "Hook 输出",
+                        "queued_command" => "队列活动",
+                        "total_tokens_reminder" | "silent_turn_reminder" | "task_reminder" => {
+                            "系统提醒"
+                        }
+                        _ => "上下文",
+                    }
+                    .into(),
+                );
+                let instructions = field(attachment, "type") == "instructions";
+                let body = if instructions {
+                    attachment["files"]
+                        .as_array()
+                        .map(|files| {
+                            files
+                                .iter()
+                                .filter_map(|file| file["content"].as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n\n")
+                        })
+                        .unwrap_or_default()
+                } else {
+                    printable(attachment)
+                };
+                let mut user =
+                    crate::user_message::parse_user_message(&e.id, &Value::String(String::new()));
+                user.context_blocks
+                    .push(crate::user_message::UserContextBlock {
+                        kind: if instructions {
+                            crate::user_message::UserContextKind::Instructions
+                        } else {
+                            crate::user_message::UserContextKind::Runtime
+                        },
+                        text: bounded(&body),
+                    });
+                e.user_message = Some(user);
+            }
             self.parsed.events.push(Arc::new(e));
         }
     }

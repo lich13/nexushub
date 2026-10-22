@@ -64,7 +64,7 @@ Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验
 
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
 
-Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Compatibility warnings remain visible; only fatal record, identity, path, permission or uncertain ownership errors block the affected management action.
+Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Compatibility warnings remain available in a closed disclosure; fatal reading errors remain visible. Only fatal record, identity, path, permission or uncertain ownership errors block the affected management action.
 
 ## 线程菜单、清理与窗口
 
@@ -114,7 +114,7 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
-Probe 展示 Bark 设置、Provider／事件筛选及本机 Claude hooks 状态。安装、修复和移除均需明确确认并保留其他 hooks；远端说明继续轮询。App 安装不自动启用 hooks。退休通道不保留卡片或占位。
+Probe 展示 Bark 设置、Provider／事件筛选及本机 Claude hooks 状态。Claude Hook 卡片复用相邻卡片的状态行、间距与标准按钮，只展示安装状态、命令数量及操作，不显示常驻说明段落；远端以“仅限本机”状态显示。安装、修复和移除均需明确确认并保留其他 hooks。App 安装不自动启用 hooks。退休通道不保留卡片或占位。
 
 ## Bark 状态与测试反馈
 
@@ -136,3 +136,7 @@ Bark 地址保存和投递共用安全校验；无效配置在既有错误位置
 - 历史和大小均沿用机器隔离。Codex 子智能体面板独立滚动，分页不重置父线程位置或手动折叠状态。
 
 工作区切换按需加载内容，列表首击立即选中，双击仍进入原有改名流程。隐藏窗口暂停界面轮询；恢复后继续使用现有刷新时效。折叠正文仅在展开时挂载，复制、搜索定位和用户明确的折叠选择不能因此丢失。时间线滚动复用位置缓存，图片、工具或窗口布局变化后重新测量。
+
+## Claude 自动内容
+
+完整原生命令包装显示为斜杠命令和原始参数，真实请求保持换行、空格和附件。命令回显、任务通知、提醒和自动上下文不显示用户气泡、不产生用户指令标记，也不创建用户回合。相邻自动记录按原位置合并为默认关闭的“系统活动”；指令与环境归入“上下文”，压缩摘要默认关闭。首条输入前的设置与快照同样合并。搜索通过原生事件身份展开对应内容，分页与轮询复用已有展开选择；非阻断兼容提示置于“读取提示”折叠中。

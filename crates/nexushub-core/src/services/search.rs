@@ -335,6 +335,17 @@ fn validate_request(request: &SessionSearchRequest) -> Result<()> {
 
 fn json_corpus<T: Serialize>(value: &T) -> Result<String> {
     let value = serde_json::to_value(value)?;
+    if matches!(
+        value.get("kind").and_then(Value::as_str),
+        Some("compaction" | "branch_summary")
+    ) {
+        let text = value
+            .get("detail")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("text").and_then(Value::as_str))
+            .unwrap_or_default();
+        return Ok(strip_memory_metadata(text));
+    }
     let mut strings = Vec::new();
     if let Some(user) = value
         .get("userMessage")
@@ -759,6 +770,18 @@ mod tests {
         ] {
             assert_eq!(strip_memory_metadata(&source), source);
         }
+    }
+
+    #[test]
+    fn folded_native_compaction_remains_searchable_without_indexing_runtime_context() {
+        let compact = json!({
+            "kind":"compaction", "text":"压缩摘要", "detail":"Summary fixture text",
+            "userMessage":{"id":"compact", "text":"", "attachments":[], "contextBlocks":[{"kind":"runtime","text":"Summary fixture text"}]}
+        });
+        assert_eq!(json_corpus(&compact).unwrap(), "Summary fixture text");
+        let mut automatic = compact;
+        automatic["kind"] = json!("system");
+        assert!(json_corpus(&automatic).unwrap().trim().is_empty());
     }
 
     #[test]
