@@ -358,6 +358,96 @@ fn warnings_allow_management_but_links_and_identity_conflicts_do_not() {
 }
 
 #[test]
+fn preferred_identity_and_version_allow_rename_delete_and_notification_scans() {
+    for camel in [Some("native-fixture"), Some(""), None] {
+        let f = Fixture::new();
+        let mut rows = vec![
+            f.row("u1", None, "user", json!("Start")),
+            f.row(
+                "a1",
+                Some("u1"),
+                "assistant",
+                json!([{"type":"text","text":"Finished"}]),
+            ),
+        ];
+        for row in &mut rows {
+            if let Some(id) = camel {
+                row["sessionId"] = json!(id);
+                row["version"] = json!(if id.is_empty() { "" } else { "2.1.284" });
+            } else {
+                row.as_object_mut().unwrap().remove("sessionId");
+                row.as_object_mut().unwrap().remove("version");
+            }
+            row["session_id"] = json!(if camel == Some("native-fixture") {
+                "different-fixture"
+            } else {
+                "native-fixture"
+            });
+            row["claude_code_version"] = json!("2.1.285");
+        }
+        f.write(&rows);
+        let parsed = reader::read(&f.file).unwrap();
+        assert!(parsed.issues.is_empty());
+        assert_eq!(parsed.id, "native-fixture");
+        assert_eq!(
+            parsed.version,
+            if camel == Some("native-fixture") {
+                "2.1.284"
+            } else {
+                "2.1.285"
+            }
+        );
+        assert_eq!(
+            parsed.warnings.len(),
+            if camel == Some("native-fixture") {
+                2
+            } else {
+                0
+            }
+        );
+        let scan = notification_snapshots(&f.paths).unwrap();
+        assert_eq!(scan.errors, 0);
+        assert_eq!(scan.streams[0].events.len(), 1);
+        let summary = claude_session_summary(&f.paths, &f.key()).unwrap();
+        assert!(summary.can_rename && summary.can_delete);
+        assert_eq!(
+            rename_claude_session(&f.paths, &f.key(), "Renamed")
+                .unwrap()
+                .title,
+            "Renamed"
+        );
+        let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
+        let result = execute_claude_delete(
+            &f.paths,
+            ClaudeDeleteRequest {
+                session_key: f.key(),
+                confirmed: true,
+                fingerprint: plan.fingerprint,
+            },
+        )
+        .unwrap();
+        assert!(result.deleted);
+        assert!(!f.file.exists());
+    }
+}
+
+#[test]
+fn cross_record_preferred_identities_still_block_management_and_notifications() {
+    let f = Fixture::new();
+    f.complete();
+    f.append(&json!({"type":"system","subtype":"init","sessionId":"other-fixture","session_id":"native-fixture"}));
+    assert!(reader::read(&f.file)
+        .unwrap()
+        .issues
+        .iter()
+        .any(|issue| issue.contains("会话身份冲突")));
+    assert!(rename_claude_session(&f.paths, &f.key(), "Blocked").is_err());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
+    assert!(f.file.exists());
+}
+
+#[test]
 fn embedded_images_load_lazily_and_invalid_ids_are_rejected() {
     let f = Fixture::new();
     let data="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8ioAAAAASUVORK5CYII=";
@@ -1092,6 +1182,51 @@ fn deletion_covers_verified_sidecars_without_following_continuations() {
 }
 
 #[test]
+fn dedicated_children_use_preferred_identity_and_keep_cross_record_protection() {
+    for conflict in [false, true] {
+        let f = Fixture::new();
+        f.complete();
+        let directory = owned_sidecars(&f);
+        let child = directory.join("subagents/agent-fixture.jsonl");
+        let mut rows = vec![
+            json!({"type":"fork-context-ref","parentSessionId":"native-fixture"}),
+            json!({"type":"user","sessionId":"child-fixture","session_id":"other-fixture"}),
+            json!({"type":"assistant","sessionId":"","session_id":"child-fixture"}),
+            json!({"type":"system","session_id":"child-fixture"}),
+        ];
+        if conflict {
+            rows.push(
+                json!({"type":"system","sessionId":"different-child","session_id":"child-fixture"}),
+            );
+        }
+        fs::write(
+            &child,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let preview = preview_claude_delete(&f.paths, &f.key());
+        if conflict {
+            assert!(preview.is_err());
+            assert!(child.exists());
+        } else {
+            let result = execute_claude_delete(
+                &f.paths,
+                ClaudeDeleteRequest {
+                    session_key: f.key(),
+                    confirmed: true,
+                    fingerprint: preview.unwrap().fingerprint,
+                },
+            )
+            .unwrap();
+            assert!(result.deleted);
+            assert!(!directory.exists());
+        }
+    }
+}
+
+#[test]
 fn sidecar_conflict_new_files_and_quarantine_mutations_are_preserved() {
     for failure in ["foreign-parent", "new-file", "quarantined"] {
         let f = Fixture::new();
@@ -1622,14 +1757,20 @@ fn terminal_evidence_respects_pending_tools_identity_and_record_integrity() {
                 .len(),
             1
         );
-        let mut conflict = json!({"type":"system","subtype":"init","sessionId":"native-fixture","session_id":"other-fixture"});
+        let mut conflict = json!({"type":"system","subtype":"init","sessionId":"other-fixture","session_id":"native-fixture"});
         f.append(&conflict);
         assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
         f.complete();
-        conflict["session_id"] = json!("native-fixture");
+        conflict["sessionId"] = json!("native-fixture");
+        conflict["version"] = json!("2.1.284");
         conflict["claude_code_version"] = json!("3.0.0");
         f.append(&conflict);
-        assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
+        assert_eq!(
+            notification_snapshots(&f.paths).unwrap().streams[0]
+                .events
+                .len(),
+            1
+        );
     }
     f.write(&[
         f.row("u1", None, "user", json!("Start")),

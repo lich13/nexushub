@@ -431,10 +431,10 @@ impl Parser {
                 continue;
             }
             if alias_conflict(record, &["sessionId", "session_id"]) {
-                issue(&mut parsed, "会话身份字段冲突，管理操作已禁用");
+                warning(&mut parsed, "会话包含不同的身份字段，已按原生会话身份读取");
             }
             if alias_conflict(record, &["version", "claude_code_version"]) {
-                issue(&mut parsed, "会话版本字段冲突，管理操作已禁用");
+                warning(&mut parsed, "会话包含不同的版本字段，已按原生记录版本读取");
             }
             let session = alias_field(record, &["sessionId", "session_id"]);
             if !session.is_empty() {
