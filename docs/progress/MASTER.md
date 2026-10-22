@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.5，基线为 `2b443fb / v1.3.4`。本轮覆盖线程多选与菜单、Codex 整树删除、Claude 管理及专属文件删除、Bark 摘要与本机 Claude hooks。保留既有 100MiB／300MiB 颜色门槛及性能优化，API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.6，基线为 `8cfff5 / v1.3.5`。本轮覆盖 Codex 压缩 rollout 删除、Claude 归属诊断与专属文件管理、Claude 单回合过程折叠。保留既有多选、菜单、通知、hooks、分页和性能行为，API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -11,15 +11,16 @@
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
 | 多选与菜单 | 三种 Provider 共用 ⌘／Shift／普通／键盘点击、锚点和 100 项上限；轮询不新增选择，切换范围清空。移除 Codex 列表重复复制答复，Claude 菜单按独立能力启用。 | `3e318f4`、`d63d6d5` |
-| Codex 删除 | 支持两类空线程、无活跃写入者的待回复线程及完整子树预览；显式 includeDescendants，原生 thread/delete helper 优先，提交后错误／超时不回退、不重试，完整复检后才返回成功。 | `d37793a`、`d63d6d5` |
-| Claude 管理 | 原生登记、PID／启动标识／主机进程域与打开文件核验归属；同 cwd 的其他会话不再被连带保护。兼容 warning 可管理，主文件和经父会话关联核实的专属目录共同隔离、复检。 | `3c4ba5f` |
+| Codex 删除 | 支持普通、归档及压缩 rollout 的完整子树预览；zstd 流式解码、目标与全局引用分离核验、明文／压缩兄弟合并识别，含压缩目标或跳过项时禁止不安全离线回退，提交后错误／超时不回退、不重试。 | `01c5695` |
+| Claude 管理 | 原生登记、PID／启动标识／主机进程域与打开文件核验归属；区分会话、daemon 和 PTY 宿主，提供本机只读归属诊断。主文件和经父会话关联核实的专属目录共同隔离、复检。 | `2aaa929` |
+| Claude 过程折叠 | 同一原生回合的思考、临时说明和工具活动按原顺序收进外层折叠，最终答复单独显示；搜索自动展开，分页、刷新、机器与会话切换保持稳定身份。 | `1cfa0a7` |
 | Bark 与 hooks | 新事件统一单条短摘要；本机 hooks 须明确安装，远端继续轮询。Claude prompt 身份核验后每回合每类认领一次，保留有效旧完成以补发，完成后不单独提醒空闲。Codex 保留逐问题身份和提醒。 | `01be4b4` |
 
 实现、安全边界、旧字段与旧队列兼容见[架构说明](../ARCHITECTURE.md)。压缩历史、未知存储、身份或关联无法完整核验时明确拒绝；官方删除可能部分完成，不承诺跨整树回滚。Claude 改名仍只追加原生 custom-title，不删除共享存储、工作目录或续接到的另一个主会话。
 
 ## 必要验证
 
-以下证据覆盖核心实现至 `01be4b4`，后续只复验受修改影响的检查，不把局部复验称作整套重复回归。
+以下证据覆盖 1.3.6 核心实现至 `1cfa0a7`，后续只复验受修改影响的检查，不把局部复验称作整套重复回归。
 
 | 范围 | 已通过证据 |
 |---|---|
@@ -35,9 +36,11 @@
 
 ## 正式交付
 
-1.3.5 同步现有 manifest 和两份 lock 中的自身版本；按新增 RustSec 公告定向更新 rustls-webpki 0.103.16、webpki-roots 1.0.10 和桌面 webpki-root-certs 1.0.10，保留原有依赖审计策略。发布说明继续使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。
+1.3.6 同步现有 manifest 和两份 lock 中的自身版本，发布说明继续使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。
 
-发布已完成：提交 [`51dfcd5`](https://github.com/lich13/nexushub/commit/51dfcd5225eef215b4dade342d4330d3ad42159f) 的 [三项主 CI](https://github.com/lich13/nexushub/actions/runs/39585391199) 全绿，`v1.3.5` 的 [Release CI](https://github.com/lich13/nexushub/actions/runs/39586479754) 全绿并发布 [八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.5)。已使用正式 Linux 资产升级远端 API，服务版本、健康、公开 healthz、未授权 API 和退役路径检查通过；已安装正式 macOS ARM64 App，版本为 1.3.5 且启动成功。部署和安装保留既有回退材料，未自动启用 Claude hooks。
+上一版交付记录：提交 [`51dfcd5`](https://github.com/lich13/nexushub/commit/51dfcd5225eef215b4dade342d4330d3ad42159f) 的 [三项主 CI](https://github.com/lich13/nexushub/actions/runs/39585391199) 全绿，`v1.3.5` 的 [Release CI](https://github.com/lich13/nexushub/actions/runs/39586479754) 全绿并发布 [八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.5)。已使用正式 Linux 资产升级远端 API，服务版本、健康、公开 healthz、未授权 API 和退役路径检查通过；已安装正式 macOS ARM64 App，版本为 1.3.5 且启动成功。部署和安装保留既有回退材料，未自动启用 Claude hooks。
+
+1.3.6 核心实现已由 [`01c5695`](https://github.com/lich13/nexushub/commit/01c5695)、[`2aaa929`](https://github.com/lich13/nexushub/commit/2aaa929) 和 [`1cfa0a7`](https://github.com/lich13/nexushub/commit/1cfa0a7) 完成并推送；版本收尾提交及三项主 CI、正式 Release、远端 API 升级和 macOS 安装待本轮收尾。
 
 ## 待用户验收
 

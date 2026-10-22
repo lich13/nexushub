@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.6": [
+        "Codex 支持压缩 rollout 的只读核验和官方整树删除，补齐明文与压缩历史引用复检",
+        "修复 Claude 会话归属与专属文件管理，并将同回合过程折叠、最终答复和搜索定位分开显示。",
+    ],
     "1.3.5": [
         "统一三种 Provider 的多选与菜单，修复 Codex 整树删除和 Claude 会话管理",
         "Bark 改为简洁单条摘要，新增需手动启用的本机 Claude hooks，保留 Codex 逐问题提醒。",
@@ -187,6 +191,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.6":
+        sections = {
+            "版本概览": ["本版完成 Codex 压缩历史安全删除、Claude 会话管理修复及 Claude 单回合过程折叠；API 协议保持 2，macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Codex 识别普通、归档、明文和 `.jsonl.zst` rollout；压缩内容使用有界流式 zstd 解码，明文与压缩兄弟文件合并为一个逻辑 rollout，列表不会因明文消失而隐藏仍存在的压缩历史。",
+                "Claude 详情在同一原生回合内将思考、明确的过程说明和工具活动按原顺序收进外层折叠，最终答复单独显示；内部工具调用与结果继续使用原有工具折叠。",
+                "搜索命中过程或工具时自动展开外层和必要内层；刷新、向前分页、重新挂载及机器切换按机器、会话和回合身份保留折叠状态，应用重启后恢复默认折叠。",
+            ],
+            "问题修复": [
+                "Codex 删除先确定目标候选，再分别完成目标文件和全局引用核验；覆盖回退 rollout 引用、明文与压缩共存、目标损坏或截断、指纹变化、数据库／索引／分页残留和不安全离线回退。",
+                "Claude 区分会话进程、daemon 和 PTY 宿主，子进程、预热进程、打开目标文件及已关联专属子代理继续参与占用判断；增加本机只读归属诊断和中文原因代码。",
+                "Claude 改名继续只追加一条原生 `custom-title`，增加尾部读回验证；删除预览覆盖已核验主 transcript、同 ID 专属目录、未知专属条目及空或纯元数据子代理文件，隔离后变化和残留会明确报告。",
+            ],
+            "兼容性与迁移": [
+                "压缩 rollout 只读，不解压落盘、不主动压缩、不修改原生存储；含压缩目标或全局引用扫描跳过项时禁止旧格式离线回退。官方请求提交后的错误或超时不自动重试。",
+                "`assistantPhase` 为可选显示字段。旧服务缺少字段时保守展示，缺少可靠终态证据的文字保持可见；通知终态、去重身份、用户指令时间线和内容清理规则保持原有语义。",
+                "诊断入口仅限本机，不进入 Linux RPC 或远端转发；过程折叠状态只保存在内存，不新增磁盘状态文件。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 `darwin-aarch64` 的 `latest.json`。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 `.sig` 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装不会自动启用 Claude hooks。保留现有配置、凭据、会话和回退材料。",
+                "用专门测试线程验收普通与压缩 Codex 整树删除；在 Claude 会话中验证改名、专属文件删除、过程折叠、最终答复、搜索展开和分页状态。",
+                "功能、视觉、原生选择器和真实会话删除仍待用户验收；本轮测试使用合成 fixture，不发送真实 Bark 通知。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.5":
         sections = {
