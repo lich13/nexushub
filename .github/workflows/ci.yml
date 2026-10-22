@@ -25,13 +25,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
-      - name: Get pnpm store path
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
+          path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
@@ -79,13 +75,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
-      - name: Get pnpm store path
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
+          path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
@@ -141,13 +133,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
-      - name: Get pnpm store path
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
+          path: ~/Library/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
