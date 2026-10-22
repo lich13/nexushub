@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { executeSessionBatch, previewSessionBatch, type SessionBatchPreview, type SessionBatchResult, type SessionOperation, type SessionProvider } from "../api/sessions";
 import { useConnection } from "./connection";
-import { getSystemCapabilities } from "../api/system";
 import { addSessionSelection, clickSessionSelection, emptySessionSelection, syncSessionSelection, type SessionClick } from "../domain/sessionSelection";
 
 export function useSessionSelection(provider: SessionProvider, filterKey: string, keys: string[], onSucceeded?: (keys: string[], operation: SessionOperation) => void) {
@@ -23,7 +22,6 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const sessionKeys = typeof input === "string" ? selection : input.keys;
       const generation = epoch.current.value;
       const includeDescendants = provider === "codex" && operation === "delete";
-      if (includeDescendants && !(await getSystemCapabilities()).capabilities.codex_delete_tree) throw new Error("当前服务不支持整树删除，请先升级服务");
       if (generation !== epoch.current.value) throw new Error("选择范围已变化，请重新预览");
       const response: SessionBatchPreview = { provider, operation, items: [] };
       const size = operation === "delete" ? Math.max(1, sessionKeys.length) : 100;

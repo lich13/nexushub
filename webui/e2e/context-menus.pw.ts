@@ -150,10 +150,7 @@ test("Grok and Claude context menus expose their provider actions", async ({ pag
 
 test("Codex ordinary thread deletion shows an explicit preview before any execution", async ({ page }) => {
   await mockApi(page);
-  await mockCommand(page, "system.capabilities", () => {
-    const system = demoSystemCapabilities("macos-tauri");
-    return { ...system, capabilities: { ...system.capabilities, codex_delete_tree: true } };
-  });
+  await mockCommand(page, "system.capabilities", () => demoSystemCapabilities("macos-tauri"));
   const previews: SessionBatchRequest[] = [];
   let executions = 0;
   await mockCommand(page, "sessions.bulkPreview", args => {
@@ -202,25 +199,24 @@ test("Codex ordinary thread deletion shows an explicit preview before any execut
   expect(executions).toBe(0);
 });
 
-for (const treeCapability of [undefined, false]) {
-  test(`Codex deletion requires a service upgrade when tree capability is ${treeCapability}`, async ({ page }) => {
-    await mockApi(page);
-    await mockCommand(page, "system.capabilities", () => {
-      const system = demoSystemCapabilities("macos-tauri");
-      return { ...system, capabilities: { ...system.capabilities, codex_delete_tree: treeCapability } };
-    });
-    let requests = 0;
-    await mockCommand(page, "sessions.bulkPreview", () => { requests++; return { items: [] }; });
-    await mockCommand(page, "sessions.bulkExecute", () => { requests++; return { items: [] }; });
-    await page.goto("/");
-    await page.locator(".thread-item").first().click();
-    await page.getByLabel("任务操作", { exact: true }).click();
-    await page.getByRole("button", { name: "永久删除", exact: true }).click();
-    await expect(page.getByText("当前服务不支持整树删除，请先升级服务", { exact: true })).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    expect(requests).toBe(0);
+test("Codex deletion previews even when the legacy tree capability is absent", async ({ page }) => {
+  await mockApi(page);
+  await mockCommand(page, "system.capabilities", () => {
+    const system = demoSystemCapabilities("macos-tauri");
+    return { ...system, capabilities: { ...system.capabilities, codex_delete_tree: false } };
   });
-}
+  let request: SessionBatchRequest | undefined;
+  await mockCommand(page, "sessions.bulkPreview", args => {
+    request = args.request;
+    return { provider: "codex", operation: "delete", items: [{ sessionKey: "019e8c1f-demo", id: "019e8c1f-demo", title: "Codex preview fixture", paths: [], bytes: 0, allowed: true, reason: null, fingerprint: null, descendants: [] }] };
+  });
+  await page.goto("/");
+  await page.locator(".thread-item").first().click();
+  await page.getByLabel("任务操作", { exact: true }).click();
+  await page.getByRole("button", { name: "永久删除", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(request?.includeDescendants).toBe(true);
+});
 
 
 for (const theme of ["light", "dark"] as const) {

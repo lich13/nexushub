@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.8": [
+        "统一 Codex、Claude Code 和 Grok 的直接删除入口，移除活动、锁、版本、指纹和内容完整性限制，补齐线程专属旁路与共享索引清理。",
+        "修复 Claude 空会话读取，并在 Grok 缺少 updates.jsonl 时读取原生 chat_history.jsonl，系统提示和加密推理不作为普通对话显示。",
+    ],
     "1.3.7": [
         "兼容 Claude 原生身份与版本字段的并存记录，修复合法会话无法改名、删除和通知扫描的问题。",
         "Codex 官方删除成功后核验并清理 writer lock、shell snapshot 和 visualization 旁路；浏览器验收统一使用 Playwright 管理的浏览器。",
@@ -195,6 +199,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.8":
+        sections = {
+            "版本概览": ["本版统一三个 Provider 的直接删除和空会话读取；API 协议保持 2，macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Codex、Claude Code 和 Grok 的单条、批量、归档清理及隐藏清理都按确认目标直接执行。删除不依赖活动进程、writer 锁、终态、版本、身份冲突、指纹、外部引用或内容完整性，文件不存在视为完成。",
+                "Codex 按原生父子关系去重遍历目标后代，覆盖普通／归档 rollout、压缩副本、writer lock、shell snapshots、visualizations、状态和分页历史数据库及名称索引；Claude 补齐 file-history、tasks、session-env、debug、todos、项目索引、共享历史和会话登记；Grok 删除各工作区目标目录并清理 active_sessions 登记。",
+                "删除不设批量数量、文件大小、目录深度和文件数量上限，权限、文件系统或数据库错误逐项返回并继续处理其他目标；目录符号链接只删除链接本身，共享文件只移除对应记录。",
+            ],
+            "问题修复": [
+                "Claude 命名记录、空文件和仅元数据会话在缺少工作目录或版本时正常显示“暂无对话”，读取问题不再禁用删除。",
+                "Grok 保留 updates.jsonl 读取；文件缺失时使用 chat_history.jsonl 映射用户、助手、工具调用和结果，复用分页、搜索、追加更新和时间线。",
+                "系统提示、system_reminder 和加密推理不作为普通对话展示；损坏摘要、活动登记和占用锁不再阻止已定位目标删除。",
+            ],
+            "兼容性与迁移": [
+                "删除请求中的 fingerprint 和 expectedCount 均可省略并不参与判断；归档清理沿用 candidates 传递确认范围，API 协议仍为 2。",
+                "改名、归档和恢复继续保留各自原有规则；不会调用 Codex 原生删除 helper，也不会终止 Provider 进程或启动后台重复删除任务。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装不会自动启用 Claude hooks。保留配置、凭据、会话及共享浏览器缓存。",
+                "安装后打开两个指定真实样例，应显示“暂无对话”且删除入口可用；确认删除后由用户检查列表、主文件及对应旁路是否消失。",
+                "本机不安装或启动 Chrome、Chrome for Testing 或 Playwright；浏览器回归和 macOS 有头检查由 GitHub Actions 执行。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.7":
         sections = {
