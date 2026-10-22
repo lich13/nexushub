@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.8，核心提交为 [`c645e44`](https://github.com/lich13/nexushub/commit/c645e44885a43f34ebddefb3e3f172c84a38a88b)，基线为 `cffb3e9 / v1.3.7`。本轮统一三个 Provider 的直接删除，补齐线程专属旁路与共享索引清理，修复 Claude 空会话及 Grok 原生历史读取。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.9，核心提交为 [`f150ce8`](https://github.com/lich13/nexushub/commit/f150ce8970988ed843ffe92fe1421029f6f0db9b)，基线为 `a8740b3 / v1.3.8`。本轮修复 Grok／Claude 删除索引时的 systemd 写权限，避免无匹配记录时重写共享文件；Claude 自动内容归入默认折叠活动，Hook 卡片统一状态与操作样式。API 协议仍为 2；macOS App 是唯一界面。1.3.9 发布、部署与安装记录将在正式交付后补齐。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -13,7 +13,7 @@
 | 多选与菜单 | 三种 Provider 共用 ⌘／Shift／普通／键盘点击和锚点；删除无数量上限，归档／恢复按 100 项分批，轮询不新增选择，切换范围清空。 | `5ffd995` |
 | Codex 删除 | 按确认的原生父子关系直接删除普通／归档 rollout、压缩副本、writer lock、shell snapshots、visualizations、数据库、分页历史和名称索引；循环去重，错误逐项返回。 | `5ffd995` |
 | Claude 管理 | 改名保留原有身份与占用规则；删除按项目相对路径和文件名定位主文件、同名目录、旁路及共享索引，不依赖正文完整性。 | `5ffd995` |
-| Claude 过程折叠 | 同一原生回合的思考、临时说明和工具活动按原顺序收进外层折叠，最终答复单独显示；搜索自动展开，分页、刷新、机器与会话切换保持稳定身份。 | `1cfa0a7` |
+| Claude 自动内容 | 完整命令包装显示为命令与原始参数；通知、回显、上下文和摘要不创建用户回合，在原位置默认折叠并保留搜索、分页锚点。 | `f150ce8` |
 | Claude／Grok 读取 | Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；Grok 缺少 `updates.jsonl` 时读取 `chat_history.jsonl`，过滤系统提示、system_reminder 和加密推理。 | `5ffd995` |
 | 直接删除边界 | fingerprint 可省略且不参与删除，expectedCount 不参与清理；缺失文件完成，权限／数据库失败继续处理其他目标并返回 residuals。 | `5ffd995` |
 | Playwright 浏览器守卫 | 移除品牌 channel，启动探针核对 Playwright 缓存内真实可执行文件；浏览器回归与 macOS 有头性能检查交给三项 CI。 | `0d7afea` |
@@ -23,15 +23,15 @@
 
 ## 必要验证
 
-以下证据覆盖 1.3.8 核心实现至 `c645e44`；完整回归、跨平台构建和正式发布门禁以本提交对应的 GitHub Actions 为准。
+以下证据覆盖 1.3.9 核心实现至 `f150ce8`；完整回归、跨平台构建和正式发布门禁以最终版本提交对应的 GitHub Actions 为准。
 
 | 范围 | 已通过证据 |
 |---|---|
-| Rust core | Provider 删除、空会话、旁路／索引、超大／深层目录、循环父子关系、压缩 rollout、权限失败逐项继续、Grok 原生历史和相关契约测试通过；core/webd Clippy 通过。 |
+| Rust core | 共享索引命中／未命中写入、Claude 命令还原、自动上下文不生成回合、工具状态连续、压缩摘要搜索及既有 Provider 删除测试通过；core/webd Clippy 通过。 |
 | Rust webd | 受影响 API 与适配测试通过；三项主 CI 继续覆盖完整 workspace、签名安装安全和 Linux 服务包。 |
 | Tauri | 受影响设置、入口守卫、探针命令和 Clippy 测试通过；hooks 入口只限本机，不开放 Linux RPC 或远端配置写入。 |
-| WebUI | 806 项 Vitest、类型检查和构建通过；Playwright 浏览器测试仅由 GitHub Actions 执行。 |
-| 静态与脚本 | 两套 Rust 格式、core／webd 与 Tauri Clippy、Rust／TypeScript 契约、现有安装脚本检查通过；提交前隐私检查和 diff 检查通过。 |
+| WebUI | Vitest、类型检查通过；覆盖 Claude 自动内容折叠、搜索展开和分页展开状态；Playwright 浏览器测试仅由 GitHub Actions 执行。 |
+| 静态与脚本 | Rust 格式、workspace Clippy、Rust／TypeScript 契约、安装／systemd 路径测试通过；腾讯云合成命名空间复现旧只读错误并验证新规则下索引原子替换与配置只读。 |
 
 未使用真实用户会话执行删除测试，未发送真实 Bark 验收消息；功能、视觉和端到端验收由用户完成。完整跨平台和性能门禁继续由现有三项 CI 执行，没有新增性能门禁或本机正式打包。
 
