@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.9，核心提交为 [`f150ce8`](https://github.com/lich13/nexushub/commit/f150ce8970988ed843ffe92fe1421029f6f0db9b)，基线为 `a8740b3 / v1.3.8`。本轮修复 Grok／Claude 删除索引时的 systemd 写权限，避免无匹配记录时重写共享文件；Claude 自动内容归入默认折叠活动，Hook 卡片统一状态与操作样式。API 协议仍为 2；macOS App 是唯一界面。1.3.9 发布、部署与安装记录将在正式交付后补齐。
+当前维护源码版本为 1.3.9，核心提交为 [`f150ce8`](https://github.com/lich13/nexushub/commit/f150ce8970988ed843ffe92fe1421029f6f0db9b)，版本收尾提交为 [`b4049b6`](https://github.com/lich13/nexushub/commit/b4049b6b9cd6c918f52ac64d87f3d651c14ba8fc)，基线为 `a8740b3 / v1.3.8`。本轮修复 Grok／Claude 删除索引时的 systemd 写权限，避免无匹配记录时重写共享文件；Claude 自动内容归入默认折叠活动，Hook 卡片统一状态与操作样式。API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -38,6 +38,8 @@
 核心收尾已覆盖删除预览的整树能力、includeDescendants 固定目标、空会话读取、原生 Grok 历史、超过 100 项、超大／深层目录、循环父子关系、旁路权限错误和共享索引保留。版本／工作区、契约、格式、Clippy、安装脚本和隐私检查通过；浏览器与完整跨平台回归由 GitHub Actions 执行。
 
 ## 正式交付
+
+1.3.9 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39865303352)与 [`v1.3.9` Release CI](https://github.com/lich13/nexushub/actions/runs/39866444443) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.9)。已使用正式 Linux 服务包部署远端 API，版本为 1.3.9、service 为 active、health 为 `{"ok":true}`；已用 `NexusHub-1.3.9-darwin-arm64.dmg` 原地安装 macOS App，校验文件和签名通过，bundle 版本为 1.3.9 且启动成功，没有保留旧副本。安装与部署脚本已清理各自临时文件；真实用户会话未执行删除，仍待用户验收。
 
 1.3.8 已同步现有 manifest 和两份 lock 中的自身版本，发布说明使用中文六节，保留八项正式资产：macOS DMG／校验、updater／签名、latest.json，以及 Linux API 服务包／校验／签名。核心修复提交 [`c645e44`](https://github.com/lich13/nexushub/commit/c645e44885a43f34ebddefb3e3f172c84a38a88b) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39840632543)（macOS WebKit 性能作业重跑后）全绿；[`v1.3.8` Release CI](https://github.com/lich13/nexushub/actions/runs/39843284210) 全绿并发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.8)。已使用正式 Linux 服务包部署远端 API，版本为 1.3.8、service 为 active、health 为 `{"ok":true}`；已使用正式 macOS ARM64 DMG 原地安装 App，bundle 版本为 1.3.8 且启动成功，没有保留旧副本。收尾未创建预览服务或 SSH 转发；两个真实样例未执行删除，保留待用户验收。
 
