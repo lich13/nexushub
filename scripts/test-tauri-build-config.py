@@ -64,7 +64,7 @@ class BuildConfigTests(unittest.TestCase):
                     with self.subTest(signed=signed, skip=skip):
                         build_config.prepare(source, output, root, signed, skip)
                         result = json.loads(output.read_text())
-                        self.assertEqual(result["build"]["beforeBuildCommand"], "" if skip else {"script": "corepack pnpm@12.11.2 build:tauri", "cwd": str(root)})
+                        self.assertEqual(result["build"]["beforeBuildCommand"], "" if skip else {"script": "pnpm build:tauri", "cwd": str(root)})
                         self.assertEqual(
                             (source.parent / result["build"]["frontendDist"]).resolve(),
                             assets.parent,

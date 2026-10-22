@@ -35,7 +35,7 @@ def prepare(source, output, webui, signed, skip):
     # privacy scan.  Tauri resolves this path relative to tauri.conf.json.
     build["frontendDist"] = os.path.relpath(root, Path(source).resolve().parent)
     if Path(webui).resolve() != (Path(source).resolve().parent.parent / "webui").resolve():
-        build["beforeBuildCommand"] = {"script": "corepack pnpm@12.11.2 build:tauri", "cwd": str(Path(webui).resolve())}
+        build["beforeBuildCommand"] = {"script": "pnpm build:tauri", "cwd": str(Path(webui).resolve())}
     if not signed:
         config.setdefault("bundle", {})["createUpdaterArtifacts"] = False
         config.get("plugins", {}).pop("updater", None)

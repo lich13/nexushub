@@ -30,18 +30,18 @@ jobs:
           path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
-      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: pnpm --dir webui install --frozen-lockfile
       - run: node scripts/check-wire-types.mjs
       - run: node --test scripts/test-wire-types.mjs
-      - run: corepack pnpm@12.11.2 --dir webui typecheck
-      - run: corepack pnpm@12.11.2 --dir webui test
-      - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - run: pnpm --dir webui typecheck
+      - run: pnpm --dir webui test
+      - run: pnpm --dir webui build:tauri
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
-      - run: corepack pnpm@12.11.2 --dir webui exec playwright install --with-deps chromium webkit
-      - run: corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
+      - run: pnpm --dir webui exec playwright install --with-deps chromium webkit
+      - run: pnpm --dir webui exec playwright test --grep-invert @desktop-performance
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
@@ -80,7 +80,7 @@ jobs:
           path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
-      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: pnpm --dir webui install --frozen-lockfile
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -148,18 +148,18 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-tauri-
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
-      - run: corepack pnpm@12.11.2 --dir webui test
-      - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - run: pnpm --dir webui install --frozen-lockfile
+      - run: pnpm --dir webui test
+      - run: pnpm --dir webui build:tauri
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Caches/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
-      - run: corepack pnpm@12.11.2 --dir webui exec playwright install chromium webkit
+      - run: pnpm --dir webui exec playwright install chromium webkit
       - name: Check desktop interaction budget on macOS production build
         # Measure visible desktop windows. Headless Chromium's hosted-macOS
         # frame scheduler can exceed this budget even on about:blank.
-        run: corepack pnpm@12.11.2 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
+        run: pnpm --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance

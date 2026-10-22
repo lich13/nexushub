@@ -183,7 +183,7 @@ if [[ -f "${HELPER_RESOURCE}" ]]; then
 fi
 
 if [[ "${SKIP_WEBUI_INSTALL:-0}" != "1" ]]; then
-  corepack pnpm@12.11.2 --dir "${WEBUI_DIR}" install --frozen-lockfile
+  pnpm --dir "${WEBUI_DIR}" install --frozen-lockfile
 fi
 
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
