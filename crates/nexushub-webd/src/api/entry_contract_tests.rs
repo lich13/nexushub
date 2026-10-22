@@ -79,6 +79,12 @@ fn rpc_surface_separates_retired_commands_from_current_allowlist() {
         assert!(!commands::is_retired_command(command));
     }
     assert!(commands::is_retired_command("pi.list"));
+    assert!(!commands::is_allowed_rpc_command(
+        "claude.ownershipDiagnostics"
+    ));
+    assert!(!commands::is_allowed_transport_command(
+        "claude.ownershipDiagnostics"
+    ));
     assert!(commands::is_retired_command(commands::THREADS_SEND));
     for command in commands::RETIRED_COMMANDS {
         assert!(!commands::is_allowed_rpc_command(command));

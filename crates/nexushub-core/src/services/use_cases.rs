@@ -478,6 +478,12 @@ pub struct ClaudeUseCases {
     paths: crate::claude::ClaudePaths,
 }
 impl ClaudeUseCases {
+    pub fn ownership_diagnostics(
+        &self,
+        key: &str,
+    ) -> Result<crate::claude::ClaudeOwnershipDiagnostics> {
+        crate::claude::claude_ownership_diagnostics(&self.paths, key)
+    }
     pub fn list(
         &self,
         limit: usize,

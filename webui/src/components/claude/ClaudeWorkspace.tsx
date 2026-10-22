@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useMemo, useState, type ReactNode } fro
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
 import { SessionSize } from "../common/SessionSize";
-import { machineScope } from "../../lib/query/connection";
+import { machineScope, useConnection } from "../../lib/query/connection";
 import { useClaudeActions, useClaudeDetail, useClaudeSessions } from "../../lib/query/claude";
 import type { ClaudeDeletePreview, ClaudeHistoryEvent, ClaudeSessionSummary, SessionSearchResult } from "../../types";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -33,6 +33,7 @@ import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function ClaudeWorkspace() {
+  const connection = useConnection();
   const menuTrigger = useRef<HTMLElement>(null);
   const stream = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -165,7 +166,14 @@ export function ClaudeWorkspace() {
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
         {selected.readWarning && <div className="task-feedback" role="status">{selected.readWarning}</div>}
-        {!selected.readError && !selected.readWarning && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
+        {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{[selected.renameBlockReason, selected.deleteBlockReason].filter((reason, index, reasons) => reason && reasons.indexOf(reason) === index).join("；")}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
+        {connection.target === "local" && actions.diagnostics.variables === selected.sessionKey && <>
+          {actions.diagnostics.error && <div className="form-error" role="alert">{actions.diagnostics.error.message}</div>}
+          {actions.diagnostics.data && <ActivityDetails className="task-feedback" summary="原生进程归属" initiallyOpen stateKey={`ownership:${selected.sessionKey}`}>
+            <p>{actions.diagnostics.data.ownership === "inactive" ? "未发现关联的活跃会话进程" : actions.diagnostics.data.ownership === "open" ? "存在活跃会话或文件占用" : "归属尚未确认"}</p>
+            {actions.diagnostics.data.processes.map((process, index) => <p key={`${process.pid}:${index}`}>PID {process.pid} · {({ session: "会话", daemon: "后台服务", pty_host: "终端宿主", unknown: "未核验进程" } as Record<string, string>)[process.role] ?? process.role} · {process.registrationVerified ? "登记已核验" : "登记未核验"}{process.mismatchedFields.length > 0 && ` · 不匹配字段：${process.mismatchedFields.join("、")}`}</p>)}
+          </ActivityDetails>}
+        </>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.data?.pages[0]?.timeline ? navigation.select : undefined} loadOlder={!detail.data?.pages[0]?.timeline && detail.hasNextPage ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
           <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
@@ -179,6 +187,7 @@ export function ClaudeWorkspace() {
     {preview && <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
       <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong>{(preview.paths ?? [preview.path]).map(path => <code className="delete-path" key={path}>{path}</code>)}<p>{preview.fileCount} 个会话及专属文件，{preview.bytes.toLocaleString()} 字节。</p>
       {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
+      {preview.warnings?.map(warning => <p className="form-error" key={warning}>{warning}</p>)}
       <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
     </ConfirmDialog>}
   </div>;

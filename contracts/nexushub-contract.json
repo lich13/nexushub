@@ -654,6 +654,18 @@
       "responseDto": "ClaudeDetailResponse"
     },
     {
+      "id": "claude.ownershipDiagnostics",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "claude.ownership_diagnostics",
+      "tauriCommand": "commands::claude::claudeOwnershipDiagnostics",
+      "webuiWrapper": "getClaudeOwnershipDiagnostics",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeSessionRequest",
+      "responseDto": "ClaudeOwnershipDiagnostics",
+      "hostOnlyReason": "Local read-only native process ownership diagnostics; never exposed through Linux RPC or remote forwarding."
+    },
+    {
       "id": "claude.rename",
       "kind": "rpc",
       "scope": "shared",
@@ -1226,6 +1238,14 @@
     "ClaudeHooksAction": {
       "core": "ClaudeHooksAction",
       "webui": "ClaudeHooksAction"
+    },
+    "ClaudeOwnershipDiagnostics": {
+      "core": "ClaudeOwnershipDiagnostics",
+      "webui": "ClaudeOwnershipDiagnostics"
+    },
+    "ClaudeOwnershipProcess": {
+      "core": "ClaudeOwnershipProcess",
+      "webui": "ClaudeOwnershipProcess"
     }
   },
   "retiredActions": [

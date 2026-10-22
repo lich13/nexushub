@@ -70,6 +70,7 @@ pub fn run() {
         commands::claude::listClaudeSessions,
         commands::claude::getClaudeSession,
         commands::claude::renameClaudeSession,
+        commands::claude::claudeOwnershipDiagnostics,
         commands::claude::previewClaudeSessionDelete,
         commands::claude::deleteClaudeSession,
     ];
