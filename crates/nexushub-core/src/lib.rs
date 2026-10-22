@@ -20,6 +20,7 @@ mod scan_work;
 pub mod security;
 mod selected_codex;
 pub mod services;
+mod session_delete;
 pub mod session_storage;
 pub mod shell;
 pub mod system;

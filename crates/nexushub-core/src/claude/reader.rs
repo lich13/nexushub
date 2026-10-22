@@ -60,7 +60,7 @@ impl ReaderState {
             Ok(value) if value.is_object() => value,
             _ => {
                 if self.issues.is_empty() {
-                    self.issues.push("会话含损坏记录，管理操作已禁用".into());
+                    self.issues.push("会话含损坏记录，改名已禁用".into());
                 }
                 return Ok(());
             }
@@ -441,7 +441,7 @@ impl Parser {
                 if parsed.id.is_empty() {
                     parsed.id = session.into();
                 } else if parsed.id != session {
-                    issue(&mut parsed, "会话身份冲突，管理操作已禁用");
+                    issue(&mut parsed, "会话身份冲突，改名已禁用");
                     continue;
                 }
             }
@@ -464,7 +464,7 @@ impl Parser {
                 let hash = digest(record.to_string());
                 if let Some(prior) = seen.insert(uuid.into(), hash.clone()) {
                     if prior != hash {
-                        issue(&mut parsed, "记录 ID 冲突，管理操作已禁用");
+                        issue(&mut parsed, "记录 ID 冲突，改名已禁用");
                     }
                     continue;
                 }
@@ -600,15 +600,15 @@ impl Parser {
     ) {
         for key in std::iter::once(key) {
             let Some(message) = record.get("message").filter(|m| m.is_object()) else {
-                issue(&mut self.parsed, "消息格式未知，管理操作已禁用");
+                issue(&mut self.parsed, "消息格式未知，改名已禁用");
                 continue;
             };
             let Some(content) = message.get("content") else {
-                issue(&mut self.parsed, "消息正文缺失，管理操作已禁用");
+                issue(&mut self.parsed, "消息正文缺失，改名已禁用");
                 continue;
             };
             if !content.is_array() && !content.is_string() {
-                issue(&mut self.parsed, "消息正文格式未知，管理操作已禁用");
+                issue(&mut self.parsed, "消息正文格式未知，改名已禁用");
                 let mut e = event(
                     key,
                     record,
@@ -655,7 +655,7 @@ impl Parser {
                 self.last_stop_reason.clear();
                 self.last_assistant_events.clear();
                 if uuid.is_empty() {
-                    issue(&mut self.parsed, "原生消息身份缺失，通知和管理操作已禁用");
+                    issue(&mut self.parsed, "原生消息身份缺失，通知和改名已禁用");
                 }
                 let user_parts = Value::Array(
                     parts
@@ -767,7 +767,7 @@ impl Parser {
                         e.status = Some("in_progress".into());
                         e.detail = part.get("input").map(printable);
                         if call.is_empty() {
-                            issue(&mut self.parsed, "工具调用身份缺失，管理操作已禁用");
+                            issue(&mut self.parsed, "工具调用身份缺失，改名已禁用");
                         }
                         self.pending.insert(call.into());
                         self.calls.insert(call.into(), self.parsed.events.len());
@@ -1239,10 +1239,9 @@ impl Parser {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into();
-            issue(&mut parsed, "未确认原生会话 ID，管理操作已禁用");
-        }
-        if parsed.cwd.is_empty() {
-            issue(&mut parsed, "未确认会话工作目录，管理操作已禁用");
+            if !parsed.events.is_empty() {
+                issue(&mut parsed, "未确认原生会话 ID");
+            }
         }
         parsed.title = self
             .custom_title
@@ -1252,10 +1251,9 @@ impl Parser {
             .unwrap_or_else(|| parsed.id.clone());
         if parsed.version.is_empty() {
             parsed.version = "unknown".into();
-            issue(&mut parsed, "未确认 Claude 会话版本，管理操作已禁用");
         }
-        if !parsed.version.starts_with("2.") {
-            issue(&mut parsed, "此 Claude 版本尚未验证，管理操作已禁用");
+        if parsed.version != "unknown" && !parsed.version.starts_with("2.") {
+            issue(&mut parsed, "此 Claude 版本尚未验证，改名已禁用");
         }
         for q in self.questions.values() {
             parsed.native_events.push(q.clone());

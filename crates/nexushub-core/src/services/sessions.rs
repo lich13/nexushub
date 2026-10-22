@@ -65,7 +65,10 @@ pub struct SessionBatchPreview {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionBatchSelection {
     pub session_key: String,
+    #[serde(default)]
     pub fingerprint: String,
+    #[serde(default)]
+    pub descendants: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,7 +110,7 @@ pub struct SessionUseCases {
 
 fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[String]) -> Result<()> {
     ensure!(
-        !keys.is_empty() && keys.len() <= MAX_BATCH_SIZE,
+        !keys.is_empty() && (operation == SessionOperation::Delete || keys.len() <= MAX_BATCH_SIZE),
         "每批请选择 1 至 100 个线程"
     );
     ensure!(
@@ -117,7 +120,7 @@ fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[Stri
     let mut unique = HashSet::new();
     for key in keys {
         ensure!(
-            !key.trim().is_empty() && key.len() <= 512 && !key.chars().any(char::is_control),
+            !key.trim().is_empty() && !key.chars().any(char::is_control),
             "无效的线程定位键"
         );
         ensure!(unique.insert(key), "同一批次不能重复选择线程");
@@ -245,21 +248,7 @@ impl SessionUseCases {
             item.id = id;
             item.title = title;
             item.paths = paths;
-            item.bytes = item
-                .paths
-                .iter()
-                .flat_map(|p| {
-                    walkdir::WalkDir::new(p)
-                        .follow_links(false)
-                        .max_depth(16)
-                        .into_iter()
-                        .take(10_001)
-                })
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_file())
-                .filter_map(|e| e.metadata().ok())
-                .map(|m| m.len())
-                .sum();
+            item.bytes = crate::session_delete::size(&item.paths).1;
         }
         item
     }
@@ -281,10 +270,13 @@ impl SessionUseCases {
                 (p.id, p.title, p.paths, p.bytes, p.fingerprint)
             }
             SessionProvider::Codex => {
-                ensure!(
-                    codex::codex_task_identity(&self.codex, key)? == codex::CodexTaskIdentity::Main,
-                    "线程身份无法确认为主任务"
-                );
+                if operation != SessionOperation::Delete {
+                    ensure!(
+                        codex::codex_task_identity(&self.codex, key)?
+                            == codex::CodexTaskIdentity::Main,
+                        "线程身份无法确认为主任务"
+                    );
+                }
                 if operation == SessionOperation::Delete {
                     let tree =
                         selected_codex::tree::preview(&self.codex, key, include_descendants)?;
@@ -331,135 +323,134 @@ impl SessionUseCases {
         let keys = request
             .items
             .iter()
-            .map(|s| s.session_key.clone())
+            .map(|item| item.session_key.clone())
             .collect::<Vec<_>>();
         validate(request.provider, request.operation, &keys)?;
         ensure!(
             request.operation != SessionOperation::Delete || request.confirmed,
-            "删除必须经过预览并明确确认"
+            "删除需要明确确认"
         );
-        ensure!(
-            request
-                .items
-                .iter()
-                .all(|s| !s.fingerprint.is_empty() && s.fingerprint.len() <= 256),
-            "缺少预览指纹，请重新预览"
-        );
-        let mut results = Vec::with_capacity(request.items.len());
-        let mut storage_failed = false;
+        let mut results = Vec::new();
         for item in &request.items {
-            if storage_failed {
-                results.push(SessionBatchItemResult {
-                    session_key: item.session_key.clone(),
-                    status: "blocked".into(),
-                    message: Some("共享存储核验失败，已停止后续删除，请检查后重新预览".into()),
-                    deleted_ids: vec![],
-                    residuals: vec![],
-                });
-                continue;
-            }
-            let check = self
-                .preview_one(
-                    request.provider,
-                    request.operation,
-                    &item.session_key,
-                    request.include_descendants,
-                    None,
-                )
-                .and_then(|current| {
-                    ensure!(
-                        current.fingerprint.as_deref() == Some(&item.fingerprint),
-                        "线程或文件已变化，请重新预览"
-                    );
-                    Ok(())
-                });
-            if let Err(error) = check {
-                results.push(SessionBatchItemResult {
-                    session_key: item.session_key.clone(),
-                    status: "blocked".into(),
-                    message: Some(format!("{error:#}")),
-                    deleted_ids: vec![],
-                    residuals: vec![],
-                });
-                continue;
-            }
-            if request.provider == SessionProvider::Codex
-                && request.operation == SessionOperation::Delete
-            {
-                let outcome = selected_codex::tree::execute(
-                    &self.codex,
-                    &item.session_key,
-                    request.include_descendants,
-                    &item.fingerprint,
-                );
-                results.push(match outcome {
-                    Ok(outcome) => {
-                        storage_failed = outcome.storage_failure;
-                        SessionBatchItemResult {
-                            session_key: item.session_key.clone(),
-                            status: if outcome.error.is_none() {
-                                "succeeded"
-                            } else {
-                                "failed"
-                            }
-                            .into(),
-                            message: outcome.error,
-                            deleted_ids: outcome.deleted_ids,
-                            residuals: outcome.residuals,
-                        }
-                    }
-                    Err(error) => SessionBatchItemResult {
-                        session_key: item.session_key.clone(),
-                        status: "blocked".into(),
-                        message: Some(format!("{error:#}")),
-                        deleted_ids: vec![],
-                        residuals: vec![],
-                    },
-                });
-                continue;
-            }
-            let result = match (request.provider, request.operation) {
-                (SessionProvider::Claude, _) => crate::claude::execute_claude_delete(
-                    &self.claude,
-                    crate::claude::ClaudeDeleteRequest {
-                        session_key: item.session_key.clone(),
-                        confirmed: true,
-                        fingerprint: item.fingerprint.clone(),
-                    },
-                )
-                .map(|_| ()),
-                (SessionProvider::Codex, SessionOperation::Delete) => {
-                    unreachable!("Codex deletion is handled by the tree verifier above")
-                }
-                (SessionProvider::Codex, action) => selected_codex::execute_archive(
-                    &self.codex,
-                    &item.session_key,
-                    action == SessionOperation::Archive,
-                    &item.fingerprint,
-                ),
-                (SessionProvider::Grok, _) => grok::execute_grok_delete(
-                    &self.grok,
-                    grok::GrokDeleteRequest {
-                        id: item.session_key.clone(),
-                        confirmed: true,
-                        fingerprint: item.fingerprint.clone(),
-                    },
-                )
-                .map(|_| ()),
-            };
-            results.push(SessionBatchItemResult {
+            let mut result = SessionBatchItemResult {
                 session_key: item.session_key.clone(),
-                status: if result.is_ok() {
-                    "succeeded"
-                } else {
-                    "failed"
-                }
-                .into(),
-                message: result.err().map(|e| format!("{e:#}")),
+                status: "succeeded".into(),
+                message: None,
                 deleted_ids: vec![],
                 residuals: vec![],
-            });
+            };
+            let action = (|| -> Result<()> {
+                if request.operation != SessionOperation::Delete {
+                    return selected_codex::execute_archive(
+                        &self.codex,
+                        &item.session_key,
+                        request.operation == SessionOperation::Archive,
+                        &item.fingerprint,
+                    );
+                }
+                match request.provider {
+                    SessionProvider::Codex => {
+                        let mut ids = vec![item.session_key.clone()];
+                        if request.include_descendants {
+                            ids.extend(item.descendants.iter().cloned());
+                        }
+                        let outcome = selected_codex::tree::execute_ids(&self.codex, &ids)?;
+                        result.deleted_ids = outcome.deleted_ids;
+                        result.residuals = outcome.residuals;
+                        result.message = outcome.error;
+                    }
+                    SessionProvider::Claude => {
+                        let outcome = crate::claude::execute_claude_delete(
+                            &self.claude,
+                            crate::claude::ClaudeDeleteRequest {
+                                session_key: item.session_key.clone(),
+                                confirmed: true,
+                                fingerprint: String::new(),
+                            },
+                        )?;
+                        result.residuals = outcome.residuals;
+                        if outcome.deleted {
+                            result.deleted_ids.push(item.session_key.clone());
+                        }
+                    }
+                    SessionProvider::Grok => {
+                        let outcome = grok::execute_grok_delete(
+                            &self.grok,
+                            grok::GrokDeleteRequest {
+                                id: item.session_key.clone(),
+                                confirmed: true,
+                                fingerprint: String::new(),
+                            },
+                        )?;
+                        result.residuals = outcome.residuals;
+                        if outcome.deleted {
+                            result.deleted_ids.push(item.session_key.clone());
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = action {
+                result.status = if request.operation == SessionOperation::Delete {
+                    "failed"
+                } else {
+                    "blocked"
+                }
+                .into();
+                result.message = Some(format!("{error:#}"));
+            } else if !result.residuals.is_empty() {
+                result.status = "failed".into();
+                result
+                    .message
+                    .get_or_insert_with(|| "部分内容未删除，请查看逐项结果".into());
+            }
+            results.push(result);
         }
         Ok(SessionBatchResult { items: results })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_accepts_over_one_hundred_targets_and_optional_fingerprints() {
+        let root =
+            std::env::temp_dir().join(format!("nexushub-bulk-delete-{}", uuid::Uuid::new_v4()));
+        let service = SessionUseCases {
+            platform: crate::platform::PlatformPaths::desktop_current(),
+            codex: CodexPaths::new(root.join("codex")),
+            grok: GrokPaths {
+                home: root.join("grok"),
+            },
+            claude: crate::claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+        };
+        let keys = (0..101)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .collect::<Vec<_>>();
+        let root_session = service.grok.sessions().join("workspace");
+        for key in &keys {
+            std::fs::create_dir_all(root_session.join(key)).unwrap();
+        }
+        let preview = service
+            .bulk_preview(SessionBatchRequest {
+                provider: SessionProvider::Grok,
+                operation: SessionOperation::Delete,
+                session_keys: keys.clone(),
+                include_descendants: false,
+            })
+            .unwrap();
+        assert_eq!(preview.items.len(), 101);
+        assert!(preview.items.iter().all(|item| item.allowed));
+        let request:SessionBatchExecuteRequest=serde_json::from_value(serde_json::json!({"provider":"grok","operation":"delete","confirmed":true,"items":keys.iter().map(|key|serde_json::json!({"sessionKey":key})).collect::<Vec<_>>()})).unwrap();
+        let result = service.bulk_execute(request).unwrap();
+        assert!(result.items.iter().all(|item| item.status == "succeeded"));
+        assert_eq!(std::fs::read_dir(root_session).unwrap().count(), 0);
+        assert!(validate(SessionProvider::Codex, SessionOperation::Archive, &keys).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

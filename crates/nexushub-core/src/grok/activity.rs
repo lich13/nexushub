@@ -124,22 +124,14 @@ impl Snapshot {
         session.deletion_eligibility = Some(Self::eligibility(owner, phase, complete));
     }
 
-    fn eligibility(owner: Ownership, phase: Phase, complete: bool) -> GrokDeletionEligibility {
-        let reason = match owner {
-            Ownership::Open => Some("会话仍在原生 Grok 中打开，请先关闭该会话"),
-            Ownership::Unknown => Some("无法核验原生会话占用状态，请稍后重试"),
-            Ownership::Inactive if !complete => Some("会话记录尚未读取完整或正在写入，请稍后重试"),
-            Ownership::Inactive if phase == Phase::Unknown => {
-                Some("会话记录损坏或活动格式无法确认")
-            }
-            Ownership::Inactive => None,
-        };
+    fn eligibility(_owner: Ownership, _phase: Phase, _complete: bool) -> GrokDeletionEligibility {
         GrokDeletionEligibility {
-            allowed: reason.is_none(),
-            reason: reason.map(str::to_owned),
+            allowed: true,
+            reason: None,
         }
     }
 
+    #[cfg(test)]
     pub(super) fn deletion_eligibility(
         &self,
         session: &GrokSessionSummary,
@@ -148,6 +140,7 @@ impl Snapshot {
         Self::eligibility(self.ownership(session), phase, complete)
     }
 
+    #[cfg(test)]
     pub(super) fn ensure_deletable(&self, session: &GrokSessionSummary) -> anyhow::Result<()> {
         let eligibility = self.deletion_eligibility(session);
         anyhow::ensure!(

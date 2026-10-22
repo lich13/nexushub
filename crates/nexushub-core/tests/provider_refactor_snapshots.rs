@@ -136,10 +136,10 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     assert_eq!(claude_damaged_summary.status, "unknown");
     assert_eq!(
         claude_damaged_summary.read_error.as_deref(),
-        Some("会话含损坏记录，管理操作已禁用"),
-        "a malformed Claude row must disable management without hiding later records"
+        Some("会话含损坏记录，改名已禁用"),
+        "a malformed Claude row disables rename without hiding later records or blocking deletion"
     );
-    assert!(!claude_damaged_summary.can_rename && !claude_damaged_summary.can_delete);
+    assert!(!claude_damaged_summary.can_rename && claude_damaged_summary.can_delete);
 
     let claude_full = claude_session_detail(
         &claude_paths,

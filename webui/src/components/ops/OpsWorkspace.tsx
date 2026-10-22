@@ -109,10 +109,11 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
         <div className="archive-plan">
           <Metric label="active" value={plan ? String(plan.active_threads) : "dry-run 未执行"} />
           <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
-          <Metric label="integrity" value={plan?.integrity ?? "dry-run 未执行"} tone={plan?.integrity === "ok" ? "success" : "danger"} />
           <Metric label="session index" value={plan ? String(plan.session_index_lines) : "dry-run 未执行"} />
           <Metric label="rollout 文件" value={plan ? String(plan.rollout_files) : "dry-run 未执行"} />
         </div>
+        {plan && <ul className="hidden-cleanup-candidates">{plan.archived_ids.map(id => <li key={id}>{id}</li>)}</ul>}
+        {executeDelete.data?.items?.filter(item => item.status !== "deleted").map(item => <div role="alert" key={item.id}>{item.id}：{item.reason}{item.residuals?.map(path => <code className="delete-path" key={path}>{path}</code>)}</div>)}
         {archiveCleanupError && <div className="form-error cleanup-error">{archiveCleanupError}</div>}
         <div className="button-row ops-action-row cleanup-actions">
           <button className="secondary-button" disabled={dryRun.isPending || executeDelete.isPending} onClick={() => { executeDelete.reset(); dryRun.mutate(); }}><Database size={17} />Dry-run</button>
@@ -120,7 +121,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
             <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0 || dryRun.isPending || executeDelete.isPending} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
           ) : (
             <>
-              <button className="danger-button" onClick={() => executeDelete.mutate({ expectedCount: plan?.archived_threads ?? 0 })} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
+              <button className="danger-button" onClick={() => executeDelete.mutate({ candidates: (plan?.archived_ids ?? []).map(id => ({ id })) })} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
               <button className="secondary-button" onClick={() => setDeleteArmed(false)} disabled={executeDelete.isPending}>取消</button>
             </>
           )}
@@ -134,17 +135,16 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           <Metric label="visible" value={hiddenPlan ? String(opsView.hiddenStats.visible) : "dry-run 未执行"} />
           <Metric label="hidden" value={String(opsView.hiddenStats.hidden)} tone={opsView.hiddenStats.hidden > 0 ? "warning" : undefined} />
           <Metric label="sources" value={opsView.hiddenStats.sourceCounts} />
-          <Metric label="integrity" value={opsView.hiddenStats.integrity} tone={opsView.hiddenStats.integrity === "ok" ? "success" : "danger"} />
           <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
         </div>
         {hiddenPlan && <ul className="hidden-cleanup-candidates">
-          {visibleCandidates.map(item => <li key={item.id}><strong>{item.title || item.id}</strong><span>{item.allowed ? "可清理" : item.reason || "受保护"}</span></li>)}
+          {visibleCandidates.map(item => <li key={item.id}><strong>{item.title || item.id}</strong><span>{item.id}</span></li>)}
         </ul>}
         {hiddenPlan && hiddenPlan.candidates.length > 100 && <CleanupPagination page={candidatePage} count={hiddenPlan.candidates.length} onChange={setCandidatePage} label="候选" />}
-        {hiddenPlan && !hiddenDryRun.isPending && !hiddenPlan.candidates.some(item => item.allowed) && <p role="status">无可清理项目</p>}
+        {hiddenPlan && !hiddenDryRun.isPending && hiddenPlan.candidates.length === 0 && <p role="status">无可清理项目</p>}
         {hiddenDeleteResult && <div role="status">
           <p>已删除 {hiddenDeleteResult.deleted_threads}，已跳过 {hiddenDeleteResult.skipped_threads}，失败 {hiddenDeleteResult.failed_threads}，剩余 {hiddenDeleteResult.hidden_threads}</p>
-          {unsuccessful.slice(resultPage * 100, (resultPage + 1) * 100).map(item => <p key={item.id}>{item.id}：{item.reason}</p>)}
+          {unsuccessful.slice(resultPage * 100, (resultPage + 1) * 100).map(item => <p key={item.id}>{item.id}：{item.reason}{item.residuals?.map(path => <code className="delete-path" key={path}>{path}</code>)}</p>)}
           {unsuccessful.length > 100 && <CleanupPagination page={resultPage} count={unsuccessful.length} onChange={setResultPage} label="清理结果" />}
         </div>}
         {hiddenCleanupError && <div className="form-error cleanup-error">{hiddenCleanupError}</div>}

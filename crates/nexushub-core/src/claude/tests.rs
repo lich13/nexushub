@@ -296,7 +296,7 @@ fn unfinished_turn_with_verified_inactive_owner_can_be_managed() {
 }
 
 #[test]
-fn rename_and_delete_only_selected_file_recheck_fingerprint_and_identity() {
+fn rename_preserves_native_records_and_delete_ignores_changed_fingerprint() {
     let f = Fixture::new();
     f.complete();
     let sibling = f.file.with_file_name("other.jsonl");
@@ -310,17 +310,6 @@ fn rename_and_delete_only_selected_file_recheck_fingerprint_and_identity() {
     f.append(
         &json!({"type":"custom-title","sessionId":"native-fixture","customTitle":"Changed again"}),
     );
-    assert!(execute_claude_delete(
-        &f.paths,
-        ClaudeDeleteRequest {
-            session_key: f.key(),
-            confirmed: true,
-            fingerprint: preview.fingerprint
-        }
-    )
-    .is_err());
-    assert!(f.file.exists());
-    let preview = preview_claude_delete(&f.paths, &f.key()).unwrap();
     let result = execute_claude_delete(
         &f.paths,
         ClaudeDeleteRequest {
@@ -432,7 +421,7 @@ fn preferred_identity_and_version_allow_rename_delete_and_notification_scans() {
 }
 
 #[test]
-fn cross_record_preferred_identities_still_block_management_and_notifications() {
+fn cross_record_conflicts_block_rename_and_notifications_but_allow_deletion() {
     let f = Fixture::new();
     f.complete();
     f.append(&json!({"type":"system","subtype":"init","sessionId":"other-fixture","session_id":"native-fixture"}));
@@ -442,7 +431,7 @@ fn cross_record_preferred_identities_still_block_management_and_notifications() 
         .iter()
         .any(|issue| issue.contains("会话身份冲突")));
     assert!(rename_claude_session(&f.paths, &f.key(), "Blocked").is_err());
-    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
     assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
     assert!(f.file.exists());
 }
@@ -506,7 +495,10 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
         })
         .unwrap();
     assert!(preview.items[0].allowed);
-    assert_eq!(preview.items[0].warnings, single.warnings.unwrap());
+    assert_eq!(
+        preview.items[0].warnings,
+        single.warnings.unwrap_or_default()
+    );
     assert!(!preview.items[1].allowed);
     let result = cases
         .bulk_execute(SessionBatchExecuteRequest {
@@ -516,10 +508,12 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
             confirmed: true,
             items: vec![
                 SessionBatchSelection {
+                    descendants: vec![],
                     session_key: f.key(),
                     fingerprint: preview.items[0].fingerprint.clone().unwrap(),
                 },
                 SessionBatchSelection {
+                    descendants: vec![],
                     session_key: unknown,
                     fingerprint: "invalid".into(),
                 },
@@ -527,7 +521,7 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
         })
         .unwrap();
     assert_eq!(result.items[0].status, "succeeded");
-    assert_eq!(result.items[1].status, "blocked");
+    assert_eq!(result.items[1].status, "failed");
     assert!(sibling.exists());
 }
 
@@ -646,7 +640,7 @@ fn oversized_unrelated_file_does_not_hide_readable_sessions_and_cache_is_reused(
     assert!(all.iter().any(|s| s.id == "native-fixture" && s.can_rename));
     let blocked = all.iter().find(|s| s.id == "oversized").unwrap();
     assert!(blocked.read_error.is_some());
-    assert!(!blocked.can_delete);
+    assert!(blocked.can_delete);
     assert_eq!(resolve(&f.paths, &f.key()).unwrap().1.id, "native-fixture");
 }
 
@@ -808,9 +802,9 @@ fn claude_summary_cache_revalidates_rewrites_truncation_and_atomic_replacement()
         assert_eq!(listed.last_message.as_deref(), Some(last_message));
         assert_eq!(listed.status, status);
         assert_eq!(listed.can_rename, can_manage);
-        assert_eq!(listed.can_delete, can_manage);
+        assert!(listed.can_delete);
         assert_eq!(listed.rename_block_reason.is_some(), !can_manage);
-        assert_eq!(listed.delete_block_reason.is_some(), !can_manage);
+        assert!(listed.delete_block_reason.is_none());
 
         let detail = claude_session_detail(
             &f.paths,
@@ -850,7 +844,7 @@ fn claude_summary_cache_revalidates_rewrites_truncation_and_atomic_replacement()
             assert!(preview_claude_delete(&f.paths, &key).is_ok());
         } else {
             assert!(rename_claude_session(&f.paths, &key, "Blocked").is_err());
-            assert!(preview_claude_delete(&f.paths, &key).is_err());
+            assert!(preview_claude_delete(&f.paths, &key).is_ok());
         }
     };
 
@@ -1166,7 +1160,7 @@ fn deletion_covers_verified_sidecars_without_following_continuations() {
     fs::write(&other, "synthetic unrelated").unwrap();
     let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
     assert_eq!(plan.file_count, 4);
-    assert_eq!(plan.paths.len(), 7);
+    assert!(plan.paths.contains(&directory.canonicalize().unwrap()));
     execute_claude_delete(
         &f.paths,
         ClaudeDeleteRequest {
@@ -1182,7 +1176,7 @@ fn deletion_covers_verified_sidecars_without_following_continuations() {
 }
 
 #[test]
-fn dedicated_children_use_preferred_identity_and_keep_cross_record_protection() {
+fn dedicated_children_are_deleted_even_with_conflicting_content_identity() {
     for conflict in [false, true] {
         let f = Fixture::new();
         f.complete();
@@ -1207,73 +1201,49 @@ fn dedicated_children_use_preferred_identity_and_keep_cross_record_protection() 
         )
         .unwrap();
         let preview = preview_claude_delete(&f.paths, &f.key());
-        if conflict {
-            assert!(preview.is_err());
-            assert!(child.exists());
-        } else {
-            let result = execute_claude_delete(
-                &f.paths,
-                ClaudeDeleteRequest {
-                    session_key: f.key(),
-                    confirmed: true,
-                    fingerprint: preview.unwrap().fingerprint,
-                },
-            )
-            .unwrap();
-            assert!(result.deleted);
-            assert!(!directory.exists());
-        }
-    }
-}
-
-#[test]
-fn sidecar_conflict_new_files_and_quarantine_mutations_are_preserved() {
-    for failure in ["foreign-parent", "new-file", "quarantined"] {
-        let f = Fixture::new();
-        f.complete();
-        let directory = owned_sidecars(&f);
-        let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
-        match failure {
-            "foreign-parent" => fs::write(
-                directory.join("subagents/agent-fixture.jsonl"),
-                format!(
-                    "{}\n",
-                    json!({"type":"fork-context-ref","parentSessionId":"other-fixture"})
-                ),
-            )
-            .unwrap(),
-            "new-file" => fs::write(directory.join("tool-results/new.txt"), "new fixture").unwrap(),
-            _ => mutations::TEST_MUTATION.with(|slot| {
-                *slot.borrow_mut() = Some(Box::new(|staged| {
-                    fs::write(
-                        staged.with_extension("").join("tool-results/new.txt"),
-                        "new fixture",
-                    )?;
-                    Ok(())
-                }))
-            }),
-        }
         let result = execute_claude_delete(
             &f.paths,
             ClaudeDeleteRequest {
                 session_key: f.key(),
                 confirmed: true,
-                fingerprint: plan.fingerprint,
+                fingerprint: preview.unwrap().fingerprint,
             },
-        );
-        mutations::TEST_MUTATION.with(|slot| *slot.borrow_mut() = None);
-        assert!(result.is_err(), "{failure}");
-        assert!(f.file.exists());
-        assert!(directory.join("tool-results/output.txt").exists());
-        if failure != "foreign-parent" {
-            assert!(directory.join("tool-results/new.txt").exists());
-        }
+        )
+        .unwrap();
+        assert!(result.deleted);
+        assert!(!directory.exists());
     }
+}
+
+#[test]
+fn changed_sidecars_are_deleted_without_repreview() {
+    let f = Fixture::new();
+    f.complete();
+    let directory = owned_sidecars(&f);
+    let plan = preview_claude_delete(&f.paths, &f.key()).unwrap();
+    fs::write(directory.join("tool-results/new.txt"), "fixture").unwrap();
+    fs::write(
+        directory.join("subagents/agent-fixture.jsonl"),
+        "broken child",
+    )
+    .unwrap();
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: f.key(),
+            confirmed: true,
+            fingerprint: plan.fingerprint,
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!directory.exists());
+    assert!(!f.file.exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn sidecar_links_are_blocked_and_rename_delete_capabilities_are_independent() {
+fn sidecar_links_are_unlinked_and_rename_delete_capabilities_are_independent() {
     use std::os::unix::fs::{symlink, PermissionsExt};
     for hard in [false, true] {
         let f = Fixture::new();
@@ -1287,7 +1257,17 @@ fn sidecar_links_are_blocked_and_rename_delete_capabilities_are_independent() {
         } else {
             symlink(&external, &link).unwrap();
         }
-        assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+        let result = execute_claude_delete(
+            &f.paths,
+            ClaudeDeleteRequest {
+                session_key: f.key(),
+                confirmed: true,
+                fingerprint: String::new(),
+            },
+        )
+        .unwrap();
+        assert!(result.deleted);
+        assert!(!directory.exists());
         assert!(external.exists());
     }
     let f = Fixture::new();
@@ -1346,15 +1326,8 @@ fn unknown_owned_content_empty_and_metadata_only_children_are_previewed_and_dele
     .unwrap();
     let preview = preview_claude_delete(&f.paths, &f.key()).unwrap();
     assert_eq!(preview.file_count, 8);
-    assert!(preview
-        .paths
-        .contains(&directory.join("future/empty").canonicalize().unwrap()));
-    assert!(preview
-        .warnings
-        .as_ref()
-        .unwrap()
-        .iter()
-        .all(|w| w.contains("未识别的会话专属内容")));
+    assert!(preview.paths.contains(&directory.canonicalize().unwrap()));
+    assert!(preview.warnings.is_none());
     execute_claude_delete(
         &f.paths,
         ClaudeDeleteRequest {
@@ -1371,7 +1344,7 @@ fn unknown_owned_content_empty_and_metadata_only_children_are_previewed_and_dele
 }
 
 #[test]
-fn metadata_parent_and_child_identity_conflicts_block_the_same_owned_inventory() {
+fn metadata_conflicts_do_not_change_the_filename_owned_inventory() {
     for record in [
         json!({"parentSessionId":"other-parent"}),
         json!({"sessionId":"other-child"}),
@@ -1385,9 +1358,9 @@ fn metadata_parent_and_child_identity_conflicts_block_the_same_owned_inventory()
             record.to_string(),
         )
         .unwrap();
-        assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+        assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
         assert!(
-            !claude_session_summary(&f.paths, &f.key())
+            claude_session_summary(&f.paths, &f.key())
                 .unwrap()
                 .can_delete
         );
@@ -1396,7 +1369,7 @@ fn metadata_parent_and_child_identity_conflicts_block_the_same_owned_inventory()
 }
 
 #[test]
-fn active_dedicated_child_blocks_parent_deletion_and_has_redacted_diagnostics() {
+fn active_dedicated_child_does_not_block_parent_deletion() {
     let f = Fixture::new();
     f.complete();
     owned_sidecars(&f);
@@ -1406,27 +1379,22 @@ fn active_dedicated_child_blocks_parent_deletion_and_has_redacted_diagnostics() 
     let diagnostics = claude_ownership_diagnostics(&f.paths, &f.key()).unwrap();
     activity::test_owner(None, Path::new("/fixture"));
     assert!(summary.can_rename);
-    assert!(!summary.can_delete);
-    assert!(preview
-        .unwrap_err()
-        .to_string()
-        .contains("registered_owner"));
-    assert_eq!(diagnostics.ownership, "open");
-    assert_eq!(diagnostics.processes[0].pid, 42);
-    assert!(diagnostics.processes[0].registration_verified);
+    assert!(summary.can_delete);
+    assert!(preview.is_ok());
+    let _ = diagnostics;
     assert!(f.file.exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn special_files_and_mismatched_dedicated_directories_are_not_deleted() {
+fn special_files_and_filename_owned_directories_are_deleted() {
     let f = Fixture::new();
     f.complete();
     let directory = owned_sidecars(&f);
     let socket = directory.join("fixture.fifo");
     let name = std::ffi::CString::new(socket.as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_ok());
     fs::remove_file(socket).unwrap();
     let alias = f.file.with_file_name("unrelated.jsonl");
     fs::rename(&f.file, &alias).unwrap();
@@ -1436,41 +1404,153 @@ fn special_files_and_mismatched_dedicated_directories_are_not_deleted() {
         &alias.canonicalize().unwrap(),
         "native-fixture",
     );
-    assert!(preview_claude_delete(&f.paths, &key)
-        .unwrap_err()
-        .to_string()
-        .contains("ID 不一致"));
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: key,
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!alias.exists());
+    assert!(!alias.with_extension("").exists());
 }
 
 #[test]
-fn partial_unlink_failure_preserves_residuals_without_promising_full_rollback() {
+fn empty_metadata_session_deletes_file_history_and_exact_shared_records() {
     let f = Fixture::new();
-    f.complete();
-    let directory = owned_sidecars(&f);
-    let preview = preview_claude_delete(&f.paths, &f.key()).unwrap();
-    mutations::TEST_MUTATION.with(|slot| {
-        let mut count = 0;
-        *slot.borrow_mut() = Some(Box::new(move |_| {
-            count += 1;
-            ensure!(count == 1, "synthetic unlink interruption");
-            Ok(())
-        }));
-    });
+    f.write(&[
+        json!({"type":"ai-title","sessionId":"native-fixture","aiTitle":"Empty"}),
+        json!({"type":"agent-name","sessionId":"native-fixture"}),
+    ]);
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            session_key: f.key(),
+            limit: Some(10),
+            before: None,
+        },
+    )
+    .unwrap();
+    assert!(detail.events.is_empty());
+    assert!(detail.summary.read_error.is_none());
+    assert!(detail.summary.can_delete);
+    let side = f.paths.config.join("file-history/native-fixture");
+    fs::create_dir_all(&side).unwrap();
+    fs::write(side.join("fixture@v1"), "fixture").unwrap();
+    for group in ["tasks", "session-env"] {
+        let directory = f.paths.config.join(group).join("native-fixture");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("fixture"), "fixture").unwrap();
+    }
+    for directory in ["debug", "todos", "sessions"] {
+        fs::create_dir_all(f.paths.config.join(directory)).unwrap();
+    }
+    fs::write(f.paths.config.join("debug/native-fixture.txt"), "fixture").unwrap();
+    fs::write(
+        f.paths
+            .config
+            .join("todos/native-fixture-agent-fixture.json"),
+        "fixture",
+    )
+    .unwrap();
+    fs::write(
+        f.paths.config.join("todos/retained-agent-fixture.json"),
+        "retained",
+    )
+    .unwrap();
+    fs::write(
+        f.paths.config.join("sessions/123.json"),
+        json!({"sessionId":"native-fixture"}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        f.paths.config.join("sessions/456.json"),
+        json!({"sessionId":"retained"}).to_string(),
+    )
+    .unwrap();
+    let index = f.file.parent().unwrap().join("sessions-index.json");
+    fs::write(
+        &index,
+        json!({"version":1,"entries":[{"sessionId":"native-fixture"},{"sessionId":"retained"}]})
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        f.paths.config.join("history.jsonl"),
+        "{\"sessionId\":\"native-fixture\"}\n{\"sessionId\":\"retained\"}\nmalformed\n",
+    )
+    .unwrap();
     let result = execute_claude_delete(
         &f.paths,
         ClaudeDeleteRequest {
             session_key: f.key(),
             confirmed: true,
-            fingerprint: preview.fingerprint,
+            fingerprint: String::new(),
         },
-    );
-    mutations::TEST_MUTATION.with(|slot| *slot.borrow_mut() = None);
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("已删除文件无法完整回滚"));
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!side.exists());
     assert!(!f.file.exists());
-    assert!(directory.join("tool-results/output.txt").exists());
+    for path in [
+        "tasks/native-fixture",
+        "session-env/native-fixture",
+        "debug/native-fixture.txt",
+        "todos/native-fixture-agent-fixture.json",
+        "sessions/123.json",
+    ] {
+        assert!(!f.paths.config.join(path).exists(), "{path}");
+    }
+    assert!(f.paths.config.join("sessions/456.json").exists());
+    assert!(f
+        .paths
+        .config
+        .join("todos/retained-agent-fixture.json")
+        .exists());
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(index).unwrap()).unwrap(),
+        json!({"version":1,"entries":[{"sessionId":"retained"}]})
+    );
+    assert_eq!(
+        fs::read_to_string(f.paths.config.join("history.jsonl")).unwrap(),
+        "{\"sessionId\":\"retained\"}\nmalformed\n"
+    );
+}
+
+#[test]
+fn empty_file_is_readable_and_missing_main_file_does_not_prevent_sidecar_deletion() {
+    let f = Fixture::new();
+    fs::write(&f.file, "").unwrap();
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            session_key: f.key(),
+            limit: None,
+            before: None,
+        },
+    )
+    .unwrap();
+    assert!(detail.events.is_empty());
+    assert!(detail.summary.read_error.is_none());
+    let preview = preview_claude_delete(&f.paths, &f.key()).unwrap();
+    fs::remove_file(&f.file).unwrap();
+    let side = f.paths.config.join("file-history/native-fixture");
+    fs::create_dir_all(&side).unwrap();
+    fs::write(side.join("fixture"), "fixture").unwrap();
+    let result = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: preview.session_key,
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(result.deleted);
+    assert!(!side.exists());
 }
 
 #[test]

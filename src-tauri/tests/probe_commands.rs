@@ -163,7 +163,6 @@ fn tauri_cleanup_execute_services_are_native_effect_executors() {
         "hidden_delete_execute_with_state",
         ".cleanup()",
         ".execute_confirmed(",
-        ".validate_expected_count(",
         ".dry_run_archived(",
         ".execute_archived(",
         ".dry_run_hidden(",

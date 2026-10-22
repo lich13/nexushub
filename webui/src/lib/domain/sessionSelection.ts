@@ -14,7 +14,7 @@ export function syncSessionSelection(state: SessionSelectionState, scope: string
 
 export function addSessionSelection(state: SessionSelectionState, keys: string[]): SessionSelectionState {
   const combined = [...new Set([...state.keys, ...keys])];
-  return { ...state, selecting: true, keys: combined.slice(0, 100), notice: combined.length > 100 ? "最多选择 100 项，已保留前 100 项" : null };
+  return { ...state, selecting: true, keys: combined, notice: null };
 }
 
 export function clickSessionSelection(state: SessionSelectionState, visible: string[], key: string, click: SessionClick): SessionSelectionState {

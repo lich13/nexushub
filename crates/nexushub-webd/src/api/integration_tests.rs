@@ -415,7 +415,7 @@ async fn rpc_update_typed_commands_start_update_jobs() {
 }
 
 #[tokio::test]
-async fn rpc_cleanup_execute_requires_expected_count_confirmation() {
+async fn rpc_cleanup_execute_requires_confirmed_targets() {
     let (state, api_key) = authenticated_test_state();
     let app = router(state);
 
@@ -452,7 +452,7 @@ async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
         Some(&api_key),
     )
     .await;
-    assert_eq!(mismatched_count, StatusCode::BAD_REQUEST);
+    assert_eq!(mismatched_count, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -601,7 +601,6 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
         ".execute_archived(",
         ".dry_run_hidden(",
         ".execute_hidden(",
-        ".validate_expected_count(",
     ] {
         assert!(
             adapter_source.contains(required_adapter_landing),

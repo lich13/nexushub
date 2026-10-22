@@ -139,17 +139,17 @@ describe("archive delete API compatibility", () => {
     vi.resetModules();
   });
 
-  test("uses a typed confirmation payload with expected archive count", async () => {
+  test("uses a typed confirmation payload with explicit archive targets", async () => {
     const { startArchiveDelete } = await loadRealApi();
     const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({}));
     vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
-    await startArchiveDelete({ expectedCount: 3 });
+    await startArchiveDelete({ candidates: [{ id: "archive-fixture" }] });
 
     const call = rpcCall(invokeMock);
     expect(call.path).toBe("cleanup.archiveExecute");
 
-    expect(call.body).toEqual({ request: { confirmed: true, expectedCount: 3 } });
+    expect(call.body).toEqual({ request: { confirmed: true, candidates: [{ id: "archive-fixture" }] } });
   });
 
   test("uses hidden thread cleanup endpoints with dry-run and expected hidden count", async () => {
@@ -827,7 +827,7 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       expect(command).toBe("cleanup.archiveExecute");
-      expect(args).toEqual({ request: { confirmed: true, expectedCount: 0 } });
+      expect(args).toEqual({ request: { confirmed: true, candidates: [] } });
       return {
         before: {},
         deleted_threads: 0,
@@ -837,7 +837,7 @@ describe("archive delete API compatibility", () => {
       };
     });
 
-    await expect(startArchiveDelete({ expectedCount: 0 })).resolves.toMatchObject({ after_integrity: "ok" });
+    await expect(startArchiveDelete({ candidates: [] })).resolves.toMatchObject({ after_integrity: "ok" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

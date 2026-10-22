@@ -1,4 +1,4 @@
-//! Fingerprint-bound, recoverable management of explicitly selected Codex threads.
+//! Native Codex archive/restore rules and direct selected deletion.
 use crate::codex::{rollout_has_confirmed_inactive_state, rollout_has_running_signal, CodexPaths};
 use anyhow::{ensure, Context, Result};
 use rusqlite::{types::ValueRef, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
@@ -13,25 +13,6 @@ use std::{
     sync::Mutex,
 };
 
-#[cfg(test)]
-mod maintenance_tests;
-
-#[cfg(test)]
-type MutationHook = Box<dyn FnMut(&str, &Path) -> Result<()>>;
-#[cfg(test)]
-thread_local! {
-    static TEST_MUTATION_HOOK: std::cell::RefCell<Option<MutationHook>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn mutation_checkpoint(stage: &str, quarantine: &Path) -> Result<()> {
-    TEST_MUTATION_HOOK.with(|slot| match slot.borrow_mut().as_mut() {
-        Some(hook) => hook(stage, quarantine),
-        None => Ok(()),
-    })
-}
-
-mod preview_context;
-pub(crate) use preview_context::PreviewContext;
 pub mod tree;
 
 static MUTATION_LOCK: Mutex<()> = Mutex::new(());
@@ -60,61 +41,14 @@ pub(crate) fn open(paths: &CodexPaths, writable: bool) -> Result<Connection> {
     Ok(conn)
 }
 
-#[cfg(test)]
-pub fn preview(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
-    snapshot(paths, &open(paths, false)?, id, Some(true))
-}
-
-/// Preview a permanent delete for either a normal or archived main Codex thread.
-#[cfg(test)]
-pub fn preview_delete(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
-    snapshot(paths, &open(paths, false)?, id, None)
-}
-
-#[cfg(test)]
-pub(crate) fn preview_hidden(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
-    let conn = open(paths, false)?;
-    ensure!(
-        crate::archive::hidden_candidate_ids(&conn)?.contains(id),
-        "线程不再是可清理的隐藏线程"
-    );
-    snapshot(paths, &conn, id, Some(false))
-}
-
 fn snapshot(
     paths: &CodexPaths,
     conn: &Connection,
     id: &str,
     expected_archived: Option<bool>,
 ) -> Result<SelectedCodexPreview> {
-    snapshot_with_context(
-        paths,
-        conn,
-        id,
-        expected_archived,
-        None,
-        &crate::scan_work::ScanWork::default(),
-    )
-}
-
-fn snapshot_with_context(
-    paths: &CodexPaths,
-    conn: &Connection,
-    id: &str,
-    expected_archived: Option<bool>,
-    shared: Option<&PreviewContext>,
-    work: &crate::scan_work::ScanWork,
-) -> Result<SelectedCodexPreview> {
-    use std::borrow::Cow;
-    work.check()?;
-    let columns = match shared {
-        Some(context) => Cow::Borrowed(&context.columns),
-        None => Cow::Owned(crate::archive::table_columns(conn, "threads")?),
-    };
-    let row = match shared {
-        Some(context) => Cow::Borrowed(context.rows.get(id).context("线程不存在")?),
-        None => Cow::Owned(row_value(conn, "threads", "id", id)?.context("线程不存在")?),
-    };
+    let columns = crate::archive::table_columns(conn, "threads")?;
+    let row = row_value(conn, "threads", "id", id)?.context("线程不存在")?;
     let archived = row.get("archived").and_then(Value::as_i64).unwrap_or(0) != 0
         || row.get("archived_at").and_then(Value::as_i64).unwrap_or(0) > 0;
     if let Some(expected_archived) = expected_archived {
@@ -134,7 +68,7 @@ fn snapshot_with_context(
         ensure!(
             row.get(field)
                 .is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())),
-            "线程仍有活动任务，暂不能删除"
+            "线程仍有活动任务，暂不能归档或恢复"
         );
     }
     for field in ["status", "state"] {
@@ -160,7 +94,7 @@ fn snapshot_with_context(
                         | "pending"
                         | "submitting"
                 ),
-                "线程活动状态无法确认，暂不能删除"
+                "线程活动状态无法确认，暂不能归档或恢复"
             );
         }
         ensure!(
@@ -170,37 +104,23 @@ fn snapshot_with_context(
                     s.to_ascii_lowercase().as_str(),
                     "running" | "active" | "in_progress" | "inprogress" | "pending" | "submitting"
                 )),
-            "线程仍在运行，暂不能删除"
+            "线程仍在运行，暂不能归档或恢复"
         );
     }
-    if let Some(context) = shared {
-        ensure!(
-            !context.active.contains(id),
-            "线程仍有关联的运行任务，暂不能删除"
-        );
-    } else {
-        for (table, key) in [
-            ("jobs", "thread_id"),
-            ("agent_job_items", "assigned_thread_id"),
-        ] {
-            let cols = crate::archive::table_columns(conn, table)?;
-            if cols.contains(key) && cols.contains("status") {
-                let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
-                ensure!(!active, "线程仍有关联的运行任务，暂不能删除");
-            }
+    for (table, key) in [
+        ("jobs", "thread_id"),
+        ("agent_job_items", "assigned_thread_id"),
+    ] {
+        let cols = crate::archive::table_columns(conn, table)?;
+        if cols.contains(key) && cols.contains("status") {
+            let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
+            ensure!(!active, "线程仍有关联的运行任务，暂不能归档或恢复");
         }
     }
-    let owned_index;
-    let empty_index = Vec::new();
-    let index_rows = if let Some(context) = shared {
-        context.index.get(id).unwrap_or(&empty_index)
-    } else {
-        owned_index = read_index(paths)?
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .collect::<Vec<_>>();
-        &owned_index
-    };
+    let index_rows = &read_index(paths)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
     let mut files = BTreeSet::new();
     if let Some(path) = row
         .get("rollout_path")
@@ -220,27 +140,21 @@ fn snapshot_with_context(
             }
         }
     }
-    if let Some(context) = shared {
-        if let Some(discovered) = context.files.get(id) {
-            files.extend(discovered.iter().cloned());
+    // Only known native stores and exact filename suffixes may supply additional files.
+    for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
+        if !root.exists() {
+            continue;
         }
-    } else {
-        // Only known native stores and exact filename suffixes may supply additional files.
-        for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
-            if !root.exists() {
-                continue;
-            }
-            ensure_safe_path(&paths.home, &root)?;
-            for entry in walkdir::WalkDir::new(&root).follow_links(false) {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy();
-                if name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl")) {
-                    files.insert(entry.path().to_path_buf());
-                }
+        ensure_safe_path(&paths.home, &root)?;
+        for entry in walkdir::WalkDir::new(&root).follow_links(false) {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy();
+            if name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl")) {
+                files.insert(entry.path().to_path_buf());
             }
         }
     }
-    ensure!(!files.is_empty(), "缺少可验证的线程文件，暂不能删除");
+    ensure!(!files.is_empty(), "缺少可验证的线程文件，暂不能归档或恢复");
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(&row)?);
     let mut bytes = 0;
@@ -257,54 +171,43 @@ fn snapshot_with_context(
         );
         ensure_safe_path(&paths.home, file)?;
         let actual = fs::canonicalize(file)?;
-        if shared.is_none() {
-            ensure!(
-                session_header_id(file)?.as_deref() == Some(id),
-                "线程文件身份与选中 ID 不一致"
-            );
-            ensure!(
-                !rollout_has_running_signal(file)?,
-                "线程文件仍有运行信号，暂不能删除"
-            );
-            ensure!(
-                rollout_has_confirmed_inactive_state(file)?,
-                "线程终态无法确认，暂不能删除"
-            );
-        }
-        if let Some(context) = shared {
-            ensure!(
-                context
-                    .references
-                    .get(&actual)
-                    .is_none_or(|ids| ids.iter().all(|other| other == id)),
-                "文件仍被其他线程引用"
-            );
-        } else {
-            if columns.contains("rollout_path") {
-                let mut stmt = conn.prepare(
-                    "SELECT rollout_path FROM threads WHERE id != ?1 AND rollout_path IS NOT NULL",
-                )?;
-                for path in stmt.query_map([id], |r| r.get::<_, String>(0))? {
-                    ensure!(
-                        !fs::canonicalize(path?).is_ok_and(|p| p == actual),
-                        "文件仍被其他线程引用"
-                    );
-                }
+
+        ensure!(
+            session_header_id(file)?.as_deref() == Some(id),
+            "线程文件身份与选中 ID 不一致"
+        );
+        ensure!(
+            !rollout_has_running_signal(file)?,
+            "线程文件仍有运行信号，暂不能归档或恢复"
+        );
+        ensure!(
+            rollout_has_confirmed_inactive_state(file)?,
+            "线程终态无法确认，暂不能归档或恢复"
+        );
+        if columns.contains("rollout_path") {
+            let mut stmt = conn.prepare(
+                "SELECT rollout_path FROM threads WHERE id != ?1 AND rollout_path IS NOT NULL",
+            )?;
+            for path in stmt.query_map([id], |r| r.get::<_, String>(0))? {
+                ensure!(
+                    !fs::canonicalize(path?).is_ok_and(|p| p == actual),
+                    "文件仍被其他线程引用"
+                );
             }
-            for entry in index_rows {
-                if entry.get("id").and_then(Value::as_str) == Some(id) {
-                    continue;
-                }
-                if let Some(path) = entry
-                    .get("path")
-                    .or_else(|| entry.get("rollout_path"))
-                    .and_then(Value::as_str)
-                {
-                    ensure!(
-                        !fs::canonicalize(path).is_ok_and(|p| p == actual),
-                        "文件仍被其他线程索引引用"
-                    );
-                }
+        }
+        for entry in index_rows {
+            if entry.get("id").and_then(Value::as_str) == Some(id) {
+                continue;
+            }
+            if let Some(path) = entry
+                .get("path")
+                .or_else(|| entry.get("rollout_path"))
+                .and_then(Value::as_str)
+            {
+                ensure!(
+                    !fs::canonicalize(path).is_ok_and(|p| p == actual),
+                    "文件仍被其他线程索引引用"
+                );
             }
         }
         let metadata = fs::metadata(file)?;
@@ -312,18 +215,17 @@ fn snapshot_with_context(
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            ensure!(metadata.nlink() == 1, "线程文件有其他硬链接，暂不能删除");
+            ensure!(
+                metadata.nlink() == 1,
+                "线程文件有其他硬链接，暂不能归档或恢复"
+            );
             digest.update(metadata.ino().to_le_bytes());
             digest.update(metadata.dev().to_le_bytes());
             digest.update(metadata.ctime().to_le_bytes());
             digest.update(metadata.ctime_nsec().to_le_bytes());
         }
         digest.update(file.as_os_str().as_encoded_bytes());
-        let hash = if shared.is_some() {
-            crate::codex::rollout_delete_evidence(file, id, work)?
-        } else {
-            content_hash(file)?
-        };
+        let hash = content_hash(file)?;
         let after = fs::metadata(file)?;
         ensure!(
             metadata.len() == after.len() && metadata.modified()? == after.modified()?,
@@ -465,7 +367,7 @@ fn read_index(paths: &CodexPaths) -> Result<String> {
     ensure_safe_path(&paths.home, &path)?;
     let text = fs::read_to_string(path)?;
     for line in text.lines().filter(|s| !s.trim().is_empty()) {
-        serde_json::from_str::<Value>(line).context("会话索引损坏，暂不能删除")?;
+        serde_json::from_str::<Value>(line).context("会话索引损坏，暂不能归档或恢复")?;
     }
     Ok(text)
 }
@@ -495,814 +397,4 @@ fn read_row_value(row: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result
         values.insert(name.clone(), value);
     }
     Ok(Value::Object(values))
-}
-
-// SQLite triggers must not turn a selected deletion into a cascade. Compare
-// every unselected thread row inside the same transaction before committing.
-fn retained_thread_fingerprint(conn: &Connection, selected_id: &str) -> Result<Vec<u8>> {
-    let mut stmt = conn.prepare("SELECT * FROM threads WHERE id != ?1 ORDER BY id")?;
-    let columns = stmt.column_count();
-    let mut rows = stmt.query([selected_id])?;
-    let mut digest = Sha256::new();
-    while let Some(row) = rows.next()? {
-        for column in 0..columns {
-            let value = format!("{:?}", row.get_ref(column)?);
-            digest.update((value.len() as u64).to_le_bytes());
-            digest.update(value.as_bytes());
-        }
-    }
-    Ok(digest.finalize().to_vec())
-}
-
-#[cfg(test)]
-pub fn execute(paths: &CodexPaths, id: &str, fingerprint: &str) -> Result<u64> {
-    execute_with_expected_archive(paths, id, fingerprint, Some(true))
-}
-
-/// Execute a permanent delete for either a normal or archived main Codex thread.
-#[cfg(test)]
-pub fn execute_delete(paths: &CodexPaths, id: &str, fingerprint: &str) -> Result<u64> {
-    execute_with_expected_archive(paths, id, fingerprint, None)
-}
-
-#[cfg(test)]
-fn execute_with_expected_archive(
-    paths: &CodexPaths,
-    id: &str,
-    fingerprint: &str,
-    expected_archived: Option<bool>,
-) -> Result<u64> {
-    let _guard = MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
-    execute_with_expected_archive_locked(paths, id, fingerprint, expected_archived)
-}
-
-fn execute_with_expected_archive_locked(
-    paths: &CodexPaths,
-    id: &str,
-    fingerprint: &str,
-    expected_archived: Option<bool>,
-) -> Result<u64> {
-    let mut conn = open(paths, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let selected = snapshot(paths, &tx, id, expected_archived)?;
-    ensure!(
-        selected.fingerprint == fingerprint,
-        "线程或文件已变化，请重新预览"
-    );
-    let hashes = selected
-        .paths
-        .iter()
-        .map(|p| content_hash(p))
-        .collect::<Result<Vec<_>>>()?;
-    let identities = selected
-        .paths
-        .iter()
-        .map(fs::symlink_metadata)
-        .collect::<std::io::Result<Vec<_>>>()?;
-    let original_index = read_index(paths)?;
-    ensure!(
-        snapshot(paths, &tx, id, expected_archived)?.fingerprint == fingerprint,
-        "线程在执行检查期间变化，请重新预览"
-    );
-    let index_existed = paths.session_index().exists();
-    let rewritten_index = original_index
-        .split_inclusive('\n')
-        .filter(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|v| v.get("id").and_then(Value::as_str).map(|s| s != id))
-                .unwrap_or(true)
-        })
-        .collect::<String>();
-    let quarantine = paths
-        .home
-        .join(format!(".nexushub-delete-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&quarantine)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&quarantine, fs::Permissions::from_mode(0o700))?;
-    }
-    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut index_replaced = false;
-    let result = (|| -> Result<()> {
-        fs::write(
-            quarantine.join("thread.json"),
-            serde_json::to_vec_pretty(&row_value(&tx, "threads", "id", id)?)?,
-        )?;
-        fs::write(quarantine.join("index.before"), original_index.as_bytes())?;
-        if index_existed {
-            fs::set_permissions(
-                quarantine.join("index.before"),
-                fs::metadata(paths.session_index())?.permissions(),
-            )?;
-        }
-        fs::write(
-            quarantine.join("manifest.json"),
-            serde_json::to_vec_pretty(&selected)?,
-        )?;
-        for (i, file) in selected.paths.iter().enumerate() {
-            ensure_safe_path(&paths.home, file)?;
-            let staged = quarantine.join(format!("rollout-{i}.jsonl"));
-            fs::rename(file, &staged)?;
-            moved.push((file.clone(), staged));
-        }
-        #[cfg(test)]
-        mutation_checkpoint("moved", &quarantine)?;
-        for (i, (original, staged)) in moved.iter().enumerate() {
-            ensure!(
-                fs::symlink_metadata(original)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
-                "原线程路径重新出现，暂不能删除"
-            );
-            let staged_identity = fs::symlink_metadata(staged)?;
-            ensure!(staged_identity.is_file(), "隔离后目标不是普通文件");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                ensure!(
-                    (
-                        staged_identity.dev(),
-                        staged_identity.ino(),
-                        staged_identity.nlink()
-                    ) == (identities[i].dev(), identities[i].ino(), 1),
-                    "隔离后文件身份发生变化，请重新预览"
-                );
-            }
-            ensure!(
-                staged_identity.len() == identities[i].len()
-                    && staged_identity.modified()? == identities[i].modified()?,
-                "隔离后文件发生变化，请重新预览"
-            );
-            ensure!(
-                !fs::symlink_metadata(staged)?.file_type().is_symlink(),
-                "隔离后文件变为符号链接"
-            );
-            ensure!(
-                content_hash(staged)? == hashes[i],
-                "隔离后文件发生变化，请重新预览"
-            );
-            ensure!(
-                rollout_has_confirmed_inactive_state(staged)?,
-                "隔离后无法确认线程已结束"
-            );
-        }
-        #[cfg(test)]
-        mutation_checkpoint("quarantined", &quarantine)?;
-        ensure!(
-            read_index(paths)? == original_index,
-            "会话索引已被其他进程修改，请重新预览"
-        );
-        if index_existed {
-            let candidate = quarantine.join("index.next");
-            fs::write(&candidate, rewritten_index.as_bytes())?;
-            fs::set_permissions(
-                &candidate,
-                fs::metadata(paths.session_index())?.permissions(),
-            )?;
-            fs::File::open(&candidate)?.sync_all()?;
-            ensure_safe_path(&paths.home, &paths.session_index())?;
-            ensure!(
-                read_index(paths)? == original_index,
-                "会话索引已变化，请重新预览"
-            );
-            fs::rename(candidate, paths.session_index())?;
-            index_replaced = true;
-        }
-        #[cfg(test)]
-        mutation_checkpoint("index_replaced", &quarantine)?;
-        let retained = retained_thread_fingerprint(&tx, id)?;
-        crate::archive::prepare_delete_threads(&tx, &[id.to_string()])?;
-        crate::archive::cleanup_selected_threads(&tx)?;
-        ensure!(
-            retained_thread_fingerprint(&tx, id)? == retained,
-            "数据库关联会影响未选中线程，已阻止删除"
-        );
-        ensure!(
-            read_index(paths)? == rewritten_index,
-            "删除期间会话索引发生变化"
-        );
-        #[cfg(test)]
-        mutation_checkpoint("before_commit", &quarantine)?;
-        tx.commit()?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        let mut restored = true;
-        for (original, staged) in moved.iter().rev() {
-            if original.exists() || fs::rename(staged, original).is_err() {
-                restored = false;
-            }
-        }
-        if index_replaced {
-            if read_index(paths).is_ok_and(|s| s == rewritten_index) {
-                if fs::rename(quarantine.join("index.before"), paths.session_index()).is_err() {
-                    restored = false;
-                }
-            } else {
-                restored = false;
-            }
-        }
-        if restored {
-            fs::remove_dir_all(&quarantine)?;
-            return Err(error.context("删除失败，文件及数据库已恢复"));
-        }
-        return Err(error.context(format!(
-            "删除未完成；可恢复数据保留在 {}",
-            quarantine.display()
-        )));
-    }
-    fs::remove_dir_all(&quarantine).with_context(|| {
-        format!(
-            "线程记录已删除，待清理的可恢复文件保留在 {}",
-            quarantine.display()
-        )
-    })?;
-    Ok(selected.bytes)
-}
-
-/// One transaction for the preview-bound batch. Recoverable item failures are
-/// rolled back to their savepoint; a shared database/index failure restores
-/// every staged file and the original index before returning an error.
-pub(crate) fn execute_hidden_batch(
-    paths: &CodexPaths,
-    candidates: &[crate::archive::HiddenThreadSelection],
-) -> Result<(Vec<crate::archive::HiddenThreadItemResult>, u64)> {
-    use crate::archive::HiddenThreadItemResult;
-    let mut seen = BTreeSet::new();
-    ensure!(candidates.len() <= 10_000, "候选过多，请分批清理");
-    for candidate in candidates {
-        ensure!(
-            !candidate.id.trim().is_empty() && candidate.id.len() <= 256,
-            "无效的线程定位键"
-        );
-        ensure!(seen.insert(candidate.id.clone()), "候选中有重复线程");
-    }
-    let _guard = MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
-    let mut conn = open(paths, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let integrity: String = tx.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-    ensure!(integrity == "ok", "数据库完整性检查失败，未执行清理");
-    let hidden = crate::archive::hidden_candidate_ids(&tx)?;
-    let original_index = read_index(paths)?;
-    let index_existed = paths.session_index().exists();
-    let quarantine = paths
-        .home
-        .join(format!(".nexushub-hidden-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&quarantine)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&quarantine, fs::Permissions::from_mode(0o700))?;
-    }
-    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut staged_hashes: Vec<Vec<u8>> = Vec::new();
-    let mut deleted = BTreeSet::new();
-    let mut items = Vec::new();
-    let mut index_replaced = false;
-    let mut rewritten_index = original_index.clone();
-    let result = (|| -> Result<()> {
-        fs::write(quarantine.join("index.before"), original_index.as_bytes())?;
-        if index_existed {
-            fs::set_permissions(
-                quarantine.join("index.before"),
-                fs::metadata(paths.session_index())?.permissions(),
-            )?;
-        }
-        for (ordinal, candidate) in candidates.iter().enumerate() {
-            let selected = (|| -> Result<SelectedCodexPreview> {
-                ensure!(
-                    hidden.contains(&candidate.id),
-                    "线程已不存在、已归档或不再隐藏"
-                );
-                let fingerprint = candidate
-                    .fingerprint
-                    .as_deref()
-                    .context("预览时不可清理，请重新扫描")?;
-                let selected = snapshot(paths, &tx, &candidate.id, Some(false))?;
-                ensure!(
-                    selected.fingerprint == fingerprint,
-                    "线程或文件已变化，请重新扫描"
-                );
-                Ok(selected)
-            })();
-            let selected = match selected {
-                Ok(selected) => selected,
-                Err(error) => {
-                    // Integrity/index failures affect the entire batch, not one file.
-                    let integrity: String = tx.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-                    ensure!(integrity == "ok", "数据库完整性检查失败");
-                    ensure!(
-                        read_index(paths)? == original_index,
-                        "会话索引已变化，请重新扫描"
-                    );
-                    items.push(HiddenThreadItemResult {
-                        id: candidate.id.clone(),
-                        status: "skipped".into(),
-                        reason: Some(error.to_string()),
-                    });
-                    continue;
-                }
-            };
-            ensure!(
-                read_index(paths)? == original_index,
-                "会话索引已变化，请重新扫描"
-            );
-            let start = moved.len();
-            tx.execute_batch("SAVEPOINT hidden_item")?;
-            let item_result = (|| -> Result<()> {
-                fs::write(
-                    quarantine.join(format!("thread-{ordinal}.json")),
-                    serde_json::to_vec(&row_value(&tx, "threads", "id", &candidate.id)?)?,
-                )?;
-                let hashes = selected
-                    .paths
-                    .iter()
-                    .map(|file| content_hash(file))
-                    .collect::<Result<Vec<_>>>()?;
-                ensure!(
-                    snapshot(paths, &tx, &candidate.id, Some(false))?.fingerprint
-                        == selected.fingerprint,
-                    "线程在执行检查期间变化，请重新扫描"
-                );
-                for (i, file) in selected.paths.iter().enumerate() {
-                    ensure_safe_path(&paths.home, file)?;
-                    let staged = quarantine.join(format!("rollout-{ordinal}-{i}.jsonl"));
-                    fs::rename(file, &staged)?;
-                    moved.push((file.clone(), staged.clone()));
-                    staged_hashes.push(hashes[i].clone());
-                    ensure!(
-                        !fs::symlink_metadata(&staged)?.file_type().is_symlink(),
-                        "隔离文件身份已变化"
-                    );
-                    ensure!(content_hash(&staged)? == hashes[i], "隔离文件内容已变化");
-                    ensure!(
-                        rollout_has_confirmed_inactive_state(&staged)?,
-                        "隔离后无法确认线程已结束"
-                    );
-                }
-                let retained = retained_thread_fingerprint(&tx, &candidate.id)?;
-                crate::archive::prepare_delete_threads(&tx, std::slice::from_ref(&candidate.id))?;
-                crate::archive::cleanup_selected_threads(&tx)?;
-                ensure!(
-                    retained_thread_fingerprint(&tx, &candidate.id)? == retained,
-                    "数据库关联会影响未选中线程，已阻止删除"
-                );
-                Ok(())
-            })();
-            match item_result {
-                Ok(()) => {
-                    tx.execute_batch("RELEASE hidden_item")?;
-                    deleted.insert(candidate.id.clone());
-                    items.push(HiddenThreadItemResult {
-                        id: candidate.id.clone(),
-                        status: "deleted".into(),
-                        reason: None,
-                    });
-                }
-                Err(error) => {
-                    tx.execute_batch("ROLLBACK TO hidden_item; RELEASE hidden_item")?;
-                    for (original, staged) in moved[start..].iter().rev() {
-                        ensure!(!original.try_exists()?, "文件恢复路径被占用，停止本批清理");
-                        fs::rename(staged, original).context("无法恢复单项文件，停止本批清理")?;
-                    }
-                    moved.truncate(start);
-                    staged_hashes.truncate(start);
-                    if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
-                        matches!(
-                            e.kind(),
-                            std::io::ErrorKind::StorageFull
-                                | std::io::ErrorKind::ReadOnlyFilesystem
-                        ) || e.raw_os_error() == Some(5)
-                    }) {
-                        return Err(error.context("公共存储故障，本批已回滚"));
-                    }
-                    if let Some(db_error) = error.downcast_ref::<rusqlite::Error>() {
-                        if !matches!(db_error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation)
-                        {
-                            return Err(error.context("数据库操作失败，本批已回滚"));
-                        }
-                    }
-                    let check: String = tx.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-                    ensure!(check == "ok", "数据库完整性检查失败");
-                    ensure!(
-                        read_index(paths)? == original_index,
-                        "会话索引已变化，请重新扫描"
-                    );
-                    items.push(HiddenThreadItemResult {
-                        id: candidate.id.clone(),
-                        status: "failed".into(),
-                        reason: Some(error.to_string()),
-                    });
-                }
-            }
-        }
-        for ((original, staged), hash) in moved.iter().zip(&staged_hashes) {
-            ensure!(
-                !original.try_exists()?,
-                "清理期间线程文件重新出现，请重新扫描"
-            );
-            ensure!(
-                !fs::symlink_metadata(staged)?.file_type().is_symlink()
-                    && content_hash(staged)? == *hash,
-                "提交前隔离文件已变化"
-            );
-            ensure!(
-                rollout_has_confirmed_inactive_state(staged)?,
-                "提交前无法确认线程已结束"
-            );
-        }
-        if !deleted.is_empty() {
-            rewritten_index = original_index
-                .split_inclusive(char::from(10))
-                .filter(|line| {
-                    serde_json::from_str::<Value>(line)
-                        .ok()
-                        .and_then(|v| {
-                            v.get("id")
-                                .and_then(Value::as_str)
-                                .map(|id| !deleted.contains(id))
-                        })
-                        .unwrap_or(true)
-                })
-                .collect();
-            ensure!(
-                read_index(paths)? == original_index,
-                "会话索引已变化，请重新扫描"
-            );
-            fs::write(
-                quarantine.join("manifest.json"),
-                serde_json::to_vec(&moved)?,
-            )?;
-            if index_existed {
-                let next = quarantine.join("index.next");
-                fs::write(&next, rewritten_index.as_bytes())?;
-                fs::set_permissions(&next, fs::metadata(paths.session_index())?.permissions())?;
-                fs::File::open(&next)?.sync_all()?;
-                ensure_safe_path(&paths.home, &paths.session_index())?;
-                ensure!(read_index(paths)? == original_index, "替换前会话索引已变化");
-                fs::rename(next, paths.session_index())?;
-                index_replaced = true;
-            }
-            ensure!(
-                read_index(paths)? == rewritten_index,
-                "删除期间会话索引已变化"
-            );
-        }
-        let integrity: String = tx.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-        ensure!(integrity == "ok", "删除后的数据库完整性检查失败");
-        tx.commit()?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        let mut restored = true;
-        for (original, staged) in moved.iter().rev() {
-            if staged.exists() && (original.exists() || fs::rename(staged, original).is_err()) {
-                restored = false;
-            }
-        }
-        if index_replaced
-            && (!read_index(paths).is_ok_and(|s| s == rewritten_index)
-                || fs::rename(quarantine.join("index.before"), paths.session_index()).is_err())
-        {
-            restored = false;
-        }
-        if restored {
-            fs::remove_dir_all(&quarantine)?;
-            return Err(error.context("本批清理已回滚"));
-        }
-        return Err(error.context(format!(
-            "本批清理已停止，恢复材料保留在 {}",
-            quarantine.display()
-        )));
-    }
-    let deleted_files = moved.len() as u64;
-    fs::remove_dir_all(&quarantine)
-        .with_context(|| format!("清理已提交，待删除暂存保留在 {}", quarantine.display()))?;
-    Ok((items, deleted_files))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite::params;
-    use serde_json::json;
-    struct Fixture {
-        paths: CodexPaths,
-    }
-    impl Fixture {
-        fn new() -> Self {
-            let home =
-                std::env::temp_dir().join(format!("selected-codex-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(home.join("archived_sessions")).unwrap();
-            let paths = CodexPaths { home };
-            let conn = Connection::open(paths.state_db()).unwrap();
-            conn.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,source TEXT,rollout_path TEXT,archived INTEGER,status TEXT,parent_thread_id TEXT,archived_at INTEGER);
-                CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);
-                CREATE TABLE thread_dynamic_tools(thread_id TEXT);
-                CREATE TABLE agent_job_items(id TEXT,assigned_thread_id TEXT,status TEXT);").unwrap();
-            for id in ["one", "two", "child", "active"] {
-                let file = paths
-                    .home
-                    .join("archived_sessions")
-                    .join(format!("rollout-test-{id}.jsonl"));
-                fs::write(
-                    &file,
-                    format!(
-                        "{}\n{}\n{}\n",
-                        json!({"type":"session_meta","payload":{"id":id}}),
-                        json!({"type":"turn_started","turn_id":"t"}),
-                        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"t"}})
-                    ),
-                )
-                .unwrap();
-                conn.execute(
-                    "INSERT INTO threads VALUES(?1,?1,'cli',?2,?3,'idle',?4,NULL)",
-                    params![
-                        id,
-                        file.display().to_string(),
-                        if id == "active" { 0 } else { 1 },
-                        if id == "child" { Some("one") } else { None }
-                    ],
-                )
-                .unwrap();
-            }
-            conn.execute("INSERT INTO thread_spawn_edges VALUES('one','child')", [])
-                .unwrap();
-            conn.execute("INSERT INTO thread_dynamic_tools VALUES('one')", [])
-                .unwrap();
-            conn.execute(
-                "INSERT INTO agent_job_items VALUES('j','one','completed')",
-                [],
-            )
-            .unwrap();
-            fs::write(
-                paths.session_index(),
-                ["one", "two", "child", "active"]
-                    .map(|id| json!({"id":id,"thread_name":id}).to_string() + "\n")
-                    .concat(),
-            )
-            .unwrap();
-            Self { paths }
-        }
-        fn file(&self, id: &str) -> PathBuf {
-            self.paths
-                .home
-                .join("archived_sessions")
-                .join(format!("rollout-test-{id}.jsonl"))
-        }
-        fn conn(&self) -> Connection {
-            Connection::open(self.paths.state_db()).unwrap()
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.paths.home).unwrap();
-        }
-    }
-    #[test]
-    fn batch_archive_restore_delete_rechecks_state_and_returns_per_item_results() {
-        use crate::services::sessions::*;
-        let f = Fixture::new();
-        let api = SessionUseCases {
-            claude: crate::claude::ClaudePaths::default_for_user(),
-            platform: crate::platform::PlatformPaths::for_kind(
-                crate::platform::PlatformKind::Macos,
-            ),
-            codex: f.paths.clone(),
-            grok: crate::grok::GrokPaths {
-                home: f.paths.home.join("unused-grok"),
-            },
-        };
-        let first = api
-            .bulk_preview(SessionBatchRequest {
-                include_descendants: false,
-                provider: SessionProvider::Codex,
-                operation: SessionOperation::Archive,
-                session_keys: vec!["active".into(), "one".into()],
-            })
-            .unwrap();
-        assert!(first.items[0].allowed);
-        assert!(!first.items[1].allowed);
-        let request = SessionBatchExecuteRequest {
-            include_descendants: false,
-            provider: SessionProvider::Codex,
-            operation: SessionOperation::Archive,
-            confirmed: true,
-            items: vec![SessionBatchSelection {
-                session_key: "active".into(),
-                fingerprint: first.items[0].fingerprint.clone().unwrap(),
-            }],
-        };
-        assert_eq!(
-            api.bulk_execute(request.clone()).unwrap().items[0].status,
-            "succeeded"
-        );
-        assert_eq!(
-            api.bulk_execute(request).unwrap().items[0].status,
-            "blocked"
-        );
-        let restore = preview_archive(&f.paths, "active", false).unwrap();
-        execute_archive(&f.paths, "active", false, &restore.fingerprint).unwrap();
-        assert!(preview(&f.paths, "active").is_err());
-        // An older client must explicitly opt in before a native subtree can
-        // be deleted. Full native deletion behavior uses UUID fixtures below.
-        let deletion = api
-            .bulk_preview(SessionBatchRequest {
-                include_descendants: false,
-                provider: SessionProvider::Codex,
-                operation: SessionOperation::Delete,
-                session_keys: vec!["one".into()],
-            })
-            .unwrap();
-        assert!(!deletion.items[0].allowed);
-        assert!(deletion.items[0].reason.as_ref().unwrap().contains("后代"));
-        assert!(api
-            .bulk_preview(SessionBatchRequest {
-                include_descendants: false,
-                provider: SessionProvider::Codex,
-                operation: SessionOperation::Delete,
-                session_keys: vec!["one".into(); 101]
-            })
-            .is_err());
-        assert!(api
-            .bulk_preview(SessionBatchRequest {
-                include_descendants: false,
-                provider: SessionProvider::Grok,
-                operation: SessionOperation::Archive,
-                session_keys: vec!["one".into()]
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn selected_deletion_preserves_unselected_child_and_active_threads() {
-        let f = Fixture::new();
-        f.conn()
-            .execute(
-                "UPDATE threads SET archived=0, archived_at=NULL WHERE id='one'",
-                [],
-            )
-            .unwrap();
-        for id in ["one", "two"] {
-            let plan = preview_delete(&f.paths, id).unwrap();
-            execute_delete(&f.paths, id, &plan.fingerprint).unwrap();
-        }
-        let ids = f
-            .conn()
-            .prepare("SELECT id FROM threads ORDER BY id")
-            .unwrap()
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        assert_eq!(ids, vec!["active", "child"]);
-        assert!(f.file("child").is_file());
-        assert!(f.file("active").is_file());
-        assert!(!f.file("one").exists());
-        assert!(!f.file("two").exists());
-        assert!(read_index(&f.paths).unwrap().contains("child"));
-        assert!(!read_index(&f.paths).unwrap().contains("one"));
-        assert!(f
-            .conn()
-            .query_row("SELECT assigned_thread_id FROM agent_job_items", [], |r| {
-                r.get::<_, Option<String>>(0)
-            })
-            .unwrap()
-            .is_none());
-        assert!(preview(&f.paths, "active").is_err());
-        assert!(preview_delete(&f.paths, "one").is_err());
-    }
-    #[test]
-    fn changed_fingerprint_shared_reference_and_live_jobs_are_blocked() {
-        let f = Fixture::new();
-        let p = preview(&f.paths, "one").unwrap();
-        use std::io::Write;
-        fs::OpenOptions::new()
-            .append(true)
-            .open(f.file("one"))
-            .unwrap()
-            .write_all(b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n")
-            .unwrap();
-        assert!(execute(&f.paths, "one", &p.fingerprint).is_err());
-        assert!(f.file("one").exists());
-        f.conn()
-            .execute(
-                "UPDATE threads SET rollout_path=?1 WHERE id='two'",
-                [f.file("one").display().to_string()],
-            )
-            .unwrap();
-        assert!(preview(&f.paths, "one")
-            .unwrap_err()
-            .to_string()
-            .contains("引用"));
-        f.conn()
-            .execute(
-                "UPDATE threads SET rollout_path=?1 WHERE id='two'",
-                [f.file("two").display().to_string()],
-            )
-            .unwrap();
-        f.conn()
-            .execute("UPDATE agent_job_items SET status='running'", [])
-            .unwrap();
-        assert!(preview(&f.paths, "one")
-            .unwrap_err()
-            .to_string()
-            .contains("运行"));
-    }
-    #[test]
-    fn database_failure_restores_files_index_and_relations() {
-        let f = Fixture::new();
-        let original = read_index(&f.paths).unwrap();
-        let bytes = fs::read(f.file("one")).unwrap();
-        let p = preview(&f.paths, "one").unwrap();
-        f.conn().execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON threads BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
-        assert!(execute(&f.paths, "one", &p.fingerprint).is_err());
-        assert_eq!(fs::read(f.file("one")).unwrap(), bytes);
-        assert_eq!(read_index(&f.paths).unwrap(), original);
-        assert_eq!(
-            f.conn()
-                .query_row("SELECT count(*) FROM thread_dynamic_tools", [], |r| r
-                    .get::<_, u32>(0))
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            f.conn()
-                .query_row("SELECT count(*) FROM threads", [], |r| r.get::<_, u32>(0))
-                .unwrap(),
-            4
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_and_outside_rollouts_are_never_deleted() {
-        let f = Fixture::new();
-        fs::remove_file(f.file("one")).unwrap();
-        std::os::unix::fs::symlink(f.file("two"), f.file("one")).unwrap();
-        assert!(preview(&f.paths, "one").is_err());
-        assert!(f.file("two").exists());
-        f.conn()
-            .execute(
-                "UPDATE threads SET rollout_path='/etc/passwd' WHERE id='two'",
-                [],
-            )
-            .unwrap();
-        assert!(preview(&f.paths, "two").is_err());
-    }
-    #[test]
-    fn deletion_rolls_back_native_trigger_changes_to_unselected_threads() {
-        let f = Fixture::new();
-        f.conn().execute_batch("CREATE TRIGGER unexpected_cascade AFTER DELETE ON threads WHEN OLD.id='one' BEGIN DELETE FROM threads WHERE id='child'; END;").unwrap();
-        let index_before = read_index(&f.paths).unwrap();
-        let plan = preview_delete(&f.paths, "one").unwrap();
-        assert!(execute_delete(&f.paths, "one", &plan.fingerprint).is_err());
-        assert!(row_value(&f.conn(), "threads", "id", "one")
-            .unwrap()
-            .is_some());
-        assert!(row_value(&f.conn(), "threads", "id", "child")
-            .unwrap()
-            .is_some());
-        assert!(f.file("one").is_file());
-        assert!(f.file("child").is_file());
-        assert_eq!(read_index(&f.paths).unwrap(), index_before);
-    }
-
-    #[test]
-    fn shared_hidden_preview_preserves_terminal_rules_and_fingerprints() {
-        let f = Fixture::new();
-        let conn = f.conn();
-        conn.execute("UPDATE threads SET archived=0 WHERE id='child'", [])
-            .unwrap();
-        let header = json!({"type":"session_meta","payload":{"id":"child"}}).to_string();
-        let start = json!({"type":"turn_started","turn_id":"turn"}).to_string();
-        let end = json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}})
-            .to_string();
-        let cases = [
-            (format!("{header}\n{start}\n{end}\n"), true),
-            (format!("{header}\n{start}\n"), false),
-            (format!("{header}\n"), false),
-            (format!("{header}\n{start}\n{end}\n{start}\n"), false),
-            (format!("{header}\n{start}\n{end}\n{{broken\n"), false),
-            (format!("{header}\n{start}\n{end}\n{{\"type\":"), false),
-        ];
-        for (content, allowed) in cases {
-            fs::write(f.file("child"), content).unwrap();
-            let previous = preview_hidden(&f.paths, "child");
-            let work = crate::scan_work::ScanWork::default();
-            let context = PreviewContext::load(&f.paths, &conn, &work).unwrap();
-            let shared = context.preview(&f.paths, &conn, "child", &work);
-            assert_eq!(previous.is_ok(), allowed);
-            assert_eq!(shared.is_ok(), allowed);
-            if let (Ok(previous), Ok(shared)) = (previous, shared) {
-                assert_eq!(shared.fingerprint, previous.fingerprint);
-                assert_eq!(shared.paths, previous.paths);
-                assert_eq!(shared.bytes, previous.bytes);
-            }
-        }
-    }
 }

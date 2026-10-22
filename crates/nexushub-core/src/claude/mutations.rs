@@ -19,7 +19,6 @@ fn open_regular(path: &Path) -> Result<fs::File> {
     ensure!(file.metadata()?.is_file(), "Claude 专属内容不是普通文件");
     Ok(file)
 }
-
 fn checked_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
     let root = paths.projects.canonicalize()?;
     ensure!(path.starts_with(&root), "Claude 会话路径越界");
@@ -50,323 +49,6 @@ pub(super) fn check_rename_path(paths: &ClaudePaths, path: &Path) -> Result<()> 
         "Claude 会话只读，无法追加名称"
     );
     Ok(())
-}
-pub(super) fn check_delete_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
-    checked_path(paths, path)?;
-    ensure!(
-        !fs::metadata(path.parent().context("会话父目录缺失")?)?
-            .permissions()
-            .readonly(),
-        "Claude 会话目录只读，无法删除"
-    );
-    let directory = path.with_extension("");
-    if let Ok(metadata) = fs::symlink_metadata(&directory) {
-        ensure!(
-            metadata.is_dir() && !metadata.file_type().is_symlink(),
-            "Claude 专属目录身份无法确认"
-        );
-    }
-    Ok(())
-}
-
-struct OwnedFiles {
-    paths: Vec<PathBuf>,
-    bytes: u64,
-    directories: Vec<PathBuf>,
-    child_ids: HashSet<String>,
-    warnings: Vec<String>,
-    stamps: HashMap<PathBuf, reader::Stamp>,
-    directory_stamps: HashMap<PathBuf, fs::Metadata>,
-}
-
-#[derive(Clone, Default)]
-struct ChildIdentity {
-    parents: BTreeSet<String>,
-    sessions: BTreeSet<String>,
-}
-impl ChildIdentity {
-    fn record(&mut self, row: &Value) -> Result<()> {
-        ensure!(row.is_object(), "子代理原生记录不是对象");
-        for field in ["parentSessionId", "parent_session_id"] {
-            if let Some(value) = row.get(field) {
-                let id = value
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .context("子代理身份字段损坏")?;
-                self.parents.insert(id.into());
-            }
-        }
-        // These fields can describe different identities in the same native
-        // record. Match the main reader's precedence, retaining cross-record
-        // conflicts and strict parent association checks.
-        for field in ["sessionId", "session_id"] {
-            if let Some(value) = row.get(field) {
-                let id = value.as_str().context("子代理身份字段损坏")?;
-                if !id.is_empty() {
-                    self.sessions.insert(id.into());
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-    fn verify(&self, parent: &str) -> Result<HashSet<String>> {
-        ensure!(
-            self.parents.iter().all(|id| id == parent),
-            "子代理关联到其他主会话"
-        );
-        let children: HashSet<_> = self
-            .sessions
-            .iter()
-            .filter(|id| *id != parent)
-            .cloned()
-            .collect();
-        ensure!(children.len() <= 1, "子代理身份冲突");
-        Ok(children)
-    }
-}
-
-fn child_identity(path: &Path) -> Result<ChildIdentity> {
-    static CACHE: crate::read_cache::ReadCache<ChildIdentity> =
-        crate::read_cache::ReadCache::new(1024 * 1024).with_native_metadata();
-    let before = reader::stamp(path)?;
-    let result = CACHE.read(
-        path,
-        |identity, _| {
-            128 + identity
-                .parents
-                .iter()
-                .chain(&identity.sessions)
-                .map(|id| id.len() as u64)
-                .sum::<u64>()
-        },
-        || read_child_identity(path),
-    )?;
-    ensure!(
-        before == reader::stamp(path)?,
-        "子代理历史在核验期间发生变化"
-    );
-    Ok(result)
-}
-
-fn read_child_identity(path: &Path) -> Result<ChildIdentity> {
-    use std::io::{BufRead, BufReader};
-    let mut identity = ChildIdentity::default();
-    ensure!(
-        fs::metadata(path)?.len() <= 512 * 1024 * 1024,
-        "子代理历史超出核验上限"
-    );
-    let mut reader = BufReader::new(open_regular(path)?);
-    let mut line = String::new();
-    let mut total = 0;
-    loop {
-        line.clear();
-        let read = reader
-            .by_ref()
-            .take(32 * 1024 * 1024)
-            .read_line(&mut line)?;
-        if read == 0 {
-            break;
-        }
-        total += read as u64;
-        ensure!(total <= 512 * 1024 * 1024, "子代理历史超出核验上限");
-        ensure!(line.ends_with('\n'), "子代理历史含半行或超大记录");
-        let row: Value = serde_json::from_str(&line).context("子代理历史损坏")?;
-        identity.record(&row)?;
-    }
-    Ok(identity)
-}
-
-fn owned_files(main: &Path, parent: &str) -> Result<OwnedFiles> {
-    let meta = fs::symlink_metadata(main)?;
-    ensure!(
-        meta.is_file() && !meta.file_type().is_symlink(),
-        "Claude 主文件身份已变化"
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        ensure!(meta.nlink() == 1, "Claude 主文件存在硬链接");
-    }
-    let directory = main.with_extension("");
-    let mut paths = vec![main.to_path_buf()];
-    let mut directories = Vec::new();
-    let mut warnings = Vec::new();
-    let mut children: HashMap<PathBuf, ChildIdentity> = HashMap::new();
-    let mut stamps = HashMap::from([(main.to_path_buf(), reader::stamp(main)?)]);
-    let mut directory_stamps = HashMap::new();
-    if fs::symlink_metadata(&directory)
-        .map(|_| true)
-        .or_else(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Ok(false)
-            } else {
-                Err(e)
-            }
-        })?
-    {
-        ensure!(
-            main.file_stem().and_then(|name| name.to_str()) == Some(parent),
-            "Claude 专属目录与主会话 ID 不一致"
-        );
-        for (count, entry) in walkdir::WalkDir::new(&directory)
-            .follow_links(false)
-            .max_depth(18)
-            .sort_by_file_name()
-            .into_iter()
-            .enumerate()
-        {
-            let entry = entry?;
-            ensure!(
-                count < 20_000 && entry.depth() < 18,
-                "Claude 专属目录超出核验上限"
-            );
-            let meta = fs::symlink_metadata(entry.path())?;
-            ensure!(!meta.file_type().is_symlink(), "Claude 专属目录含符号链接");
-            let relative = entry.path().strip_prefix(&directory)?;
-            let known_directory = relative.as_os_str().is_empty()
-                || relative.starts_with("subagents")
-                || relative.starts_with("tool-results");
-            if !known_directory {
-                warnings.push(format!("未识别的会话专属内容：{}", relative.display()));
-            }
-            if meta.is_dir() {
-                if known_directory && relative.components().count() > 1 {
-                    warnings.push(format!("未识别的会话专属内容：{}", relative.display()));
-                }
-                ensure!(!meta.permissions().readonly(), "Claude 专属目录只读");
-                directories.push(entry.path().to_path_buf());
-                directory_stamps.insert(entry.path().to_path_buf(), meta);
-                continue;
-            }
-            stamps.insert(entry.path().to_path_buf(), reader::stamp(entry.path())?);
-            ensure!(meta.is_file(), "Claude 专属目录含非普通文件");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                ensure!(meta.nlink() == 1, "Claude 专属文件存在硬链接");
-            }
-            if relative.starts_with("subagents") {
-                let name = entry.file_name().to_str().context("子代理文件名无法核验")?;
-                if let Some(stem) = name
-                    .strip_suffix(".jsonl")
-                    .filter(|s| s.starts_with("agent-"))
-                {
-                    let identity = child_identity(entry.path())?;
-                    let combined = children
-                        .entry(entry.path().with_file_name(stem))
-                        .or_default();
-                    combined.parents.extend(identity.parents);
-                    combined.sessions.extend(identity.sessions);
-                } else if let Some(stem) = name
-                    .strip_suffix(".meta.json")
-                    .filter(|s| s.starts_with("agent-"))
-                {
-                    ensure!(meta.len() <= 1024 * 1024, "子代理元数据超出上限");
-                    let row: Value =
-                        serde_json::from_reader(open_regular(entry.path())?.take(1024 * 1024 + 1))
-                            .context("子代理元数据损坏")?;
-                    children
-                        .entry(entry.path().with_file_name(stem))
-                        .or_default()
-                        .record(&row)?;
-                } else {
-                    warnings.push(format!("未识别的会话专属内容：{}", relative.display()));
-                }
-            }
-            paths.push(entry.path().into());
-        }
-    }
-    let mut bytes = 0;
-    for path in &paths {
-        bytes += fs::metadata(path)?.len();
-        ensure!(
-            bytes <= 512 * 1024 * 1024,
-            "Claude 专属内容超出管理大小上限"
-        );
-    }
-    let mut child_ids = HashSet::new();
-    for identity in children.values() {
-        child_ids.extend(identity.verify(parent)?);
-    }
-    let owned = OwnedFiles {
-        paths,
-        bytes,
-        directories,
-        child_ids,
-        warnings,
-        stamps,
-        directory_stamps,
-    };
-    owned.check_stamps()?;
-    Ok(owned)
-}
-
-impl OwnedFiles {
-    fn check_stamps(&self) -> Result<()> {
-        for (path, stamp) in &self.stamps {
-            ensure!(
-                *stamp == reader::stamp(path)?,
-                "Claude 专属文件在核验期间发生变化"
-            );
-        }
-        for (path, before) in &self.directory_stamps {
-            let after = fs::symlink_metadata(path)?;
-            ensure!(
-                after.is_dir()
-                    && !after.file_type().is_symlink()
-                    && before.len() == after.len()
-                    && before.modified()? == after.modified()?,
-                "Claude 专属目录在核验期间发生变化"
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                ensure!(
-                    (
-                        before.dev(),
-                        before.ino(),
-                        before.ctime(),
-                        before.ctime_nsec()
-                    ) == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec()),
-                    "Claude 专属目录身份已变化"
-                );
-            }
-        }
-        Ok(())
-    }
-    fn fingerprint(&self, main: &Path, parent: &str) -> Result<String> {
-        self.check_stamps()?;
-        let directory = main.with_extension("");
-        let mut hash = Sha256::new();
-        hash.update(parent.as_bytes());
-        for path in &self.paths {
-            hash.update(if path == main {
-                b"main".as_slice()
-            } else {
-                path.strip_prefix(&directory)?
-                    .as_os_str()
-                    .as_encoded_bytes()
-            });
-            hash.update(fingerprint(path)?);
-        }
-        for path in &self.directories {
-            hash.update(
-                path.strip_prefix(&directory)?
-                    .as_os_str()
-                    .as_encoded_bytes(),
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let meta = fs::metadata(path)?;
-                hash.update(meta.dev().to_le_bytes());
-                hash.update(meta.ino().to_le_bytes());
-            }
-        }
-        self.check_stamps()?;
-        Ok(hex::encode(hash.finalize()))
-    }
 }
 fn fingerprint(path: &Path) -> Result<String> {
     fingerprint_prefix(path, u64::MAX)
@@ -407,7 +89,7 @@ fn fingerprint_prefix(path: &Path, limit: u64) -> Result<String> {
 }
 fn ensure_inactive(paths: &ClaudePaths, parsed: &Parsed, path: &Path) -> Result<()> {
     ensure!(
-        parsed.issues.is_empty(),
+        parsed.issues.is_empty() && parsed.version.starts_with("2.") && !parsed.cwd.is_empty(),
         "Claude 会话格式或身份不明，管理操作已禁用"
     );
     if let Some(reason) = activity::Snapshot::capture(paths)
@@ -423,48 +105,71 @@ pub(super) fn deletion_assessment(
     path: &Path,
     snapshot: &activity::Snapshot,
 ) -> Result<activity::Assessment> {
-    let owned = owned_files(path, &parsed.id)?;
-    Ok(snapshot.assess_owned(parsed, &owned.paths, &owned.child_ids))
-}
-fn verify_main(path: &Path, expected: &Parsed) -> Result<()> {
-    let current = reader::read(path)?;
-    ensure!(
-        current.issues.is_empty() && current.id == expected.id && current.cwd == expected.cwd,
-        "Claude 主会话记录或身份已变化"
-    );
-    Ok(())
-}
-pub fn preview_claude_delete(paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
-    let (path, parsed) = resolve(paths, key)?;
-    check_delete_path(paths, &path)?;
-    ensure_inactive(paths, &parsed, &path)?;
-    let owned = owned_files(&path, &parsed.id)?;
-    if let Some(reason) = activity::Snapshot::capture(paths)
-        .assess_owned(&parsed, &owned.paths, &owned.child_ids)
-        .block_reason()
+    let mut files = vec![path.to_path_buf()];
+    for entry in walkdir::WalkDir::new(path.with_extension(""))
+        .follow_links(false)
+        .follow_root_links(false)
+        .into_iter()
+        .flatten()
     {
-        anyhow::bail!(reason);
+        if entry.file_type().is_file() {
+            files.push(entry.into_path());
+        }
     }
-    let fingerprint = owned.fingerprint(&path, &parsed.id)?;
-    verify_main(&path, &parsed)?;
-    owned.check_stamps()?;
+    Ok(snapshot.assess_owned(parsed, &files, &HashSet::new()))
+}
+
+fn delete_paths(paths: &ClaudePaths, main: &Path, id: &str) -> (Vec<PathBuf>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut result = vec![main.into(), main.with_extension("")];
+    for group in ["file-history", "tasks", "session-env"] {
+        result.push(paths.config.join(group).join(id));
+    }
+    result.push(paths.config.join("debug").join(format!("{id}.txt")));
+    let todos = paths.config.join("todos");
+    match fs::read_dir(&todos) {
+        Ok(entries) => {
+            for entry in entries {
+                match entry {
+                    Ok(entry) => {
+                        if entry.file_name().to_str().is_some_and(|name| {
+                            name.starts_with(&format!("{id}-")) && name.ends_with(".json")
+                        }) {
+                            result.push(entry.path());
+                        }
+                    }
+                    Err(error) => errors.push(format!("{}: {error}", todos.display())),
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => errors.push(format!("{}: {error}", todos.display())),
+    }
+    (result, errors)
+}
+
+pub fn preview_claude_delete(paths: &ClaudePaths, key: &str) -> Result<ClaudeDeletePreview> {
+    let path = locate(paths, key)?;
+    let id = path
+        .file_stem()
+        .context("会话文件名缺失")?
+        .to_string_lossy()
+        .into_owned();
+    let (targets, warnings) = delete_paths(paths, &path, &id);
+    let (file_count, bytes) = crate::session_delete::size(&targets);
     Ok(ClaudeDeletePreview {
         session_key: key.into(),
-        id: parsed.id.clone(),
-        title: parsed.title.clone(),
-        bytes: owned.bytes,
-        fingerprint,
-        warnings: (!owned.warnings.is_empty()).then_some(owned.warnings),
-        paths: owned
-            .paths
-            .iter()
-            .chain(owned.directories.iter())
-            .cloned()
-            .collect(),
+        title: id.clone(),
+        id,
         path,
-        file_count: owned.paths.len(),
+        paths: targets,
+        fingerprint: String::new(),
+        file_count,
+        bytes,
+        warnings: (!warnings.is_empty()).then_some(warnings),
     })
 }
+
 pub fn rename_claude_session(
     paths: &ClaudePaths,
     key: &str,
@@ -545,121 +250,93 @@ pub fn execute_claude_delete(
         .lock()
         .map_err(|_| anyhow::anyhow!("Claude 管理锁不可用"))?;
     ensure!(request.confirmed, "删除需要明确确认");
-    let preview = preview_claude_delete(paths, &request.session_key)?;
-    ensure!(
-        preview.fingerprint == request.fingerprint,
-        "Claude 会话已变化，请重新预览"
-    );
-    let (_, parsed) = resolve(paths, &request.session_key)?;
-    check_delete_path(paths, &preview.path)?;
-    ensure_inactive(paths, &parsed, &preview.path)?;
-    let quarantine = preview
-        .path
-        .with_file_name(format!(".nexushub-delete-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&quarantine)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&quarantine, fs::Permissions::from_mode(0o700))?;
-    }
-    let staged = quarantine.join(preview.path.file_name().context("Claude 会话文件名缺失")?);
-    let directory = preview.path.with_extension("");
-    let mut moved = Vec::new();
-    let result = (|| -> Result<()> {
-        for (source, target) in [
-            (&preview.path, staged.clone()),
-            (&directory, staged.with_extension("")),
-        ] {
-            if !source.try_exists()? {
-                continue;
-            }
-            fs::rename(source, &target)?;
-            moved.push((source.clone(), target));
-        }
-        #[cfg(test)]
-        mutation_checkpoint(&staged)?;
-        let owned = owned_files(&staged, &parsed.id)?;
-        verify_main(&staged, &parsed)?;
-        ensure!(
-            owned.fingerprint(&staged, &parsed.id)? == preview.fingerprint,
-            "Claude 文件在隔离时发生变化"
-        );
-        ensure_inactive(paths, &parsed, &preview.path)?;
-        let activity = activity::Snapshot::capture(paths);
-        if let Some(reason) = activity
-            .assess_owned(&parsed, &owned.paths, &owned.child_ids)
-            .block_reason()
+    let main = locate(paths, &request.session_key)?;
+    let id = main
+        .file_stem()
+        .context("会话文件名缺失")?
+        .to_string_lossy()
+        .into_owned();
+    let ids = BTreeSet::from([id.clone()]);
+    let mut outcome = crate::session_delete::Outcome::default();
+    let projects = paths
+        .projects
+        .canonicalize()
+        .unwrap_or_else(|_| paths.projects.clone());
+    let (targets, errors) = delete_paths(paths, &main, &id);
+    outcome.residuals.extend(errors);
+    for path in targets {
+        if crate::session_delete::within(&paths.config, &path)
+            || crate::session_delete::within(&projects, &path)
         {
-            anyhow::bail!("隔离后占用核验未通过：{reason}");
+            outcome.remove(&path);
+        } else {
+            outcome
+                .residuals
+                .push(format!("无法定位会话文件: {}", path.display()));
         }
-        ensure!(
-            !preview.path.try_exists()? && !directory.try_exists()?,
-            "Claude 会话已被原生进程重新创建"
-        );
-        // Unlink only the exact verified inventory. Unknown additions prevent
-        // directory removal and remain recoverable; never recursively erase it.
-        for path in &owned.paths {
-            ensure!(
-                owned.stamps[path] == reader::stamp(path)?,
-                "Claude 专属文件在删除前发生变化"
-            );
-            fs::remove_file(path)?;
-            #[cfg(test)]
-            mutation_checkpoint(path)?;
+    }
+    let index = main
+        .parent()
+        .context("会话项目目录缺失")?
+        .join("sessions-index.json");
+    outcome.attempt(&index, || {
+        crate::session_delete::edit_json(&index, |value| {
+            if let Some(entries) = value.get_mut("entries").and_then(Value::as_array_mut) {
+                entries.retain(|row| !crate::session_delete::has_id(row, &ids));
+            }
+        })
+    });
+    let history = paths.config.join("history.jsonl");
+    outcome.attempt(&history, || {
+        crate::session_delete::filter_jsonl(&history, |row| {
+            crate::session_delete::has_id(row, &ids)
+        })
+    });
+    let registrations = paths.config.join("sessions");
+    match fs::read_dir(&registrations).and_then(|entries| {
+        if fs::symlink_metadata(&registrations)?
+            .file_type()
+            .is_symlink()
+        {
+            Err(std::io::Error::other("会话登记目录是链接"))
+        } else {
+            Ok(entries)
         }
-        for path in owned.directories.iter().rev() {
-            fs::remove_dir(path)?;
-        }
-        fs::remove_dir(&quarantine)?;
-        ensure!(
-            !preview.path.try_exists()? && !directory.try_exists()?,
-            "Claude 会话删除后重新出现"
-        );
-        ensure!(
-            !files(paths)?.contains(&preview.path),
-            "Claude 会话列表定位键仍有残留"
-        );
-        if let Ok(mut located) = LOCATED_SESSIONS.lock() {
-            located.remove(&request.session_key);
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        for (source, target) in moved.iter().rev() {
-            if !source.exists() && target.exists() {
-                let _ = fs::rename(target, source);
+    }) {
+        Ok(entries) => {
+            for entry in entries {
+                match entry {
+                    Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "json") => {
+                        let path = entry.path();
+                        match open_regular(&path)
+                            .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
+                        {
+                            Ok(row) if crate::session_delete::has_id(&row, &ids) => {
+                                outcome.remove(&path)
+                            }
+                            Ok(_) => {}
+                            Err(error) => outcome
+                                .residuals
+                                .push(format!("{}: {error}", path.display())),
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => outcome
+                        .residuals
+                        .push(format!("{}: {error}", registrations.display())),
+                }
             }
         }
-        let _ = fs::remove_dir(&quarantine);
-        let residuals = [&quarantine, &preview.path, &directory]
-            .into_iter()
-            .filter(|path| fs::symlink_metadata(path).is_ok())
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>();
-        let remaining = if residuals.is_empty() {
-            "未能确认最终残留状态".into()
-        } else {
-            format!("尚存内容：{}", residuals.join("；"))
-        };
-        anyhow::bail!(
-            "删除可能部分完成：{error:#}；{remaining}；已删除文件无法完整回滚，请刷新后检查残留"
-        );
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => outcome
+            .residuals
+            .push(format!("{}: {error}", registrations.display())),
     }
+    outcome.finish();
     Ok(ClaudeDeleteResult {
         session_key: request.session_key,
-        deleted: true,
-        bytes: preview.bytes,
-    })
-}
-
-#[cfg(test)]
-type MutationHook = Box<dyn FnMut(&Path) -> Result<()>>;
-#[cfg(test)]
-thread_local! { pub(super) static TEST_MUTATION: std::cell::RefCell<Option<MutationHook>> = const { std::cell::RefCell::new(None) }; }
-#[cfg(test)]
-fn mutation_checkpoint(path: &Path) -> Result<()> {
-    TEST_MUTATION.with(|slot| match slot.borrow_mut().as_mut() {
-        Some(hook) => hook(path),
-        None => Ok(()),
+        deleted: outcome.residuals.is_empty(),
+        bytes: outcome.bytes,
+        residuals: outcome.residuals,
     })
 }

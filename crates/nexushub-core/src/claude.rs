@@ -158,6 +158,7 @@ pub fn claude_ownership_diagnostics(
 pub struct ClaudeDeleteRequest {
     pub session_key: String,
     pub confirmed: bool,
+    #[serde(default)]
     pub fingerprint: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +167,8 @@ pub struct ClaudeDeleteResult {
     pub session_key: String,
     pub deleted: bool,
     pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub residuals: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -198,7 +201,8 @@ fn digest(value: impl AsRef<[u8]>) -> String {
 type LocatedSessions = HashMap<String, (PathBuf, PathBuf)>;
 static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessions>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-fn key_for(root: &Path, path: &Path, id: &str) -> String {
+fn key_for(root: &Path, path: &Path, _id: &str) -> String {
+    let id = path.file_stem().unwrap_or_default().to_string_lossy();
     let key = format!(
         "claude:{}",
         digest(format!(
@@ -261,11 +265,47 @@ fn read_or_warning(path: &Path, summary_only: bool) -> Arc<Parsed> {
             title: id.clone(),
             id,
             version: "unknown".into(),
-            issues: vec!["会话无法读取或超出读取上限，管理操作已禁用".into()],
+            issues: vec!["会话无法读取或超出读取上限".into()],
             ..Default::default()
         })
     })
 }
+fn locate(paths: &ClaudePaths, key: &str) -> Result<PathBuf> {
+    ensure!(
+        key.starts_with("claude:")
+            && key.len() == 71
+            && key[7..].bytes().all(|c| c.is_ascii_hexdigit()),
+        "无效的 Claude 会话定位键"
+    );
+    let root = paths
+        .projects
+        .canonicalize()
+        .unwrap_or_else(|_| paths.projects.clone());
+    if let Some(path) = LOCATED_SESSIONS.lock().ok().and_then(|cache| {
+        cache
+            .get(key)
+            .filter(|(source, _)| source == &root)
+            .map(|(_, path)| path.clone())
+    }) {
+        if crate::session_delete::within(&root, &path) {
+            return Ok(path);
+        }
+    }
+    for entry in walkdir::WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !matches!(e.file_name().to_str(), Some("subagents" | "tool-results")))
+    {
+        let entry = entry?;
+        if entry.path().extension().is_some_and(|ext| ext == "jsonl")
+            && key_for(&root, entry.path(), "") == key
+        {
+            return Ok(entry.into_path());
+        }
+    }
+    anyhow::bail!("Claude 会话定位键不存在，请刷新列表")
+}
+
 fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
     ensure!(
         key.starts_with("claude:")
@@ -351,23 +391,17 @@ fn summary(
      */
     let read_error = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
     let read_warning = warning_reason;
-    let rename_reason = reason.clone().or_else(|| {
-        mutations::check_rename_path(paths, path)
-            .err()
-            .map(|e| e.to_string())
-    });
-    let delete_reason = reason
+    let rename_reason = reason
+        .clone()
         .or_else(|| {
-            mutations::check_delete_path(paths, path)
+            (!parsed.version.starts_with("2.") || parsed.cwd.is_empty())
+                .then(|| "缺少改名所需的工作目录或版本".into())
+        })
+        .or_else(|| {
+            mutations::check_rename_path(paths, path)
                 .err()
                 .map(|e| e.to_string())
-        })
-        .or_else(
-            || match mutations::deletion_assessment(parsed, path, snapshot) {
-                Ok(assessment) => assessment.block_reason(),
-                Err(error) => Some(error.to_string()),
-            },
-        );
+        });
     Ok(ClaudeSessionSummary {
         storage_size: None,
         id: parsed.id.clone(),
@@ -381,9 +415,9 @@ fn summary(
         status: status.into(),
         format_version: parsed.version.clone(),
         can_rename: rename_reason.is_none(),
-        can_delete: delete_reason.is_none(),
+        can_delete: true,
         rename_block_reason: rename_reason,
-        delete_block_reason: delete_reason,
+        delete_block_reason: None,
         read_error,
         read_warning,
     })

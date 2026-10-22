@@ -16,9 +16,6 @@ pub use crate::archive::{
 
 pub const ARCHIVE_DELETE_CONFIRMATION_MESSAGE: &str = "archive deletion must be confirmed";
 pub const HIDDEN_DELETE_CONFIRMATION_MESSAGE: &str = "hidden thread deletion must be confirmed";
-pub const CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE: &str =
-    "cleanup expectedCount is required before deletion";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CleanupAction {
     #[serde(rename = "archiveDeleteDryRun", alias = "archive-delete-dry-run")]
@@ -180,7 +177,7 @@ pub fn plan_cleanup_operation_with_confirmation(
         execute: action_plan.execute,
         requires_confirmation: action_plan.requires_confirmation,
         requires_prior_dry_run: action_plan.execute,
-        requires_expected_count: action_plan.execute,
+        requires_expected_count: false,
         confirmation_message: action_plan
             .execute
             .then(|| cleanup_confirmation_message(target).to_string()),
@@ -214,18 +211,8 @@ fn validate_cleanup_execute_confirmation(
     if !request.confirmed {
         anyhow::bail!(cleanup_confirmation_message(target));
     }
-    if request.expected_count.is_none() {
-        anyhow::bail!(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE);
-    }
-    if target == CleanupTarget::Hidden {
-        let candidates = request
-            .candidates
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("隐藏清理需要预览候选，请重新扫描"))?;
-        anyhow::ensure!(
-            request.expected_count == Some(candidates.len() as u64),
-            "预览候选数与确认数不一致"
-        );
+    if request.candidates.is_none() {
+        anyhow::bail!("清理需要明确的线程列表");
     }
     Ok(())
 }
@@ -242,24 +229,6 @@ pub fn hidden_candidates(
     Ok(serde_json::from_value(candidates.clone())?)
 }
 
-pub fn validate_cleanup_expected_count(
-    plan: &CleanupOperationPlan,
-    actual_count: u64,
-) -> Result<()> {
-    if !plan.requires_expected_count {
-        return Ok(());
-    }
-    let Some(expected_count) = plan.confirmation.expected_count else {
-        anyhow::bail!(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE);
-    };
-    if expected_count != actual_count {
-        anyhow::bail!(
-            "cleanup expectedCount mismatch: expected={expected_count} actual={actual_count}"
-        );
-    }
-    Ok(())
-}
-
 pub fn dry_run_archived_with_capability(
     platform: &PlatformPaths,
     paths: &CodexPaths,
@@ -271,9 +240,10 @@ pub fn dry_run_archived_with_capability(
 pub fn execute_archived_with_capability(
     platform: &PlatformPaths,
     paths: &CodexPaths,
+    candidates: &[archive::HiddenThreadSelection],
 ) -> Result<ArchiveDeleteResult> {
     plan_cleanup_action(platform, CleanupAction::ArchiveDeleteExecute)?;
-    archive::execute_delete_archived(paths)
+    archive::execute_delete_archived(paths, candidates)
 }
 
 pub fn dry_run_hidden_with_capability(
@@ -301,9 +271,8 @@ mod tests {
         services::{
             cleanup::{
                 cleanup_confirmation_message, plan_cleanup_execute_operation,
-                plan_cleanup_operation, validate_cleanup_expected_count, CleanupAction,
-                CleanupExecuteRequest, CleanupOperationKind, CleanupTarget,
-                CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE, HIDDEN_DELETE_CONFIRMATION_MESSAGE,
+                plan_cleanup_operation, CleanupAction, CleanupExecuteRequest, CleanupOperationKind,
+                CleanupTarget, HIDDEN_DELETE_CONFIRMATION_MESSAGE,
             },
             commands,
             system::Capability,
@@ -367,7 +336,7 @@ mod tests {
         assert!(execute.execute);
         assert!(execute.requires_confirmation);
         assert!(execute.requires_prior_dry_run);
-        assert!(execute.requires_expected_count);
+        assert!(!execute.requires_expected_count);
         assert_eq!(
             execute.confirmation_message.as_deref(),
             Some(HIDDEN_DELETE_CONFIRMATION_MESSAGE)
@@ -381,7 +350,6 @@ mod tests {
                 .len(),
             2
         );
-        validate_cleanup_expected_count(&dry_run, 999).unwrap();
 
         let archived_execute = plan_cleanup_execute_operation(
             &macos,
@@ -389,16 +357,12 @@ mod tests {
             CleanupExecuteRequest {
                 confirmed: true,
                 expected_count: Some(2),
-                candidates: None,
+                candidates: Some(Vec::new()),
             },
         )
         .unwrap();
-        validate_cleanup_expected_count(&archived_execute, 2).unwrap();
-        let mismatch = validate_cleanup_expected_count(&archived_execute, 3)
-            .expect_err("archive cleanup must reject stale dry-run counts");
-        assert!(mismatch.to_string().contains("expected=2 actual=3"));
-
-        let missing_count = plan_cleanup_execute_operation(
+        assert!(!archived_execute.requires_expected_count);
+        plan_cleanup_execute_operation(
             &macos,
             CleanupTarget::Hidden,
             CleanupExecuteRequest {
@@ -407,13 +371,7 @@ mod tests {
                 candidates: Some(Vec::new()),
             },
         )
-        .expect_err("execute cleanup operation must carry the dry-run count");
-        assert!(
-            missing_count
-                .to_string()
-                .contains(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE),
-            "{missing_count}"
-        );
+        .unwrap();
         assert_eq!(
             cleanup_confirmation_message(CleanupTarget::Hidden),
             HIDDEN_DELETE_CONFIRMATION_MESSAGE
@@ -431,9 +389,9 @@ mod tests {
         .expect_err("hidden cleanup must be bound to a preview candidate list");
         assert!(missing_candidates
             .to_string()
-            .contains("隐藏清理需要预览候选"));
+            .contains("清理需要明确的线程列表"));
 
-        let count_mismatch = plan_cleanup_execute_operation(
+        plan_cleanup_execute_operation(
             &macos,
             CleanupTarget::Hidden,
             CleanupExecuteRequest {
@@ -442,8 +400,7 @@ mod tests {
                 candidates: Some(Vec::new()),
             },
         )
-        .expect_err("hidden cleanup count must match submitted candidates");
-        assert!(count_mismatch.to_string().contains("候选数"));
+        .unwrap();
 
         assert!(plan_cleanup_operation(
             &windows,

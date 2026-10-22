@@ -25,7 +25,14 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const includeDescendants = provider === "codex" && operation === "delete";
       if (includeDescendants && !(await getSystemCapabilities()).capabilities.codex_delete_tree) throw new Error("当前服务不支持整树删除，请先升级服务");
       if (generation !== epoch.current.value) throw new Error("选择范围已变化，请重新预览");
-      return { generation, response: await previewSessionBatch({ provider, operation, sessionKeys, ...(includeDescendants ? { includeDescendants: true } : {}) }) };
+      const response: SessionBatchPreview = { provider, operation, items: [] };
+      const size = operation === "delete" ? Math.max(1, sessionKeys.length) : 100;
+      for (let start = 0; start < sessionKeys.length; start += size) {
+        if (generation !== epoch.current.value) throw new Error("选择范围已变化");
+        const page = await previewSessionBatch({ provider, operation, sessionKeys: sessionKeys.slice(start, start + size), ...(includeDescendants ? { includeDescendants: true } : {}) });
+        response.items.push(...page.items);
+      }
+      return { generation, response };
     },
     onSuccess: ({ generation, response }) => { if (generation === epoch.current.value) setPreview(response); }
   });
@@ -36,7 +43,14 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const request = preview;
       // Every attempt consumes its preview, including an uncertain transport failure.
       setPreview(null);
-      const response = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: request.items.filter(i => i.allowed && i.fingerprint).map(i => ({ sessionKey: i.sessionKey, fingerprint: i.fingerprint! })), confirmed: true, ...(request.provider === "codex" && request.operation === "delete" ? { includeDescendants: true } : {}) });
+      const items = request.items.filter(i => i.allowed).map(i => ({ sessionKey: i.sessionKey, ...(request.operation === "delete" ? { descendants: i.descendants } : { fingerprint: i.fingerprint! }) }));
+      const response: SessionBatchResult = { items: [] };
+      const size = request.operation === "delete" ? Math.max(1, items.length) : 100;
+      for (let start = 0; start < items.length; start += size) {
+        if (generation !== epoch.current.value) throw new Error("选择范围已变化");
+        const result = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: items.slice(start, start + size), confirmed: true, ...(request.provider === "codex" && request.operation === "delete" ? { includeDescendants: true } : {}) });
+        response.items.push(...result.items);
+      }
       return { response, generation, operation: request.operation };
     },
     onSuccess: ({ response, generation, operation }) => {

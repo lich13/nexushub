@@ -125,8 +125,8 @@ export function ClaudeWorkspace() {
     { id: "copy-resume", label: "复制恢复命令", icon: <Terminal size={15} />, run: () => { void copy(claudeResumeCommand(item.cwd, item.id)); } },
     { id: "reveal", label: "在 Finder 中显示", icon: <FolderOpen size={15} />, disabled: !canRevealLocalPath(),
       reason: canRevealLocalPath() ? null : "仅可在本机 Finder 中显示本机会话", run: () => { void revealLocalPath(item.path).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); } },
-    { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !item.canDelete,
-      reason: item.deleteBlockReason, run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
+    { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending,
+      run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
   ];
 
   return <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
@@ -166,7 +166,7 @@ export function ClaudeWorkspace() {
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
         {selected.readWarning && <div className="task-feedback" role="status">{selected.readWarning}</div>}
-        {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{[selected.renameBlockReason, selected.deleteBlockReason].filter((reason, index, reasons) => reason && reasons.indexOf(reason) === index).join("；")}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
+        {!selected.readError && selected.renameBlockReason && <div className="task-feedback" role="status">{selected.renameBlockReason}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
         {connection.target === "local" && actions.diagnostics.variables === selected.sessionKey && <>
           {actions.diagnostics.error && <div className="form-error" role="alert">{actions.diagnostics.error.message}</div>}
           {actions.diagnostics.data && <ActivityDetails className="task-feedback" summary="原生进程归属" initiallyOpen stateKey={`ownership:${selected.sessionKey}`}>
@@ -180,7 +180,7 @@ export function ClaudeWorkspace() {
           <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.sessionKey ? pendingSearch.positionKey : null}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
           <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
-          {!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}
+          {!detail.isLoading && !events.length && <div className="muted-row">暂无对话</div>}
         </div></div>
       </>}
     </main>
@@ -188,7 +188,8 @@ export function ClaudeWorkspace() {
       <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong>{(preview.paths ?? [preview.path]).map(path => <code className="delete-path" key={path}>{path}</code>)}<p>{preview.fileCount} 个会话及专属文件，{preview.bytes.toLocaleString()} 字节。</p>
       {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
       {preview.warnings?.map(warning => <p className="form-error" key={warning}>{warning}</p>)}
-      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
+      {actions.remove.data?.residuals?.map(path => <p className="form-error" role="alert" key={path}>{path}</p>)}
+      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true }, { onSuccess: result => { if (!result.deleted) return; setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
     </ConfirmDialog>}
   </div>;
 }

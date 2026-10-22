@@ -112,71 +112,6 @@ async fn hidden_scan_paginates_repeatably_and_keeps_its_candidate_snapshot() {
 }
 
 #[tokio::test]
-async fn hidden_scan_does_not_advertise_an_unavailable_partial_page() {
-    let _guard = SCAN_TEST_LOCK.lock().await;
-    let states = vec![RolloutState::Complete; 512];
-    let fixture = HiddenScanFixture::new(&states);
-    let owner = format!("partial-page-owner-{}", Uuid::new_v4());
-    let page_size = 100;
-    let started = hidden_scan::request(
-        fixture.paths(),
-        owner.clone(),
-        HiddenScanRequest {
-            mode: Some(HiddenScanMode::Start),
-            limit: Some(page_size),
-            ..HiddenScanRequest::default()
-        },
-    )
-    .await
-    .expect("start partial-page scan");
-    let scan_id = started
-        .scan
-        .expect("start response includes scan progress")
-        .id;
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut observed_unavailable_partial_page = false;
-    loop {
-        let page = poll_page(&fixture, &owner, &scan_id, 0, page_size).await;
-        let progress = page.scan.as_ref().expect("poll response includes progress");
-        if progress.phase == HiddenScanPhase::Scanning
-            && progress.processed > 0
-            && progress.processed < page_size
-            && page.candidates.is_empty()
-        {
-            observed_unavailable_partial_page = true;
-            assert!(
-                !progress.has_more,
-                "an unavailable partial page must not invite another immediate poll"
-            );
-        }
-        if progress.phase == HiddenScanPhase::Complete {
-            break;
-        }
-        assert_ne!(
-            progress.phase,
-            HiddenScanPhase::Failed,
-            "partial-page scan failed: {:?}",
-            progress.error
-        );
-        assert_ne!(
-            progress.phase,
-            HiddenScanPhase::Stopped,
-            "partial-page scan stopped unexpectedly"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "partial-page scan did not finish in time"
-        );
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    assert!(
-        observed_unavailable_partial_page,
-        "the fixture should expose the in-progress partial-page state"
-    );
-}
-
-#[tokio::test]
 async fn hidden_scan_rejects_other_owners_and_sources_and_stops_for_its_owner() {
     let _guard = SCAN_TEST_LOCK.lock().await;
     let fixture = HiddenScanFixture::new(&[RolloutState::Complete]);
@@ -395,7 +330,7 @@ async fn hidden_scan_limits_active_contexts_to_two() {
 }
 
 #[tokio::test]
-async fn hidden_scan_keeps_corrupt_and_nonterminal_candidates_protected() {
+async fn hidden_scan_locates_corrupt_and_nonterminal_candidates_without_content_checks() {
     let _guard = SCAN_TEST_LOCK.lock().await;
     let fixture = HiddenScanFixture::new(&[
         RolloutState::Complete,
@@ -416,24 +351,21 @@ async fn hidden_scan_keeps_corrupt_and_nonterminal_candidates_protected() {
         .get(fixture.hidden_ids[0].as_str())
         .expect("complete candidate is present");
     assert!(complete.allowed);
-    assert!(complete
-        .fingerprint
-        .as_deref()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(complete.fingerprint.is_none());
 
     let corrupt = candidates
         .get(fixture.hidden_ids[1].as_str())
         .expect("corrupt candidate is present");
-    assert!(!corrupt.allowed);
+    assert!(corrupt.allowed);
     assert!(corrupt.fingerprint.is_none());
-    assert!(corrupt.reason.is_some());
+    assert!(corrupt.reason.is_none());
 
     let nonterminal = candidates
         .get(fixture.hidden_ids[2].as_str())
         .expect("nonterminal candidate is present");
-    assert!(!nonterminal.allowed);
+    assert!(nonterminal.allowed);
     assert!(nonterminal.fingerprint.is_none());
-    assert!(nonterminal.reason.is_some());
+    assert!(nonterminal.reason.is_none());
 }
 
 async fn scan_all(

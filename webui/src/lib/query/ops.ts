@@ -89,9 +89,9 @@ export function useOpsActions(input: {
       onSuccess: input.onArchiveDryRun
     }),
     archiveExecute: useMutation({
-      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
+      mutationFn: ({ candidates }: { candidates: import("../../types").HiddenThreadSelection[] }) => {
         requireThreadCleanup();
-        return startArchiveDelete({ expectedCount });
+        return startArchiveDelete({ candidates });
       },
       onSuccess: (result) => {
         input.onArchiveExecute(result);
