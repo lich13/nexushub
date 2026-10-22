@@ -71,6 +71,18 @@ impl Fixture {
     fn native(&self, delete: impl FnMut(&CodexPaths, &TreePreview) -> Result<()> + 'static) {
         TEST_DELETE.with(|slot| *slot.borrow_mut() = Some(Box::new(delete)));
     }
+    fn compress(&self, path: &Path, keep_plain: bool) -> PathBuf {
+        let compressed = rollout_file::compressed_path(path);
+        fs::write(
+            &compressed,
+            zstd::stream::encode_all(fs::read(path).unwrap().as_slice(), 0).unwrap(),
+        )
+        .unwrap();
+        if !keep_plain {
+            fs::remove_file(path).unwrap();
+        }
+        compressed
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -244,13 +256,13 @@ fn preview_is_invalidated_by_a_new_descendant_or_reference() {
 }
 
 #[test]
-fn compressed_hardlinked_corrupt_and_partial_files_are_protected() {
-    for damage in ["compressed", "hardlink", "corrupt", "partial"] {
+fn invalid_compression_hardlinked_corrupt_and_partial_files_are_protected() {
+    for damage in ["invalid_compression", "hardlink", "corrupt", "partial"] {
         let f = Fixture::new();
         f.add(ROOT, None, true);
         let path = f.file(ROOT, None);
         match damage {
-            "compressed" => {
+            "invalid_compression" => {
                 fs::rename(&path, path.with_extension("jsonl.zst")).unwrap();
             }
             "hardlink" => {
@@ -271,6 +283,162 @@ fn compressed_hardlinked_corrupt_and_partial_files_are_protected() {
         }
         assert!(preview(&f.paths, ROOT, true).is_err(), "{damage}");
     }
+}
+
+#[test]
+fn compressed_subtrees_and_siblings_are_fully_verified_and_removed() {
+    for keep_plain in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        f.add(CHILD, Some(ROOT), true);
+        let archived = f.paths.home.join("archived_sessions");
+        fs::create_dir(&archived).unwrap();
+        let branch = archived.join(f.file(CHILD, Some(ROLLOUT)).file_name().unwrap());
+        f.write(&branch, CHILD, Some(ROOT));
+        f.compress(&branch, keep_plain);
+        f.compress(&f.file(ROOT, None), keep_plain);
+        f.history(ROLLOUT);
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        let physical_bytes: u64 = plan
+            .files
+            .keys()
+            .filter_map(|p| fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        assert_eq!(plan.selected.bytes, physical_bytes);
+        assert!(!plan.legacy);
+        assert!(plan.rollouts.contains(ROLLOUT));
+        f.native(remove_native);
+        let outcome = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+        assert!(outcome.error.is_none(), "{outcome:?}");
+        assert_eq!(outcome.deleted_ids, [ROOT, CHILD]);
+    }
+}
+
+#[test]
+fn unrelated_bad_headers_warn_without_binding_the_target_or_breaking_verification() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let clean = preview(&f.paths, ROOT, true).unwrap();
+    f.write(&f.file(OTHER, None), OTHER, None);
+    let compressed = f.compress(&f.file(OTHER, None), false);
+    assert!(preview(&f.paths, ROOT, true).unwrap().warnings.is_empty());
+    fs::write(&compressed, b"broken compressed history").unwrap();
+    let dirty = preview(&f.paths, ROOT, true).unwrap();
+    assert_eq!(clean.selected.fingerprint, dirty.selected.fingerprint);
+    assert!(dirty.warnings.iter().any(|w| w.contains("1 份")));
+    assert!(!dirty.legacy);
+    f.native(remove_native);
+    let result = execute(&f.paths, ROOT, true, &dirty.selected.fingerprint).unwrap();
+    assert!(!result.storage_failure);
+    assert!(result.error.is_none());
+    assert!(compressed.exists());
+}
+
+#[test]
+fn external_compressed_references_compare_rollout_ids_and_prefer_plaintext() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    f.write(&f.file(ROOT, Some(ROLLOUT)), ROOT, Some(ROOT));
+    f.write(&f.file(OTHER, None), OTHER, Some(ROLLOUT));
+    f.compress(&f.file(OTHER, None), false);
+    assert!(preview(&f.paths, ROOT, true)
+        .unwrap_err()
+        .to_string()
+        .contains("引用"));
+    f.write(&f.file(OTHER, None), OTHER, None);
+    assert!(preview(&f.paths, ROOT, true).is_ok());
+}
+
+#[test]
+fn conversion_and_each_physical_sibling_invalidate_the_preview() {
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let plan = preview(&f.paths, ROOT, true).unwrap();
+    let compressed = f.compress(&f.file(ROOT, None), false);
+    assert!(execute(&f.paths, ROOT, true, &plan.selected.fingerprint).is_err());
+    f.write(&f.file(ROOT, None), ROOT, None);
+    let plan = preview(&f.paths, ROOT, true).unwrap();
+    fs::write(
+        &compressed,
+        zstd::stream::encode_all(
+            b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"wrong\"}}\n".as_slice(),
+            0,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(execute(&f.paths, ROOT, true, &plan.selected.fingerprint).is_err());
+}
+
+#[test]
+fn target_identity_collisions_and_duplicate_rollouts_are_rejected() {
+    for conflict in ["header", "duplicate", "database"] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        match conflict {
+            "header" => f.write(&f.file(ROOT, None), OTHER, None),
+            "duplicate" => f.write(&f.file(OTHER, Some(ROOT)), OTHER, None),
+            _ => {
+                f.write(&f.file(OTHER, None), OTHER, None);
+                f.conn()
+                    .execute(
+                        "UPDATE threads SET rollout_path=?1 WHERE id=?2",
+                        rusqlite::params![f.file(OTHER, None).to_string_lossy(), ROOT],
+                    )
+                    .unwrap();
+            }
+        }
+        assert!(preview(&f.paths, ROOT, true).is_err(), "{conflict}");
+    }
+}
+
+#[test]
+fn verification_finds_corrupt_new_target_and_compressed_sibling_residuals() {
+    for leave_sibling in [false, true] {
+        let f = Fixture::new();
+        f.add(ROOT, None, true);
+        f.native(move |paths, plan| {
+            let path = if leave_sibling {
+                rollout_file::compressed_path(&plan.selected.paths[0])
+            } else {
+                paths.home.join("archived_sessions").join(format!(
+                    "rollout-2026-01-02T00-00-00-{ROOT}_{ROLLOUT}.jsonl"
+                ))
+            };
+            remove_native(paths, plan)?;
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, b"corrupt residual")?;
+            Ok(())
+        });
+        let plan = preview(&f.paths, ROOT, true).unwrap();
+        let result = execute(&f.paths, ROOT, true, &plan.selected.fingerprint).unwrap();
+        assert!(result.error.is_some());
+        assert!(!result.storage_failure);
+        assert_eq!(result.residuals.len(), 1);
+    }
+}
+
+#[test]
+fn compressed_questions_use_native_reply_semantics() {
+    use std::io::Write;
+    let f = Fixture::new();
+    f.add(ROOT, None, true);
+    let question = json!({"type":"response_item","turn_id":"fixture-turn","payload":{"type":"function_call","name":"request_user_input","call_id":"fixture-call","arguments":{"questions":[{"id":"choice","question":"Choose"}]}}});
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(f.file(ROOT, None))
+            .unwrap(),
+        "{question}"
+    )
+    .unwrap();
+    f.compress(&f.file(ROOT, None), false);
+    assert!(preview(&f.paths, ROOT, true)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.contains("待回复")));
 }
 
 #[test]

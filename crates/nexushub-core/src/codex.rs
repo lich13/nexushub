@@ -12,6 +12,7 @@ mod paths;
 #[cfg(test)]
 mod rollout_accuracy_tests;
 mod rollout_events;
+pub(crate) mod rollout_file;
 mod session_index;
 pub mod subagents;
 #[cfg(test)]
@@ -165,6 +166,7 @@ fn enrich_local_thread_row(
 fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
     if path.as_os_str().is_empty()
         || path.exists()
+        || rollout_file::compressed_path(path).is_file()
         || is_macos_network_volume_path(&paths.home)
         || is_macos_network_volume_path(path)
     {

@@ -321,8 +321,23 @@ pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
     Ok(scan.latest_message)
 }
 
-pub(crate) fn rollout_waiting_for_reply(path: &Path) -> Result<bool> {
-    Ok(scan_rollout(path, 1)?.reply_needed)
+pub(crate) fn rollout_waiting_for_reply(path: &Path, expected: &str) -> Result<bool> {
+    use crate::codex::rollout_file::{RolloutReader, MAX_BYTES, MAX_LINE_BYTES};
+    let mut reader = RolloutReader::new(path, MAX_BYTES)?;
+    let first = reader
+        .next_record(MAX_LINE_BYTES)?
+        .context("线程缺少身份记录")?;
+    anyhow::ensure!(
+        first["type"] == "session_meta" && first["payload"]["id"] == expected,
+        "线程文件身份不匹配"
+    );
+    let mut state = ScanState::default();
+    state.push(first);
+    while let Some(record) = reader.next_record(MAX_LINE_BYTES)? {
+        state.push(record);
+    }
+    anyhow::ensure!(!state.scan.identity_conflict, "线程记录身份冲突");
+    Ok(state.summary().reply_needed)
 }
 
 pub fn rollout_hook_stop_message(path: &Path, turn_id: Option<&str>) -> Result<Option<String>> {
