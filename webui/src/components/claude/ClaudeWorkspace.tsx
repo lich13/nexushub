@@ -23,8 +23,8 @@ import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
-import { groupClaudeEvents } from "../../lib/domain/executionGroups";
-import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
+import { groupClaudeProcesses, type ClaudeRenderItem } from "../../lib/domain/claudeProcessGroups";
+import { ClaudeProcessView } from "./ClaudeProcessView";
 import { TimelineRail } from "../common/TimelineRail";
 import { claudeTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
 import { getClaudeSession } from "../../lib/api/claude";
@@ -67,7 +67,7 @@ export function ClaudeWorkspace() {
     onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
   });
   const events = navigation.items ?? loadedEvents;
-  const groupedEvents = useMemo(() => groupClaudeEvents(events), [events]);
+  const groupedEvents = useMemo(() => groupClaudeProcesses(events), [events]);
   const timelineEntries = useMemo(() => detail.data?.pages[0]?.timeline ?? userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [detail.data, groupedEvents]);
   const actions = useClaudeActions();
@@ -202,8 +202,10 @@ function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event
   return <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>{!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}<MarkdownContent text={event.text ?? ""} activityId={activityId} timelineAliases={timelineAliases} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
-function renderClaudeEvents(entries: ExecutionRenderItem<ClaudeHistoryEvent>[], title: string): ReactNode {
-  return entries.map(entry => entry.kind === "group"
+export function renderClaudeEvents(entries: ClaudeRenderItem[], title: string): ReactNode {
+  return entries.map(entry => entry.kind === "process"
+    ? <ClaudeProcessView key={entry.process.id} group={entry.process}>{() => renderClaudeEvents(entry.process.entries, title)}</ClaudeProcessView>
+    : entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
     : <ClaudeEvent key={entry.key} activityId={entry.key} event={entry.item} title={title} timelineAliases={entry.sourceIds} />);
 }
@@ -212,6 +214,7 @@ function claudeEventLabel(event: ClaudeHistoryEvent): string {
   if (event.kind === "user_message") return "你";
   if (event.kind === "assistant_message") return "Claude Code";
   if (event.kind === "thinking") return "思考";
+  if (event.kind === "failure") return "失败";
   if (event.kind === "compaction") return "压缩摘要";
   if (event.kind === "branch_summary") return "分支摘要";
   return event.role || "Claude Code";

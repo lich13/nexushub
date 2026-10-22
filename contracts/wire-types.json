@@ -854,6 +854,24 @@
       }
     },
     "crates/nexushub-core/src/claude.rs": {
+      "ClaudeAssistantPhase": {
+        "kind": "enum",
+        "serde": [
+          "serde (rename_all = \"snake_case\")"
+        ],
+        "variants": [
+          {
+            "fields": [],
+            "name": "Intermediate",
+            "serde": []
+          },
+          {
+            "fields": [],
+            "name": "Final",
+            "serde": []
+          }
+        ]
+      },
       "ClaudeDeletePreview": {
         "fields": [
           {
@@ -1038,6 +1056,13 @@
               "serde (default , skip_serializing_if = \"Option::is_none\")"
             ],
             "type": "Option < crate :: user_message :: UserMessage >"
+          },
+          {
+            "name": "assistant_phase",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < ClaudeAssistantPhase >"
           }
         ],
         "kind": "struct",
@@ -10742,7 +10767,7 @@
         "GrokDeleteRequest": "exporttypeGrokDeleteRequest={id:string;confirmed:boolean;fingerprint:string};",
         "GrokDeleteResult": "exporttypeGrokDeleteResult={id:string;deleted:boolean;bytes:number};",
         "ClaudeSessionSummary": "exporttypeClaudeSessionSummary={storageSize?:SessionStorageSize|null;id:string;sessionKey:string;title:string;cwd:string;path:string;updatedAt?:string|null;messageCount:number;lastMessage?:string|null;status:string;formatVersion:string;readWarning?:string|null;canRename:boolean;renameBlockReason?:string|null;canDelete:boolean;deleteBlockReason?:string|null;readError?:string|null;};",
-        "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null};",
+        "ClaudeHistoryEvent": "exporttypeClaudeHistoryEvent={id:string;turnId?:string|null;result?:string|null;userMessage?:UserMessageContent|null;timestamp?:string|null;kind:string;role?:string|null;text?:string|null;callId?:string|null;status?:string|null;detail?:string|null;assistantPhase?:\"intermediate\"|\"final\"|null};",
         "ClaudeDetailRequest": "exporttypeClaudeDetailRequest={sessionKey:string;limit?:number;before?:string};",
         "ClaudeSessionDetail": "exporttypeClaudeSessionDetail={timeline?:TimelineEntry[];afterCursor?:string|null;history?:HistoryMetadata|null;summary:ClaudeSessionSummary;events:ClaudeHistoryEvent[];totalEvents:number;hasMore:boolean;beforeCursor?:string|null};",
         "ClaudeDeletePreview": "exporttypeClaudeDeletePreview={sessionKey:string;id:string;title:string;path:string;paths?:string[];fingerprint:string;fileCount:number;bytes:number;warnings?:string[]|null};",

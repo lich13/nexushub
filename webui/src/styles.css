@@ -299,6 +299,9 @@ small { font-size: 12px; }
 .grok-tool summary { overflow-wrap: anywhere; }
 .grok-tool summary small { margin-left: 12px; }
 .execution-group { min-width: 0; padding: 0; margin: 0; }
+.claude-process-group > summary { flex-wrap: wrap; }
+.claude-process-body { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; min-width: 0; }
+.claude-process-body > * { flex: none; min-width: 0; max-width: 100%; }
 .execution-rows { max-height: min(460px, 55vh); overflow: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
 .activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .execution-group > summary > svg, .execution-command > summary > svg { flex: none; }

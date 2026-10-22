@@ -21,6 +21,7 @@
           }
         },
         {
+          "assistantPhase": "final",
           "callId": null,
           "detail": null,
           "id": "claude-damaged-final:0",
@@ -119,6 +120,7 @@
           }
         },
         {
+          "assistantPhase": "intermediate",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-1:0",
@@ -155,6 +157,7 @@
           "turnId": "claude-user-1"
         },
         {
+          "assistantPhase": "final",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-final:0",
@@ -184,6 +187,7 @@
           }
         },
         {
+          "assistantPhase": "final",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-final-2:0",
@@ -259,6 +263,7 @@
           "turnId": "claude-user-1"
         },
         {
+          "assistantPhase": "final",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-final:0",
@@ -288,6 +293,7 @@
           }
         },
         {
+          "assistantPhase": "final",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-final-2:0",
@@ -391,6 +397,7 @@
           }
         },
         {
+          "assistantPhase": "intermediate",
           "callId": null,
           "detail": null,
           "id": "claude-assistant-1:0",

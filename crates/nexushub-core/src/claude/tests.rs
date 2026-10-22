@@ -1339,6 +1339,209 @@ fn partial_unlink_failure_preserves_residuals_without_promising_full_rollback() 
 }
 
 #[test]
+fn assistant_display_phase_uses_native_stop_evidence_without_changing_notification_identity() {
+    let f = Fixture::new();
+    let user = f.row("u1", None, "user", json!("Fixture request"));
+    let mut intermediate = f.row(
+        "a1",
+        Some("u1"),
+        "assistant",
+        json!([
+            {"type":"thinking","thinking":"Reasoning fixture"},
+            {"type":"text","text":"Temporary explanation"},
+            {"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"/fixture/input"}}
+        ]),
+    );
+    intermediate["message"]["stop_reason"] = json!("tool_use");
+    let result = f.row(
+        "r1",
+        Some("a1"),
+        "user",
+        json!([{"type":"tool_result","tool_use_id":"call-1","content":"Synthetic output"}]),
+    );
+    let final_reply = f.row(
+        "a2",
+        Some("r1"),
+        "assistant",
+        json!([{"type":"text","text":"Final reply"}]),
+    );
+    f.write(&[user, intermediate, result, final_reply]);
+    let parsed = reader::read(&f.file).unwrap();
+    let texts: Vec<_> = parsed
+        .events
+        .iter()
+        .filter(|e| e.kind == "assistant_message")
+        .collect();
+    assert_eq!(
+        texts[0].assistant_phase,
+        Some(ClaudeAssistantPhase::Intermediate)
+    );
+    assert_eq!(texts[1].assistant_phase, Some(ClaudeAssistantPhase::Final));
+    assert!(parsed
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("u1")));
+    assert_eq!(parsed.native_events.len(), 1);
+    assert_eq!(parsed.native_events[0].turn_id, "u1");
+    assert_eq!(parsed.native_events[0].kind, "completion");
+    assert_eq!(parsed.native_events[0].body, "Final reply");
+}
+
+#[test]
+fn result_phase_updates_are_visible_to_pagination_without_guessing_across_context_boundaries() {
+    for boundary in [false, true] {
+        let f = Fixture::new();
+        let mut assistant = f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"text","text":"Candidate reply"}]),
+        );
+        assistant["message"]["stop_reason"] = Value::Null;
+        f.write(&[
+            f.row("u1", None, "user", json!("Fixture request")),
+            assistant,
+        ]);
+        let initial = reader::read(&f.file).unwrap();
+        assert_eq!(initial.events.last().unwrap().assistant_phase, None);
+        if boundary {
+            f.append(&json!({"type":"system","subtype":"compact_boundary","uuid":"context-boundary","content":"Context fixture"}));
+        }
+        f.append(&json!({"type":"result","session_id":"native-fixture","subtype":"success","is_error":false,"result":"Candidate reply","timestamp":"2026-09-29T00:00:02Z"}));
+        let updated = reader::read(&f.file).unwrap();
+        let reply = updated.events.iter().find(|e| e.id == "a1:0").unwrap();
+        assert_eq!(
+            reply.assistant_phase,
+            if boundary {
+                None
+            } else {
+                Some(ClaudeAssistantPhase::Final)
+            }
+        );
+        assert_eq!(initial.events.last().unwrap().assistant_phase, None);
+        if !boundary {
+            let metadata = updated
+                .history
+                .metadata(Some(&initial.history.metadata(None).revision));
+            assert!(metadata.changed_ids.iter().any(|id| id == "a1:0"));
+        }
+    }
+    let old: ClaudeHistoryEvent =
+        serde_json::from_value(json!({"id":"legacy","kind":"assistant_message"})).unwrap();
+    assert_eq!(old.assistant_phase, None);
+    assert!(serde_json::to_value(old)
+        .unwrap()
+        .get("assistantPhase")
+        .is_none());
+    let old_preview: ClaudeDeletePreview = serde_json::from_value(json!({"sessionKey":"fixture","id":"fixture","title":"Fixture","path":"/fixture/session.jsonl","fingerprint":"fixture","fileCount":1,"bytes":0})).unwrap();
+    assert!(old_preview.warnings.is_none());
+}
+
+#[test]
+fn split_assistant_records_use_native_message_identity_for_process_text() {
+    for shared_identity in [true, false] {
+        let f = Fixture::new();
+        let mut explanation = f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"text","text":"Process explanation"}]),
+        );
+        explanation["message"]["id"] = json!("message-1");
+        explanation["message"]["stop_reason"] = Value::Null;
+        f.write(&[
+            f.row("u1", None, "user", json!("Fixture request")),
+            explanation,
+        ]);
+        let initial = reader::read(&f.file).unwrap();
+        let mut call = f.row(
+            "a2",
+            Some("a1"),
+            "assistant",
+            json!([{"type":"tool_use","id":"call-1","name":"Read","input":{}}]),
+        );
+        call["message"]["id"] = json!(if shared_identity {
+            "message-1"
+        } else {
+            "message-2"
+        });
+        call["message"]["stop_reason"] = Value::Null;
+        f.append(&call);
+        let updated = reader::read(&f.file).unwrap();
+        let explanation = updated
+            .events
+            .iter()
+            .find(|event| event.id == "a1:0")
+            .unwrap();
+        assert_eq!(
+            explanation.assistant_phase,
+            shared_identity.then_some(ClaudeAssistantPhase::Intermediate)
+        );
+        assert_eq!(initial.events.last().unwrap().assistant_phase, None);
+        assert!(updated.native_events.is_empty());
+        if shared_identity {
+            assert!(updated
+                .history
+                .metadata(Some(&initial.history.metadata(None).revision))
+                .changed_ids
+                .contains(&"a1:0".to_owned()));
+        }
+    }
+}
+
+#[test]
+fn permission_resolution_and_failures_update_display_without_replacing_native_events() {
+    let f = Fixture::new();
+    let mut call = f.row(
+        "a1",
+        Some("u1"),
+        "assistant",
+        json!([{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"fixture"}}]),
+    );
+    call["message"]["stop_reason"] = json!("tool_use");
+    f.write(&[f.row("u1", None, "user", json!("Fixture request")), call]);
+    f.append(&json!({"type":"permission_request","uuid":"permission-1","sessionId":"native-fixture","tool_use_id":"call-1","request_id":"request-1","description":"Approve fixture","tool_name":"Bash","timestamp":"2026-09-29T00:00:01Z"}));
+    let pending = reader::read(&f.file).unwrap();
+    assert_eq!(
+        pending
+            .events
+            .iter()
+            .find(|e| e.kind == "permission_request")
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("in_progress")
+    );
+    f.append(&json!({"type":"permission_response","request_id":"request-1"}));
+    f.append(&json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Synthetic failure"],"timestamp":"2026-09-29T00:00:02Z"}));
+    let failed = reader::read(&f.file).unwrap();
+    assert_eq!(
+        failed
+            .events
+            .iter()
+            .find(|e| e.kind == "permission_request")
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        failed
+            .events
+            .iter()
+            .find(|e| e.kind == "tool_call")
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("cancelled")
+    );
+    assert_eq!(failed.events.last().unwrap().kind, "failure");
+    assert_eq!(failed.native_events.len(), 1);
+    assert_eq!(failed.native_events[0].turn_id, "u1");
+    assert_eq!(failed.native_events[0].kind, "failure");
+}
+
+#[test]
 fn empty_success_result_uses_this_turn_text_and_never_tool_use_or_cancelled_turns() {
     let f = Fixture::new();
     let user = f.row("u1", None, "user", json!("Fixture request"));
@@ -1376,6 +1579,16 @@ fn empty_success_result_uses_this_turn_text_and_never_tool_use_or_cancelled_turn
         assert!(
             reader::read(&f.file).unwrap().native_events.is_empty(),
             "later result overrides completion: {reason}"
+        );
+        assert_eq!(
+            reader::read(&f.file)
+                .unwrap()
+                .events
+                .iter()
+                .find(|event| event.id == "a1:0")
+                .unwrap()
+                .assistant_phase,
+            None
         );
     }
     answer["message"]["stop_reason"] = json!("end_turn");
