@@ -33,6 +33,7 @@ jobs:
       - run: pnpm --dir webui install --frozen-lockfile
       - run: node scripts/check-wire-types.mjs
       - run: node --test scripts/test-wire-types.mjs
+      - run: node --test scripts/test-playwright-browser.mjs
       - run: pnpm --dir webui typecheck
       - run: pnpm --dir webui test
       - run: pnpm --dir webui build:tauri

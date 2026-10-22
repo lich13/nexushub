@@ -122,6 +122,7 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
 node scripts/check-wire-types.mjs
 node --test scripts/test-wire-types.mjs
+node --test scripts/test-playwright-browser.mjs
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -131,8 +132,6 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 corepack pnpm@12.11.2 --dir webui typecheck
 corepack pnpm@12.11.2 --dir webui test
 corepack pnpm@12.11.2 --dir webui build:tauri
-NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
-NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
 bash scripts/test-install-script.sh
 python3 scripts/check-versions.py
 python3 scripts/check-workspaces.py
@@ -147,9 +146,13 @@ python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-`rust-toolchain.toml` 固定开发与 CI 工具链；Node、pnpm 和构建工具使用仓库锁定版本。`src-tauri` 是独立 Cargo workspace；最低 Rust 策略、缓存和审计门禁见[构建说明](docs/ARCHITECTURE.md#构建ci-与发布)。测试需要 Python 3.11+、ShellCheck、Minisign 及锁文件对应的 Playwright 浏览器，使用虚构 Provider 数据，不删除本机用户会话。
+`rust-toolchain.toml` 固定开发与 CI 工具链；Node、pnpm 和构建工具使用仓库锁定版本。`src-tauri` 是独立 Cargo workspace；最低 Rust 策略、缓存和审计门禁见[构建说明](docs/ARCHITECTURE.md#构建ci-与发布)。本机检查需要 Python 3.11+、ShellCheck 和 Minisign，使用虚构 Provider 数据，不删除本机用户会话。
 
-交互预算使用生产前端构建，在 macOS 可见窗口中依次运行两种浏览器，测量期间关闭 trace 录制，避免无头窗口调度、其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
+浏览器回归和 macOS 有头性能检查默认交给现有 GitHub Actions，本机无需安装 Chromium 或 WebKit。CI 先生成当前前端构建，再安装锁文件对应的 Playwright Chromium 与 WebKit；Linux 同时安装系统依赖。上面的浏览器守卫单元测试使用模拟启动器，不安装或启动浏览器。
+
+浏览器验收只使用 Playwright 管理的浏览器，不依赖、不启动本机 Google Chrome，可卸载系统 Chrome。内置 Chromium 的窗口可能显示 Google Chrome for Testing；它与系统 Chrome 是独立安装。全局启动守卫禁止渠道、可执行路径和外部连接覆盖，并在启动探针后核对真实可执行文件位于 Playwright 浏览器缓存，符号链接越界立即失败。
+
+交互预算使用生产前端构建，在 macOS 可见窗口中依次运行两种内置浏览器，测量期间关闭 trace 录制，避免无头窗口调度、其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
 
 ## 当前文档
 
