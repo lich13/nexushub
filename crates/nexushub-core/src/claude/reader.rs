@@ -339,6 +339,7 @@ fn event(
         detail: None,
         result: None,
         user_message: None,
+        assistant_phase: None,
     }
 }
 fn issue(parsed: &mut Parsed, message: &str) {
@@ -396,6 +397,8 @@ struct Parser {
     seen: HashMap<String, String>,
     last_assistant_text: Option<String>,
     last_stop_reason: String,
+    last_assistant_events: Vec<usize>,
+    last_assistant_message_id: Option<String>,
 }
 impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
@@ -412,6 +415,8 @@ impl Parser {
             mut seen,
             last_assistant_text,
             last_stop_reason,
+            last_assistant_events,
+            last_assistant_message_id,
         } = std::mem::take(self);
         for (position, record) in std::iter::once((position, record)) {
             if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
@@ -477,6 +482,8 @@ impl Parser {
                 seen,
                 last_assistant_text,
                 last_stop_reason,
+                last_assistant_events,
+                last_assistant_message_id,
             };
 
             self.read_kind(record, position, key, kind, uuid);
@@ -496,6 +503,8 @@ impl Parser {
             seen,
             last_assistant_text,
             last_stop_reason,
+            last_assistant_events,
+            last_assistant_message_id,
         };
     }
     fn read_kind(&mut self, record: &Value, position: usize, key: String, kind: &str, uuid: &str) {
@@ -530,6 +539,7 @@ impl Parser {
                 "permission_response" => {
                     if let Some(call) = self.permission_calls.remove(field(record, "request_id")) {
                         self.questions.remove(&call);
+                        self.settle_permission(&call);
                     }
                     let mut e = event(
                         key,
@@ -541,13 +551,16 @@ impl Parser {
                     e.detail = Some(printable(record));
                     self.parsed.events.push(Arc::new(e));
                 }
-                "summary" => self.parsed.events.push(Arc::new(event(
-                    key,
-                    record,
-                    "compaction",
-                    Some(bounded(field(record, "summary"))),
-                    &self.turn,
-                ))),
+                "summary" => {
+                    self.last_assistant_events.clear();
+                    self.parsed.events.push(Arc::new(event(
+                        key,
+                        record,
+                        "compaction",
+                        Some(bounded(field(record, "summary"))),
+                        &self.turn,
+                    )));
+                }
                 "tool_reference" | "tool_search_tool_result" => {
                     self.read_tool_reference(record, key, kind);
                 }
@@ -640,6 +653,7 @@ impl Parser {
                 self.calls.clear();
                 self.last_assistant_text = None;
                 self.last_stop_reason.clear();
+                self.last_assistant_events.clear();
                 if uuid.is_empty() {
                     issue(&mut self.parsed, "原生消息身份缺失，通知和管理操作已禁用");
                 }
@@ -682,12 +696,36 @@ impl Parser {
                     )));
                 }
             }
+            let intermediate = kind == "assistant"
+                && (field(message, "stop_reason") == "tool_use"
+                    || parts.iter().any(|part| field(part, "type") == "tool_use"));
+            if kind == "assistant" {
+                // Native transcripts can split one API message into several
+                // records. Only an explicit shared message ID links their text.
+                let message_id = field(message, "id");
+                if message_id.is_empty()
+                    || self.last_assistant_message_id.as_deref() != Some(message_id)
+                {
+                    self.last_assistant_events.clear();
+                }
+                self.last_assistant_message_id =
+                    (!message_id.is_empty() && message_id.len() <= 512).then(|| message_id.into());
+                if intermediate {
+                    for &index in &self.last_assistant_events {
+                        Arc::make_mut(&mut self.parsed.events[index]).assistant_phase =
+                            Some(ClaudeAssistantPhase::Intermediate);
+                    }
+                }
+            }
             for (index, part) in parts.iter().enumerate() {
                 let mut e = event(format!("{key}:{index}"), record, "", None, &self.turn);
                 match field(part, "type") {
                     "text" if kind == "assistant" => {
                         e.kind = "assistant_message".into();
                         e.text = Some(bounded(field(part, "text")));
+                        e.assistant_phase =
+                            intermediate.then_some(ClaudeAssistantPhase::Intermediate);
+                        self.last_assistant_events.push(self.parsed.events.len());
                     }
                     "thinking" if kind == "assistant" => {
                         e.kind = "thinking".into();
@@ -795,6 +833,7 @@ impl Parser {
                         let call = field(part, "tool_use_id");
                         self.pending.remove(call);
                         self.questions.remove(call);
+                        self.settle_permission(call);
                         let result = part
                             .get("content")
                             .map(|c| {
@@ -852,6 +891,7 @@ impl Parser {
                 && self.pending.is_empty()
                 && self.questions.is_empty()
             {
+                self.mark_final_answer();
                 finish(
                     &mut self.parsed,
                     &self.turn,
@@ -883,6 +923,7 @@ impl Parser {
             if subtype == "success"
                 && stop_reason.is_some_and(|reason| !terminal_stop_reason(reason))
             {
+                self.clear_final_answer();
                 self.parsed.native_events.retain(|event| {
                     event.kind != "completion" || Some(&event.turn_id) != self.turn.as_ref()
                 });
@@ -895,6 +936,12 @@ impl Parser {
                 && (explicit_terminal || inferred_terminal)
             {
                 let result = bounded(field(record, "result"));
+                if result.trim().is_empty()
+                    || self.last_assistant_text.as_deref().map(bounded).as_deref()
+                        == Some(result.as_str())
+                {
+                    self.mark_final_answer();
+                }
                 finish(
                     &mut self.parsed,
                     &self.turn,
@@ -909,7 +956,26 @@ impl Parser {
                 );
             } else if is_failure {
                 self.questions.clear();
+                for call in &self.pending {
+                    if let Some(index) = self.calls.get(call) {
+                        Arc::make_mut(&mut self.parsed.events[*index]).status =
+                            Some("cancelled".into());
+                    }
+                }
                 self.pending.clear();
+                let body = record
+                    .get("errors")
+                    .map(printable)
+                    .unwrap_or_else(|| subtype.into());
+                let mut failure = event(
+                    format!("record-{}:failure", position + 1),
+                    record,
+                    "failure",
+                    Some(bounded(&body)),
+                    &self.turn,
+                );
+                failure.status = Some("failed".into());
+                self.parsed.events.push(Arc::new(failure));
                 finish(
                     &mut self.parsed,
                     &self.turn,
@@ -928,6 +994,7 @@ impl Parser {
         for key in std::iter::once(key) {
             let subtype = field(record, "subtype");
             if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
+                self.clear_final_answer();
                 for prompt in self.parsed.prompts.values_mut() {
                     if Some(&prompt.turn_id) == self.turn.as_ref() {
                         prompt.cancelled = true;
@@ -939,6 +1006,7 @@ impl Parser {
                     .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
                 self.turn = None;
                 self.last_stop_reason.clear();
+                self.last_assistant_events.clear();
                 self.last_assistant_text = None;
                 self.questions.clear();
                 for call in &self.pending {
@@ -955,6 +1023,7 @@ impl Parser {
                 continue;
             }
             if subtype == "compact_boundary" {
+                self.last_assistant_events.clear();
                 self.parsed.events.push(Arc::new(event(
                     key,
                     record,
@@ -982,6 +1051,10 @@ impl Parser {
                     &self.turn,
                 );
                 e.detail = Some(printable(record));
+                e.role = Some(subtype.into());
+                if subtype == "api_error" {
+                    e.status = Some("failed".into());
+                }
                 self.parsed.events.push(Arc::new(e));
                 if !known {
                     warning(&mut self.parsed, "存在新格式系统活动，仅显示兼容提示");
@@ -1001,6 +1074,12 @@ impl Parser {
                 &self.turn,
             );
             e.detail = Some(printable(record));
+            e.call_id = (!call.is_empty()).then(|| call.into());
+            e.status = (!request.is_empty()
+                && self.pending.contains(call)
+                && field(record, "agent_id").is_empty()
+                && alias_field(record, &["sessionId", "session_id"]) == self.parsed.id)
+                .then(|| "in_progress".into());
             self.parsed.events.push(Arc::new(e));
             // Only a pending primary call with explicit transcript identity
             // proves this is our permission request, not a remote subagent's.
@@ -1029,6 +1108,39 @@ impl Parser {
                         );
                     }
                 }
+            }
+        }
+    }
+    fn mark_final_answer(&mut self) {
+        // Presentation only: never infer the phase from text or change native
+        // notification terminal events and their deduplication identities.
+        for &index in &self.last_assistant_events {
+            let event = &mut self.parsed.events[index];
+            if event.turn_id == self.turn
+                && event.assistant_phase != Some(ClaudeAssistantPhase::Intermediate)
+            {
+                Arc::make_mut(event).assistant_phase = Some(ClaudeAssistantPhase::Final);
+            }
+        }
+    }
+    fn clear_final_answer(&mut self) {
+        for &index in &self.last_assistant_events {
+            let event = &mut self.parsed.events[index];
+            if event.assistant_phase == Some(ClaudeAssistantPhase::Final) {
+                Arc::make_mut(event).assistant_phase = None;
+            }
+        }
+    }
+    fn settle_permission(&mut self, call: &str) {
+        for event in self
+            .parsed
+            .events
+            .iter_mut()
+            .rev()
+            .take_while(|e| e.turn_id == self.turn)
+        {
+            if event.kind == "permission_request" && event.call_id.as_deref() == Some(call) {
+                Arc::make_mut(event).status = Some("completed".into());
             }
         }
     }

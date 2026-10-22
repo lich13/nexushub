@@ -1,0 +1,85 @@
+import { expect, test } from "vitest";
+import type { ClaudeHistoryEvent } from "../../types";
+import { groupClaudeProcesses, type ClaudeRenderItem } from "./claudeProcessGroups";
+
+const event = (id: string, kind: string, fields: Partial<ClaudeHistoryEvent> = {}): ClaudeHistoryEvent => ({ id, kind, turnId: "turn-1", ...fields });
+function process(entries: ClaudeRenderItem[]) {
+  const found = entries.find(entry => entry.kind === "process");
+  if (!found || found.kind !== "process") throw new Error("Process missing");
+  return found.process;
+}
+
+test("one native turn preserves process order, paired tool aliases, and a separate final answer", () => {
+  const result = groupClaudeProcesses([
+    event("user", "user_message"), event("think", "thinking"),
+    event("explain", "assistant_message", { assistantPhase: "intermediate" }),
+    event("call", "tool_call", { callId: "c1", role: "Read", status: "in_progress", detail: "fixture" }),
+    event("result", "tool_result", { callId: "c1", status: "completed", result: "output" }),
+    event("final", "assistant_message", { assistantPhase: "final", text: "Final answer" }),
+    event("duration", "system", { role: "turn_duration" })
+  ]);
+  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "item"]);
+  const group = process(result);
+  expect(group.sourceIds).toEqual(["think", "explain", "call", "result"]);
+  expect(group.entries.map(entry => entry.kind)).toEqual(["item", "item", "group"]);
+  const tools = group.entries[2];
+  if (tools.kind !== "group") throw new Error("Tool group missing");
+  expect(tools.group.commands).toHaveLength(1);
+  expect(tools.group.commands[0].sourceIds).toEqual(["call", "result"]);
+  expect(tools.group.commands[0].status).toBe("completed");
+  expect(group).toMatchObject({ segmentCount: 2, toolCount: 1, completed: true, running: false });
+});
+
+test("unknown-phase prose and legacy events remain visible at their original positions", () => {
+  const unknown = groupClaudeProcesses([
+    event("think", "thinking"), event("unknown", "assistant_message", { text: "Unclassified text" }),
+    event("tool", "tool_call", { callId: "call", role: "Read" })
+  ]);
+  expect(unknown.map(entry => entry.kind)).toEqual(["item", "item", "group"]);
+  expect(unknown[1]).toMatchObject({ kind: "item", item: { id: "unknown" } });
+  const legacy = groupClaudeProcesses([event("old-think", "thinking", { turnId: null }), event("old-reply", "assistant_message", { turnId: null })]);
+  expect(legacy.map(entry => entry.kind)).toEqual(["item", "item"]);
+  const trailing = groupClaudeProcesses([event("think", "thinking"), event("unknown", "assistant_message")]);
+  expect(trailing.map(entry => entry.kind)).toEqual(["process", "item"]);
+  expect(process(trailing).completed).toBe(false);
+});
+
+test("running comes from native evidence and ends at a new turn or explicit context boundary", () => {
+  const call = event("call", "tool_call", { callId: "c1", status: "in_progress" });
+  const active = groupClaudeProcesses([call, event("unknown", "assistant_message")]);
+  expect(process(active).running).toBe(true);
+  expect(process(groupClaudeProcesses([event("final", "assistant_message", { assistantPhase: "final" }), call])).running).toBe(true);
+  for (const boundary of [event("next", "user_message", { turnId: "turn-2" }), event("compact", "compaction")]) {
+    const result = groupClaudeProcesses([call, boundary, event("later", "thinking", { turnId: boundary.turnId })]);
+    const groups = result.filter(entry => entry.kind === "process");
+    expect(groups).toHaveLength(2);
+    expect(process(result).running).toBe(false);
+    expect(groups[0]).not.toEqual(groups[1]);
+  }
+  expect(process(groupClaudeProcesses([event("think", "thinking")])).running).toBe(false);
+});
+
+test("tool result refresh updates process status without changing the native turn state key", () => {
+  const call = event("call", "tool_call", { callId: "c1", status: "in_progress" });
+  const initial = process(groupClaudeProcesses([call]));
+  const updated = process(groupClaudeProcesses([call, event("result", "tool_result", { callId: "c1", status: "completed", result: "New output" })]));
+  expect(initial.running).toBe(true);
+  expect(updated.running).toBe(false);
+  expect(updated.stateKey).toBe(initial.stateKey);
+  const prepended = process(groupClaudeProcesses([event("earlier", "thinking"), call]));
+  expect(prepended.stateKey).toBe(initial.stateKey);
+  expect(prepended.sourceIds).toEqual(["earlier", "call"]);
+  const context = process(groupClaudeProcesses([event("context", "compaction"), call]));
+  expect(context.stateKey).toBe(initial.stateKey);
+  expect(context.id).not.toBe(initial.id);
+});
+
+test("headers retain failure, plan, reply and authorization evidence while content is folded", () => {
+  const base = [event("plan", "plan", { callId: "plan-call" }), event("failure", "system", { role: "api_error", status: "failed" })];
+  const question = process(groupClaudeProcesses([...base, event("ask", "tool_call", { role: "AskUserQuestion", callId: "q", status: "in_progress" })]));
+  expect(question).toMatchObject({ hasPlan: true, failedCount: 1, needsReply: true, toolCount: 2, running: false });
+  const permission = event("permission", "permission_request", { status: "in_progress" });
+  expect(process(groupClaudeProcesses([permission]))).toMatchObject({ needsPermission: true, hasPermission: true, running: false });
+  expect(process(groupClaudeProcesses([{ ...permission, status: "completed" }]))).toMatchObject({ needsPermission: false, hasPermission: true });
+  expect(process(groupClaudeProcesses([permission, event("failure", "failure", { status: "failed" })]))).toMatchObject({ needsPermission: false, failedCount: 1, running: false });
+});
