@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.10": [
+        "修复 Claude StopFailure 首次发送与重试前的回合校验；新回合、恢复执行、成功或取消后不再投递旧失败提醒，同时保留有效旧回合的完成补发。",
+        "新增本机和远端 DSH 归档清理，支持明文与 Zstandard 会话、可核验的 subagent 后代、预览确认、并发保护、逐项重试和自定义 DSH_HOME。",
+    ],
     "1.3.9": [
         "修复 Grok 和 Claude 删除共享索引时的 systemd 只读错误，按配置开放数据根并继续保护凭据与配置。",
         "Claude 命令回显、通知和上下文归入默认折叠的系统活动，保留真实输入、搜索与分页定位。",
@@ -203,6 +207,38 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.10":
+        sections = {
+            "版本概览": ["本版修复 Claude 回合提醒校验并新增 DSH 归档清理；API 协议保持 2，macOS App 仍是唯一界面。"],
+            "功能调整": [
+                "Claude 按主回合终态发送提醒，StopFailure 作为 API 错误候选处理；首次处理、首次发送和每次重试均重新核对身份、当前回合、后续执行活动与终态。独立后台任务不阻挡主回合提醒。",
+                "新增 `cleanup.dshArchiveDryRun` 与 `cleanup.dshArchiveExecute`，在本机和当前选定远端机器的更新与维护页提供 DSH 归档清理。预览读取 workspace v2 归档名单，固定确认 id/archiveId，支持明文和 Zstandard 会话及可核验的 subagent 后代。",
+            ],
+            "问题修复": [
+                "新回合、同回合恢复执行、成功或取消会终结对应旧失败提醒并清空待投递记录；普通元数据追加和进程仍打开不再误判为恢复执行。",
+                "DSH 清理在执行前要求退出 DSH，检测恢复、归属变化、并发索引或会话修改后停止相关写入；缺失文件按已清理处理，权限、损坏索引和无法确认归属逐项返回。",
+            ],
+            "兼容性与迁移": [
+                "旧服务缺少 `dsh_archive_cleanup` 能力时按不支持处理，API 协议仍为 2；请求不接受客户端路径。",
+                "DSH_HOME 默认使用用户 `.dsh`，自定义根只开放 sessions 和 storages 子目录；共享附件、项目文件、配置及其他线程保留。自定义持久化后端和无法识别格式明确提示不支持。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 `darwin-aarch64` 的 `latest.json`。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 `.sig` 分离签名；共八项正式发布资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；安装不会自动启用 Claude hooks。",
+                "在两台机器的维护页预览 DSH 归档，退出 DSH 后清理专门测试线程，确认归档消失且其他线程保留；使用 Claude 验证恢复执行后不再收到旧失败提醒。真实线程删除与手机实收待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.9":
         sections = {
