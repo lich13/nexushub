@@ -440,10 +440,16 @@ pub fn list_claude_sessions(
             result.push(s);
         }
     }
-    result.sort_by(|a, b| {
-        b.updated_at
-            .cmp(&a.updated_at)
-            .then(a.session_key.cmp(&b.session_key))
+    result.sort_by_cached_key(|session| {
+        (
+            std::cmp::Reverse(
+                session
+                    .updated_at
+                    .as_deref()
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+            ),
+            session.session_key.clone(),
+        )
     });
     result.truncate(limit.clamp(1, 200));
     for summary in &mut result {

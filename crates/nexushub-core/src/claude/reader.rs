@@ -452,9 +452,6 @@ impl Parser {
             if !version.is_empty() {
                 parsed.version = version.into();
             }
-            if !field(record, "timestamp").is_empty() {
-                parsed.updated_at = Some(field(record, "timestamp").into());
-            }
             let key = if uuid.is_empty() {
                 format!("record-{}", position + 1)
             } else {
@@ -1355,6 +1352,20 @@ impl Parser {
             .filter(|event| matches!(event.kind.as_str(), "user_message" | "assistant_message"))
             .collect();
         parsed.message_count = messages.len();
+        parsed.updated_at = messages
+            .iter()
+            .rev()
+            .find(|event| {
+                event
+                    .text
+                    .as_ref()
+                    .is_some_and(|text| !text.trim().is_empty())
+                    || event
+                        .user_message
+                        .as_ref()
+                        .is_some_and(|message| !message.attachments.is_empty())
+            })
+            .and_then(|event| event.timestamp.clone());
         parsed.last_message = messages
             .last()
             .and_then(|event| event.text.as_ref())

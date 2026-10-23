@@ -149,6 +149,7 @@ impl CodexFixture {
         let temp = TempFixture::new("timeline-codex");
         let rollout = temp.root.join("rollout.jsonl");
         let summary = ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             id: "fixture-thread".to_owned(),
             title: "Synthetic timeline fixture".to_owned(),

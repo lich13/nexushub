@@ -2798,6 +2798,43 @@ fn archived_thread_keeps_archived_status_despite_running_rollout() {
 }
 
 #[test]
+fn lists_sort_by_last_conversation_message_before_limiting() {
+    use std::io::Write;
+    let root = unique_temp_dir("message-time-order");
+    fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.jsonl");
+    let second = root.join("second.jsonl");
+    let message = |role: &str, time: &str| json!({"type":"response_item","timestamp":time,"payload":{"type":"message","role":role,"content":[{"text":"Fixture message"}]}});
+    fs::write(
+        &first,
+        format!(
+            "{}\n{}\n",
+            message("assistant", "2026-10-01T11:00:00+08:00"),
+            json!({"type":"turn_context","timestamp":"2026-11-01T00:00:00Z","payload":{}})
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &second,
+        format!("{}\n", message("user", "2026-10-01T04:00:00Z")),
+    )
+    .unwrap();
+    write_thread_db(&root, "first", &first, 9999, 0);
+    let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+    conn.execute("INSERT INTO threads SELECT 'second', ?1, created_at, 1, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview FROM threads WHERE id = 'first'", [second.to_string_lossy().as_ref()]).unwrap();
+    let paths = CodexPaths::new(&root);
+    assert_eq!(list_threads(&paths, None, None, 1).unwrap()[0].id, "second");
+    let mut file = fs::OpenOptions::new().append(true).open(&first).unwrap();
+    writeln!(file, "{}", json!({"type":"response_item","timestamp":"2026-12-01T00:00:00Z","payload":{"type":"function_call","name":"fixture_tool","call_id":"tool","arguments":"{}"}})).unwrap();
+    assert_eq!(list_threads(&paths, None, None, 1).unwrap()[0].id, "second");
+    writeln!(file, "{}", message("user", "2026-10-01T05:00:00Z")).unwrap();
+    let list = list_threads(&paths, None, None, 1).unwrap();
+    assert_eq!(list[0].id, "first");
+    assert_eq!(list[0].updated_at.as_deref(), Some("2026-10-01T05:00:00Z"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn scan_rollout_latest_message_uses_last_message_beyond_window() {
     let mut events = Vec::new();
     for index in 0..100 {
@@ -3448,6 +3485,7 @@ impl ThreadDetailPageFixture {
             .join("\n");
         fs::write(&rollout, format!("{text}\n")).unwrap();
         let summary = super::ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             id: "fixture-thread".to_string(),
             title: "fixture history".to_string(),

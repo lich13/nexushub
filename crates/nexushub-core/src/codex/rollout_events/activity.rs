@@ -7,6 +7,7 @@ pub(crate) struct RolloutScan {
     pub(crate) identity_conflict: bool,
     pub(crate) message_count: usize,
     pub(crate) latest_message: Option<String>,
+    pub(crate) last_message_at: Option<String>,
     pub(crate) reply_needed: bool,
     pub(crate) recoverable: bool,
     pub(crate) running: bool,
@@ -231,6 +232,7 @@ impl ScanState {
         }
         if let Some(message) = parse_message_event(&value) {
             scan.message_count += 1;
+            scan.last_message_at = message.created_at;
             let text = trim_text(&message.text, 500);
             if message.role == "user" && scan.first_user_message_title.is_none() {
                 scan.first_user_message_title = first_user_message_title(&text);

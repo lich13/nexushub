@@ -122,6 +122,60 @@ pub(super) fn fixture() -> (GrokPaths, String, PathBuf) {
 }
 
 #[test]
+fn lists_sort_by_conversation_time_for_updates_and_native_history() {
+    use std::io::Write;
+    let (paths, first_id, first) = fixture();
+    let second_id = uuid::Uuid::new_v4().to_string();
+    let second = first.parent().unwrap().join(&second_id);
+    fs::create_dir_all(&second).unwrap();
+    // A session without summary metadata can still be ordered from its native messages.
+    fs::write(second.join("chat_history.jsonl"), format!("{}\n", serde_json::json!({"type":"assistant","timestamp":"2026-10-01T04:00:00Z","content":"Fixture answer"}))).unwrap();
+    let updates = first.join("updates.jsonl");
+    let message = |kind: &str, time: &str| serde_json::json!({"timestamp":time,"params":{"update":{"sessionUpdate":kind,"content":{"text":"Fixture request"}}}});
+    fs::write(
+        &updates,
+        format!(
+            "{}\n{}\n",
+            message("user_message_chunk", "2026-10-01T11:00:00+08:00"),
+            message("tool_call", "2026-12-01T00:00:00Z")
+        ),
+    )
+    .unwrap();
+    let mut metadata: Value =
+        serde_json::from_slice(&fs::read(first.join("summary.json")).unwrap()).unwrap();
+    metadata["updated_at"] = serde_json::json!("2026-12-02T00:00:00Z");
+    fs::write(first.join("summary.json"), metadata.to_string()).unwrap();
+    assert_eq!(
+        list_grok_sessions(&paths, 1, None).unwrap()[0].id,
+        second_id
+    );
+    let reads = HISTORY_READS.with(|count| count.get());
+    list_grok_sessions(&paths, 1, None).unwrap();
+    assert_eq!(HISTORY_READS.with(|count| count.get()), reads);
+    let mut file = fs::OpenOptions::new().append(true).open(&updates).unwrap();
+    writeln!(
+        file,
+        "{}",
+        message("agent_message_chunk", "2026-10-01T05:00:00Z")
+    )
+    .unwrap();
+    let latest = list_grok_sessions(&paths, 1, None).unwrap();
+    assert_eq!(latest[0].id, first_id);
+    assert_eq!(
+        latest[0].updated_at.as_deref(),
+        Some("2026-10-01T05:00:00Z")
+    );
+    assert_eq!(
+        grok_session_detail(&paths, &first_id, None)
+            .unwrap()
+            .summary
+            .updated_at,
+        latest[0].updated_at
+    );
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
 fn grok_history_cache_reuses_unchanged_files_and_invalidates_updates() {
     let (paths, id, path) = fixture();
     HISTORY_READS.with(|reads| reads.set(0));

@@ -417,6 +417,7 @@ pub(super) fn read_thread_rows_matching(
         };
         Ok(Some(LocalThreadRow {
             summary: ThreadSummary {
+                activity_updated_at: updated_raw.as_ref().and_then(format_cell_time),
                 storage_size: None,
                 id,
                 title: choose_initial_thread_title(title.as_deref(), None),

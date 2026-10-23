@@ -288,6 +288,7 @@ fn turn_bytes(provider: &str, turn: usize, text_bytes: usize) -> Vec<u8> {
 
 fn codex_summary(root: &Path) -> ThreadSummary {
     ThreadSummary {
+        activity_updated_at: None,
         storage_size: None,
         id: SESSION_ID.into(),
         title: "Synthetic reader fixture".into(),

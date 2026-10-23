@@ -1,3 +1,4 @@
+import { compareSessionMessageTime } from "../domain/sessionSelection";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { deleteClaudeSession, getClaudeOwnershipDiagnostics, getClaudeSession, listClaudeSessions, previewClaudeSessionDelete, renameClaudeSession } from "../api/claude";
 import type { ClaudeDeleteRequest, ClaudeSessionDetail, ClaudeSessionSummary } from "../../types";
@@ -5,7 +6,7 @@ import { claudeHistoryAdapter } from "./historyWindows";
 import { usePagedHistory } from "./usePagedHistory";
 
 export function useClaudeSessions(q: string) {
-  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: () => listClaudeSessions({ q, limit: 100 }), refetchInterval: 5000 });
+  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: async () => (await listClaudeSessions({ q, limit: 100 })).sort(compareSessionMessageTime), refetchInterval: 5000 });
 }
 export function useClaudeDetail(sessionKey?: string) {
   return usePagedHistory({
@@ -21,7 +22,7 @@ export function useClaudeActions() {
   return {
     rename: useMutation({ mutationFn: ({ sessionKey, title }: { sessionKey: string; title: string }) => renameClaudeSession(sessionKey, title), onSuccess: summary => {
       client.setQueryData<InfiniteData<ClaudeSessionDetail>>(["claude_code", "session", summary.sessionKey], previous => previous && ({ ...previous, pages: previous.pages.map(page => ({ ...page, summary })) }));
-      client.setQueriesData<ClaudeSessionSummary[]>({ queryKey: ["claude_code", "sessions"] }, previous => previous?.map(item => item.sessionKey === summary.sessionKey ? summary : item));
+      client.setQueriesData<ClaudeSessionSummary[]>({ queryKey: ["claude_code", "sessions"] }, previous => previous?.map(item => item.sessionKey === summary.sessionKey ? summary : item).sort(compareSessionMessageTime));
       refresh();
     } }),
     diagnostics: useMutation({ mutationFn: getClaudeOwnershipDiagnostics }),

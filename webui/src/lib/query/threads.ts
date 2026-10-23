@@ -20,6 +20,7 @@ import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import {
   archivedSelectedThreadCleanupView,
   clearLocalThreadTitleOverride,
+  compareThreadMessageTime,
   selectedThreadDetailView,
   setLocalThreadTitleOverride,
   threadSelectionView,
@@ -147,9 +148,9 @@ export function mergeThreadSummaryIntoListCache(
     return existing ? rows.filter((thread) => thread.id !== incoming.id) : rows;
   }
   if (existing) {
-    return rows.map((thread) => thread.id === incoming.id ? merged : thread);
+    return rows.map((thread) => thread.id === incoming.id ? merged : thread).sort(compareThreadMessageTime);
   }
-  return [merged, ...rows];
+  return [merged, ...rows].sort(compareThreadMessageTime);
 }
 
 export function removeThreadFromListCaches(qc: QueryClient, threadId: string): void {

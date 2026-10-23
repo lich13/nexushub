@@ -233,7 +233,7 @@
           "status": "complete"
         },
         "title": "Inspect the synthetic sample.",
-        "updatedAt": "2026-01-02T03:04:16Z"
+        "updatedAt": "2026-01-02T03:04:15Z"
       },
       "timeline": [
         {
@@ -339,7 +339,7 @@
           "status": "complete"
         },
         "title": "Inspect the synthetic sample.",
-        "updatedAt": "2026-01-02T03:04:16Z"
+        "updatedAt": "2026-01-02T03:04:15Z"
       },
       "timeline": [
         {
@@ -373,7 +373,7 @@
         "status": "complete"
       },
       "title": "Inspect the synthetic sample.",
-      "updatedAt": "2026-01-02T03:04:16Z"
+      "updatedAt": "2026-01-02T03:04:15Z"
     },
     "olderPage": {
       "afterCursor": "n:claude-assistant-1:1",
@@ -455,7 +455,7 @@
           "status": "complete"
         },
         "title": "Inspect the synthetic sample.",
-        "updatedAt": "2026-01-02T03:04:16Z"
+        "updatedAt": "2026-01-02T03:04:15Z"
       },
       "totalEvents": 7
     }

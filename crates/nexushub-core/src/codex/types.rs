@@ -13,6 +13,9 @@ pub enum ThreadStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
+    // Runtime activity freshness for Probe; the public timestamp follows conversation messages.
+    #[serde(skip)]
+    pub activity_updated_at: Option<String>,
     #[serde(
         default,
         rename = "storageSize",
@@ -33,6 +36,22 @@ pub struct ThreadSummary {
     pub active_job_id: Option<String>,
     pub pending_elicitation: Option<PendingElicitation>,
     pub last_event_kind: Option<String>,
+}
+
+impl ThreadSummary {
+    pub(crate) fn sort_by_message_time(rows: &mut [Self]) {
+        rows.sort_by_cached_key(|thread| {
+            (
+                std::cmp::Reverse(
+                    thread
+                        .updated_at
+                        .as_deref()
+                        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+                ),
+                thread.id.clone(),
+            )
+        });
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
