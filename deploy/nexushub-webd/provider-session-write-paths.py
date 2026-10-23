@@ -17,7 +17,10 @@ DEFAULT_ROOTS = {
     Path("/root/.claude"),
     Path("/root/.dsh/sessions"),
     Path("/root/.dsh/storages"),
+    Path("/home/ubuntu/.dsh/sessions"),
+    Path("/home/ubuntu/.dsh/storages"),
 }
+DEFAULT_DSH_HOMES = {Path("/root/.dsh"), Path("/home/ubuntu/.dsh")}
 PROTECTED_FILES = {
     "GROK_HOME": ("auth.json", "config.toml", "endpoint.env", "sandbox.toml", "trusted_folders.toml"),
     "CLAUDE_CONFIG_DIR": (".credentials.json", ".claude.json", "settings.json", "settings.local.json"),
@@ -68,6 +71,8 @@ def normalize_session_root(value: str, source: str) -> Path:
         raise ValueError(f"{source} must be an absolute path")
     if path in FORBIDDEN_ROOTS:
         raise ValueError(f"{source} is too broad for ReadWritePaths: {path}")
+    if source == "DSH_HOME" and path in DEFAULT_DSH_HOMES:
+        return path
     if path in DEFAULT_ROOTS:
         return path
     current = Path("/")
