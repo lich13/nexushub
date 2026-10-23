@@ -497,7 +497,7 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
 }
 
 #[tokio::test]
-async fn bark_delivers_native_grok_and_claude_events_without_replaying_them() {
+async fn bark_native_events_require_live_claude_evidence_and_do_not_replay() {
     for (provider, kind) in [
         (NativeProvider::Grok, "completion"),
         (NativeProvider::Claude, "reply_needed"),
@@ -508,6 +508,16 @@ async fn bark_delivers_native_grok_and_claude_events_without_replaying_them() {
         let bark = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
             .await
             .unwrap();
+        if provider == NativeProvider::Claude {
+            assert!(!bark.sent && !bark.skipped);
+            assert_eq!(bark.status.as_deref(), Some("waiting_retry"));
+            assert_eq!(
+                fixture.bark.count(),
+                0,
+                "unverified synthetic identities must not send"
+            );
+            continue;
+        }
         assert!(bark.sent);
         let requests = fixture.bark.requests();
         assert_eq!(requests.len(), 1);

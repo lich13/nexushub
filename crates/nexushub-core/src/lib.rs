@@ -4,6 +4,7 @@ pub mod codex;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod dsh;
 pub mod grok;
 pub mod history_navigation;
 pub mod jobs;

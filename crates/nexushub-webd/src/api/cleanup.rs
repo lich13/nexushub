@@ -92,3 +92,32 @@ pub(crate) async fn hidden_threads_delete_execute(
     .await
     .map_err(anyhow::Error::from)??)
 }
+
+pub(crate) async fn dsh_archive_delete_dry_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&http_update_platform())
+            .cleanup()
+            .dsh_archive_dry_run(&nexushub_core::dsh::DshPaths::default_for_user())
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
+}
+
+pub(crate) async fn dsh_archive_delete_execute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<nexushub_core::dsh::DshArchiveDeleteRequest>,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(nexushub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+        let result = NexusHubUseCases::new(&http_update_platform()).cleanup()
+            .dsh_archive_execute(&nexushub_core::dsh::DshPaths::default_for_user(), request)?;
+        state.db.record_audit(Some(&auth.admin_id), "dsh_archives.delete.execute", Some("dsh_archives"), None, None,
+            serde_json::json!({"deleted_threads": result.deleted_threads, "deleted_bytes": result.deleted_bytes}))?;
+        Ok(result)
+    }).await.map_err(anyhow::Error::from)??)
+}

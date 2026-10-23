@@ -26,6 +26,14 @@ class ProviderWritePathsTests(unittest.TestCase):
         self.assertEqual(provider_paths.render({"GROK_HOME": "/root/.grok", "CLAUDE_CONFIG_DIR": "/root/.claude"}), "")
         self.assertEqual(provider_paths.render({"CODEX_HOME": "auto"}, {"codex": {"home": "auto"}}), "")
 
+    def test_dsh_only_grants_sessions_and_storages_including_missing_directories(self):
+        self.assertEqual(provider_paths.render({"DSH_HOME": "/root/.dsh"}), "")
+        output = provider_paths.render({"DSH_HOME": "/srv/missing-fixture-dsh"})
+        self.assertEqual(output, '[Service]\nReadWritePaths="-/srv/missing-fixture-dsh/sessions"\nReadWritePaths="-/srv/missing-fixture-dsh/storages"\n')
+        unit = (args.module.parent / "systemd.service").read_text()
+        self.assertIn("-/root/.dsh/sessions -/root/.dsh/storages", unit)
+        self.assertNotIn("-/root/.dsh ", unit)
+
     def test_custom_roots_cover_indexes_and_protect_settings(self):
         values = {"GROK_HOME": "/srv/fixture-grok", "CLAUDE_CONFIG_DIR": "/srv/fixture-claude", "CODEX_HOME": "/srv/fixture-codex"}
         output = provider_paths.render(values, {"codex": {"home": "/srv/configured-codex"}})

@@ -41,44 +41,14 @@ async fn deliver_pending(
     db: &PanelDb,
     snapshots: &[native_probe::NativeStreamSnapshot],
 ) -> Result<()> {
-    deliver_pending_with_reader(config, db, snapshots, || async {
-        tokio::task::spawn_blocking(|| native_probe::scan(NativeProvider::Claude))
-            .await
-            .ok()?
-            .ok()
-    })
-    .await
-}
-
-async fn deliver_pending_with_reader<F, Fut>(
-    config: &Config,
-    db: &PanelDb,
-    snapshots: &[native_probe::NativeStreamSnapshot],
-    read_claude: F,
-) -> Result<()>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Option<NativeScan>>,
-{
     let deliveries = db.pending_native_deliveries(100)?;
     let instance = db.notification_instance_id()?;
-    let fresh = if deliveries
-        .iter()
-        .any(|d| d.provider == NativeProvider::Claude)
-    {
-        read_claude().await
-    } else {
-        None
-    };
     for delivery in deliveries {
         // Identity and branch are resolved by each native parser. Codex's
         // main-task identity filter must never be applied to these providers.
-        let candidates = if delivery.provider == NativeProvider::Claude {
-            fresh.as_ref().map(|s| s.streams.as_slice()).unwrap_or(&[])
-        } else {
-            snapshots
-        };
-        let still_current = candidates.iter().any(|stream| {
+        // Claude terminal events are re-read by the delivery queue immediately
+        // before sending. Missing identity/terminal data must retain bounded retries.
+        let still_current = snapshots.iter().any(|stream| {
             stream.provider == delivery.provider
                 && stream.session_key == delivery.session_key
                 && stream.id == delivery.thread_id
@@ -101,7 +71,8 @@ where
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let outcome = if !still_current || !enabled {
+        let outcome = if (!still_current && delivery.provider != NativeProvider::Claude) || !enabled
+        {
             ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
                 config.probe.notifications.enabled,
@@ -123,81 +94,56 @@ mod tests {
     use serde_json::Value;
 
     #[tokio::test]
-    async fn claude_send_revalidates_terminal_evidence_and_deduplicates_competing_scans() {
-        for change in ["none", "new_turn", "identity", "unreadable"] {
-            let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
-            let mut config = Config::default();
-            config.probe.notifications.enabled = true;
-            config.probe.notifications.server_url = server.url();
-            let db = PanelDb::open(":memory:").unwrap();
-            db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
-                .unwrap();
-            db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
-                .unwrap();
-            let stream = NativeStreamSnapshot {
-                provider: NativeProvider::Claude,
-                session_key: "fixture-session".into(),
-                id: "fixture-native".into(),
-                title: "Fixture completion".into(),
-                identity: "fixture-file".into(),
-                record_count: 2,
-                settled_count: 2,
-                events: vec![NativeTurnEvent {
-                    prompt_id: None,
-                    position: 2,
-                    turn_id: "fixture-turn".into(),
-                    kind: "completion".into(),
-                    body: "Fixture completed".into(),
-                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
-                }],
-            };
-            let scan = NativeScan {
-                streams: vec![stream.clone()],
-                errors: 0,
-            };
-            assert_eq!(
-                db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-                    .unwrap(),
-                1
-            );
-            assert_eq!(
-                db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-                    .unwrap(),
-                0
-            );
-            let mut fresh = scan.clone();
-            match change {
-                "new_turn" => {
-                    fresh.streams[0].record_count += 1;
-                    fresh.streams[0].settled_count += 1;
-                }
-                "identity" => fresh.streams[0].identity = "fixture-replaced".into(),
-                "unreadable" => fresh.streams.clear(),
-                _ => {}
-            }
-            deliver_pending_with_reader(&config, &db, &[stream], || {
-                std::future::ready(Some(fresh.clone()))
-            })
-            .await
+    async fn claude_candidate_without_a_readable_source_stays_in_the_bounded_queue() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-            let events = db.list_probe_events(10).unwrap();
-            assert_eq!(events.len(), 1);
-            assert_eq!(
-                events[0].payload["bark_status"],
-                if matches!(change, "none" | "new_turn") {
-                    "sent"
-                } else {
-                    "skipped"
-                }
-            );
-            if matches!(change, "none" | "new_turn") {
-                assert!(server.request().contains("Fixture completed"));
-            }
-            db.recover_interrupted_native_deliveries().unwrap();
+        db.stage_native_notifications(NativeProvider::Claude, &NativeScan::default(), &config)
+            .unwrap();
+        let stream = NativeStreamSnapshot {
+            provider: NativeProvider::Claude,
+            session_key: "fixture-session".into(),
+            id: "fixture-native".into(),
+            title: "Fixture completion".into(),
+            identity: "fixture-file".into(),
+            record_count: 2,
+            settled_count: 2,
+            events: vec![NativeTurnEvent {
+                prompt_id: None,
+                position: 2,
+                turn_id: "fixture-turn".into(),
+                kind: "completion".into(),
+                body: "Fixture completed".into(),
+                timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+            }],
+        };
+        let scan = NativeScan {
+            streams: vec![stream],
+            errors: 0,
+        };
+        assert_eq!(
             db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
-                .unwrap();
-            assert!(db.pending_native_deliveries(100).unwrap().is_empty());
-        }
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
+                .unwrap(),
+            0
+        );
+        deliver_pending(&config, &db, &[]).await.unwrap();
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["bark_status"], "queued");
+        assert_eq!(
+            events[0].payload["bark"]["reason"],
+            "claude_terminal_pending"
+        );
+        db.stage_native_notifications(NativeProvider::Claude, &scan, &config)
+            .unwrap();
+        assert!(db.pending_native_deliveries(100).unwrap().is_empty());
     }
 
     #[tokio::test]

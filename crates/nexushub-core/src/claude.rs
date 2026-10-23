@@ -190,6 +190,7 @@ struct Parsed {
     turn_open: bool,
     native_events: Vec<crate::native_probe::NativeTurnEvent>,
     prompts: HashMap<String, ClaudePrompt>,
+    current_turn: Option<String>,
     record_count: u64,
     settled_count: u64,
 }
@@ -605,6 +606,15 @@ pub struct ClaudePrompt {
     pub timestamp_ms: i64,
     pub ambiguous: bool,
     pub cancelled: bool,
+    pub last_activity_position: u64,
+    pub last_activity_ms: Option<i64>,
+    pub last_api_error_position: Option<u64>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeNotificationState {
+    Current,
+    Pending,
+    Obsolete,
 }
 #[derive(Debug, Clone)]
 pub struct ClaudeNotificationContext {
@@ -612,6 +622,60 @@ pub struct ClaudeNotificationContext {
     pub prompts: HashMap<String, ClaudePrompt>,
     pub path: PathBuf,
     pub project: String,
+    pub current_turn: Option<String>,
+}
+impl ClaudeNotificationContext {
+    /// A hook is terminal evidence for its own prompt, not for the whole process.
+    /// Successful historical turns remain deliverable; failures must still be current.
+    pub fn hook_state(
+        &self,
+        prompt_id: &str,
+        kind: &str,
+        received_ms: i64,
+        observed_records: Option<u64>,
+    ) -> ClaudeNotificationState {
+        use ClaudeNotificationState::*;
+        let Some(prompt) = self.prompts.get(prompt_id).filter(|p| !p.ambiguous) else {
+            return Pending;
+        };
+        if prompt.cancelled {
+            return Obsolete;
+        }
+        if !matches!(kind, "completion" | "failure") {
+            return Current;
+        }
+        let terminal = self.stream.events.iter().find(|e| {
+            e.turn_id == prompt.turn_id && matches!(e.kind.as_str(), "completion" | "failure")
+        });
+        if kind == "completion" {
+            if let Some(event) = terminal {
+                return if event.kind == "completion" {
+                    Current
+                } else {
+                    Obsolete
+                };
+            }
+            return if self.current_turn.as_ref() != Some(&prompt.turn_id)
+                || prompt.last_activity_ms.is_some_and(|ms| ms > received_ms)
+            {
+                Obsolete
+            } else {
+                Pending
+            };
+        }
+        if self.current_turn.as_ref() != Some(&prompt.turn_id)
+            || terminal.is_some_and(|e| e.kind == "completion")
+            || observed_records.is_some_and(|n| prompt.last_activity_position > n)
+            || prompt.last_activity_ms.is_some_and(|ms| ms > received_ms)
+            || prompt
+                .last_api_error_position
+                .is_some_and(|n| prompt.last_activity_position > n)
+        {
+            Obsolete
+        } else {
+            Current
+        }
+    }
 }
 pub fn notification_context_for_key(
     paths: &ClaudePaths,
@@ -664,6 +728,7 @@ pub fn notification_context(paths: &ClaudePaths, path: &Path) -> Result<ClaudeNo
     Ok(ClaudeNotificationContext {
         stream,
         prompts: parsed.prompts.clone(),
+        current_turn: parsed.current_turn.clone(),
         path: path.into(),
         project: Path::new(&parsed.cwd)
             .file_name()

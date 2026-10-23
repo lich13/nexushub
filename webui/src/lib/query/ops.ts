@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import {
   dryRunArchiveDelete,
+  dryRunDshArchiveDelete,
+  startDshArchiveDelete,
   dryRunHiddenThreadDelete,
   getUpdateStatus,
   listJobs,
@@ -131,6 +133,24 @@ export function useOpsActions(input: {
         invalidateJobs();
         invalidateThreads();
       }
+    })
+  };
+}
+
+export function useDshArchiveActions(input: {
+  supported: boolean;
+  onPreview: (plan: import("../../types").DshArchiveDeletePlan) => void;
+  onExecute: (result: import("../../types").DshArchiveDeleteResult) => void;
+}) {
+  const requireSupport = () => { if (!input.supported) throw new Error("当前机器不支持 DSH 归档清理"); };
+  return {
+    preview: useMutation({
+      mutationFn: () => { requireSupport(); return dryRunDshArchiveDelete(); },
+      onSuccess: input.onPreview
+    }),
+    execute: useMutation({
+      mutationFn: (request: import("../../types").DshArchiveDeleteRequest) => { requireSupport(); return startDshArchiveDelete(request); },
+      onSuccess: input.onExecute
     })
   };
 }

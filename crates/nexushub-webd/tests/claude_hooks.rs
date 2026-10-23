@@ -18,7 +18,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -34,6 +34,7 @@ struct Fixture {
     db: PanelDb,
     binary: PathBuf,
     requests: Arc<Mutex<Vec<Value>>>,
+    reply_code: Arc<AtomicU16>,
     stop: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
@@ -61,6 +62,8 @@ impl Fixture {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let reply_code = Arc::new(AtomicU16::new(200));
+        let response_code = reply_code.clone();
         let (captured, stopped) = (requests.clone(), stop.clone());
         let server = thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
@@ -68,6 +71,9 @@ impl Fixture {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                // macOS can inherit the listener's nonblocking flag. Wait for
+                // the request instead of dropping a just-accepted connection.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
@@ -93,7 +99,9 @@ impl Fixture {
                                 serde_json::from_slice(&bytes[offset + 4..offset + 4 + length])
                                     .unwrap();
                             captured.lock().unwrap().push(payload);
-                            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"code\":200}");
+                            let code = response_code.load(Ordering::Relaxed);
+                            let response = format!("HTTP/1.1 {code} Response\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{{\"code\":{code}}}");
+                            let _ = stream.write_all(response.as_bytes());
                             break;
                         }
                     }
@@ -154,6 +162,7 @@ impl Fixture {
             db,
             binary,
             requests,
+            reply_code,
             stop,
             server: Some(server),
         }
@@ -220,7 +229,15 @@ impl Fixture {
         {
             thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(self.requests.lock().unwrap().len(), count);
+        let reasons = Connection::open(&self.config.paths.db_path).unwrap()
+            .prepare("SELECT status, json_extract(outcome_json, '$.reason') FROM probe_notification_deliveries").unwrap()
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            self.requests.lock().unwrap().len(),
+            count,
+            "delivery states: {reasons:?}"
+        );
     }
 }
 impl Drop for Fixture {
@@ -259,7 +276,7 @@ fn real_cli_hooks_and_polling_share_one_claim_per_prompt_category() {
     for event in [
         f.input("Notification", "permission_prompt", "prompt-one"),
         f.input("Notification", "elicitation_dialog", "prompt-one"),
-        f.input("StopFailure", "", "prompt-one"),
+        f.input("StopFailure", "", "prompt-two"),
     ] {
         f.hook(&event);
         f.hook(&event);
@@ -395,4 +412,145 @@ fn installing_hooks_preserves_an_existing_successful_native_delivery() {
     f.hook(&f.input("Stop", "", "prompt-one"));
     f.hook(&f.input("Notification", "idle_prompt", "prompt-one"));
     assert!(f.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn stale_failures_and_stops_without_terminal_evidence_do_not_send() {
+    let f = Fixture::new();
+    f.user("message-one", None, "prompt-one");
+    f.user("message-two", Some("message-one"), "prompt-two");
+    f.hook(&f.input("StopFailure", "", "prompt-one"));
+    f.hook(&f.input("Stop", "", "prompt-two"));
+    assert!(f.requests.lock().unwrap().is_empty());
+    let conn = Connection::open(&f.config.paths.db_path).unwrap();
+    let pending: i64 = conn.query_row("SELECT count(*) FROM probe_notification_deliveries WHERE status='pending' AND ciphertext IS NOT NULL", [], |r| r.get(0)).unwrap();
+    assert_eq!(
+        pending, 1,
+        "unwritten terminal evidence stays in the bounded queue"
+    );
+}
+
+#[test]
+fn failure_retry_is_discarded_after_recovery_and_clears_queued_body() {
+    let f = Fixture::new();
+    f.user("message-one", None, "prompt-one");
+    f.reply_code.store(503, Ordering::Relaxed);
+    f.hook(&f.input("StopFailure", "", "prompt-one"));
+    f.wait_count(1);
+    f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"message-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Working again","stop_reason":null}}));
+    f.reply_code.store(200, Ordering::Relaxed);
+    let conn = Connection::open(&f.config.paths.db_path).unwrap();
+    conn.execute(
+        "UPDATE probe_notification_deliveries SET next_ms=0 WHERE status='pending'",
+        [],
+    )
+    .unwrap();
+    let monitor = f.monitor();
+    let start = Instant::now();
+    loop {
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM probe_notification_deliveries WHERE ciphertext IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if remaining == 0 {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "stale retry must reach a terminal outcome"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(monitor);
+    assert_eq!(
+        f.requests.lock().unwrap().len(),
+        1,
+        "a recovered failure must not be retried"
+    );
+}
+
+#[test]
+fn same_turn_recovery_completion_and_cancellation_reject_late_failure_hooks() {
+    for recovery in ["resume", "complete", "cancel"] {
+        let f = Fixture::new();
+        f.user("message-one", None, "prompt-one");
+        f.append(json!({"type":"assistant","uuid":"error-one","parentUuid":"message-one","sessionId":"session-fixture","isApiErrorMessage":true,"timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"API error fixture","stop_reason":"end_turn"}}));
+        match recovery {
+            "resume" => f.append(json!({"type":"assistant","uuid":"resumed","parentUuid":"error-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Working again","stop_reason":null}})),
+            "complete" => f.append(json!({"type":"assistant","uuid":"done","parentUuid":"error-one","sessionId":"session-fixture","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"assistant","content":"Done","stop_reason":"end_turn"}})),
+            _ => f.append(json!({"type":"system","subtype":"cancelled"})),
+        }
+        f.hook(&f.input("StopFailure", "", "prompt-one"));
+        assert!(f.requests.lock().unwrap().is_empty(), "{recovery}");
+        let conn = Connection::open(&f.config.paths.db_path).unwrap();
+        let pending: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM probe_notification_deliveries WHERE ciphertext IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{recovery}");
+    }
+}
+
+#[test]
+fn polling_rechecks_failed_turns_but_delivers_valid_historical_completion() {
+    for kind in ["failure", "completion"] {
+        let f = Fixture::new();
+        f.user("message-one", None, "prompt-one");
+        if kind == "completion" {
+            f.complete();
+        } else {
+            f.append(json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture failure"],"timestamp":chrono::Utc::now().to_rfc3339()}));
+        }
+        let context = claude::notification_context(&f.paths, &f.transcript).unwrap();
+        f.db.stage_native_notifications(
+            NativeProvider::Claude,
+            &NativeScan {
+                streams: vec![context.stream],
+                errors: 0,
+            },
+            &f.config,
+        )
+        .unwrap();
+        f.user(
+            "message-two",
+            Some(if kind == "completion" {
+                "answer-one"
+            } else {
+                "message-one"
+            }),
+            "prompt-two",
+        );
+        let monitor = f.monitor();
+        let start = Instant::now();
+        loop {
+            if !f.db.list_probe_events(10).unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "native delivery did not settle"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        drop(monitor);
+        let events = f.db.list_probe_events(10).unwrap();
+        assert_eq!(
+            events[0].payload["bark_status"],
+            if kind == "completion" {
+                "sent"
+            } else {
+                "skipped"
+            }
+        );
+        assert_eq!(
+            f.requests.lock().unwrap().len(),
+            usize::from(kind == "completion")
+        );
+    }
 }

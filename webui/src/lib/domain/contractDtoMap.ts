@@ -1,4 +1,9 @@
 export const contractDtoNames = [
+    "DshArchiveSelection",
+    "DshArchiveCandidate",
+    "DshArchiveDeletePlan",
+    "DshArchiveDeleteRequest",
+    "DshArchiveDeleteResult",
     "DesktopThreadRequest",
     "DesktopSessionRequest",
     "DesktopActionRequest",

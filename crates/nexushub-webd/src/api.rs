@@ -37,8 +37,8 @@ pub(crate) use claude::{
     ClaudeListQuery,
 };
 pub(crate) use cleanup::{
-    archive_delete_dry_run, archive_delete_execute, hidden_threads_delete_dry_run,
-    hidden_threads_delete_execute,
+    archive_delete_dry_run, archive_delete_execute, dsh_archive_delete_dry_run,
+    dsh_archive_delete_execute, hidden_threads_delete_dry_run, hidden_threads_delete_execute,
 };
 pub(crate) use grok::{
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename, GrokListQuery,

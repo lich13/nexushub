@@ -657,12 +657,14 @@ describe("conversation helpers", () => {
 
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
       "本机 App 更新",
+      "DSH 归档清理",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
       "远程服务更新",
       "归档线程清理",
       "隐藏线程清理",
+      "DSH 归档清理",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual(expect.arrayContaining([

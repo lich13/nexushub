@@ -165,6 +165,8 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub hidden_cleanup_scan: bool,
     #[serde(default)]
+    pub dsh_archive_cleanup: bool,
+    #[serde(default)]
     pub codex_delete_tree: bool,
     pub thread_archive_actions: bool,
     pub systemd: bool,
@@ -263,6 +265,8 @@ pub fn system_capabilities_for_surface(
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),
         thread_cleanup: Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface),
         hidden_cleanup_scan: Capability::ThreadCleanup
+            .is_supported_on_surface(platform, host_surface),
+        dsh_archive_cleanup: Capability::ThreadCleanup
             .is_supported_on_surface(platform, host_surface),
         codex_delete_tree: Capability::CodexDeleteTree
             .is_supported_on_surface(platform, host_surface),

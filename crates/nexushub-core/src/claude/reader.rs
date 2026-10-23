@@ -531,7 +531,7 @@ impl Parser {
                     self.read_result(record, position);
                 }
                 "system" => {
-                    self.read_system(record, key);
+                    self.read_system(record, position, key);
                 }
                 "permission_request" => {
                     self.read_permission_request(record, position, key);
@@ -670,11 +670,17 @@ impl Parser {
                                 timestamp_ms: millis(field(record, "timestamp")).unwrap_or(0),
                                 ambiguous: false,
                                 cancelled: false,
+                                last_activity_position: position as u64 + 1,
+                                last_activity_ms: millis(field(record, "timestamp")),
+                                last_api_error_position: None,
                             }
                         });
                         entry.ambiguous |= entry.turn_id != key;
                     }
                     self.turn = Some(key.clone());
+                    self.parsed
+                        .native_events
+                        .retain(|event| event.kind != "failure");
                     self.parsed.turn_open = true;
                     self.parsed.last_turn_at = millis(field(record, "timestamp"));
                     self.pending.clear();
@@ -722,6 +728,15 @@ impl Parser {
             let intermediate = kind == "assistant"
                 && (field(message, "stop_reason") == "tool_use"
                     || parts.iter().any(|part| field(part, "type") == "tool_use"));
+            let api_error = record["isApiErrorMessage"] == true;
+            if kind == "assistant"
+                || parts.iter().any(|p| {
+                    field(p, "type") == "tool_result"
+                        && self.pending.contains(field(p, "tool_use_id"))
+                })
+            {
+                self.execution_activity(record, position, api_error);
+            }
             if kind == "assistant" {
                 // Native transcripts can split one API message into several
                 // records. Only an explicit shared message ID links their text.
@@ -895,7 +910,7 @@ impl Parser {
                 }
                 self.parsed.events.push(Arc::new(e));
             }
-            if kind == "assistant" {
+            if kind == "assistant" && !api_error {
                 let text = text_content_only(content);
                 if !text.trim().is_empty() {
                     self.last_assistant_text = Some(text);
@@ -910,6 +925,7 @@ impl Parser {
             }
             let assistant_terminal = terminal_stop_reason(field(message, "stop_reason"));
             if kind == "assistant"
+                && !api_error
                 && assistant_terminal
                 && self.pending.is_empty()
                 && self.questions.is_empty()
@@ -937,6 +953,9 @@ impl Parser {
                         | "error_max_budget_usd"
                         | "error_max_structured_output_retries"
                 );
+            if is_failure || subtype == "success" {
+                self.execution_activity(record, position, is_failure);
+            }
             let stop_reason = record.get("stop_reason").and_then(Value::as_str);
             let explicit_terminal = stop_reason.is_some_and(terminal_stop_reason);
             let inferred_terminal = stop_reason.is_none()
@@ -1013,9 +1032,12 @@ impl Parser {
             }
         }
     }
-    fn read_system(&mut self, record: &Value, key: String) {
+    fn read_system(&mut self, record: &Value, position: usize, key: String) {
         for key in std::iter::once(key) {
             let subtype = field(record, "subtype");
+            if subtype == "api_error" {
+                self.execution_activity(record, position, true);
+            }
             if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
                 self.clear_final_answer();
                 for prompt in self.parsed.prompts.values_mut() {
@@ -1295,6 +1317,7 @@ impl Parser {
     }
     fn snapshot(&self, path: &Path, issues: Vec<String>, record_count: u64) -> Parsed {
         let mut parsed = self.parsed.clone();
+        parsed.current_turn = self.turn.clone();
         for message in issues {
             issue(&mut parsed, &message);
         }
@@ -1337,6 +1360,25 @@ impl Parser {
             .and_then(|event| event.text.as_ref())
             .map(|text| text.chars().take(240).collect());
         parsed
+    }
+
+    fn execution_activity(&mut self, record: &Value, position: usize, api_error: bool) {
+        for prompt in self.parsed.prompts.values_mut() {
+            if Some(&prompt.turn_id) == self.turn.as_ref() {
+                if api_error {
+                    prompt.last_api_error_position = Some(position as u64 + 1);
+                } else {
+                    prompt.last_activity_position = position as u64 + 1;
+                    prompt.last_activity_ms = millis(field(record, "timestamp"));
+                }
+            }
+        }
+        if api_error {
+            self.parsed
+                .native_events
+                .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
+            self.parsed.turn_open = self.turn.is_some();
+        }
     }
 }
 
