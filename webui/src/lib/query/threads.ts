@@ -301,10 +301,11 @@ export function useThreadCacheActions() {
   return useMemo(() => ({
     clearArchivedThreadClientState: (messageStore: ThreadMessageStoreClear, threadId: string) =>
       clearArchivedThreadClientState(qc, messageStore, threadId),
+    // A list summary update does not refresh the cached transcript.
     mergeThreadDetailSummary: (threadId: string, incoming: Partial<ThreadSummary>) =>
       qc.setQueryData<ThreadDetail>(threadQueryKeys.thread(threadId), (current) => (
         current ? { ...current, summary: mergeIncomingThreadSummaryForCache(current.summary, incoming) as ThreadSummary } : current
-      )),
+      ), { updatedAt: qc.getQueryState(threadQueryKeys.thread(threadId))?.dataUpdatedAt }),
     updateThreadListCaches: (incoming: ThreadSummary) => updateThreadListCaches(qc, incoming),
     invalidateThreads: (refetchType?: "active" | "all" | "inactive" | "none") =>
       qc.invalidateQueries({ queryKey: threadQueryKeys.threads(), ...(refetchType ? { refetchType } : {}) }),
@@ -483,6 +484,8 @@ export function useThreadDetailQuery(input: {
       return input.select ? input.select(detail) : detail;
     },
     enabled: Boolean(input.threadId),
+    // Reuse recent reads when switching threads within the polling window.
+    staleTime: (query) => input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary) || 0,
     refetchInterval: (query) => document.visibilityState !== "visible" ? false : input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary),
     placeholderData: preservePreviousQueryData
   });
