@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { addSessionSelection, clickSessionSelection, emptySessionSelection, syncSessionSelection, type SessionClick, type SessionSelectionState } from "./sessionSelection";
+import { compareSessionMessageTime, addSessionSelection, clickSessionSelection, emptySessionSelection, syncSessionSelection, type SessionClick, type SessionSelectionState } from "./sessionSelection";
 import { claudeResumeCommand } from "./claudeSession";
 
 const visible = ["a", "b", "c", "d", "e"];
@@ -54,4 +54,14 @@ describe("session selection", () => {
 });
 test("Claude resume commands quote paths and IDs as literal shell arguments", () => {
   expect(claudeResumeCommand("/fixture/a'b $(printf ignored)", "id'one")).toBe("cd -- '/fixture/a'\\''b $(printf ignored)' && claude --resume 'id'\\''one'");
+});
+
+test("provider lists sort known conversation times newest first with stable unknowns", () => {
+  const rows = [
+    { id: "first", sessionKey: "z", updatedAt: "2026-10-01T11:00:00+08:00" },
+    { id: "unknown-b", updatedAt: "invalid" },
+    { id: "second", sessionKey: "a", updatedAt: "2026-10-01T04:00:00Z" },
+    { id: "unknown-a", updatedAt: null }
+  ];
+  expect(rows.sort(compareSessionMessageTime).map(row => row.id)).toEqual(["second", "first", "unknown-a", "unknown-b"]);
 });

@@ -439,6 +439,7 @@ fn public_codex_reader_keeps_context_only_blocks_and_summarizes_clean_user_text(
         .join("\n");
     fs::write(&rollout, format!("{jsonl}\n")).unwrap();
     let summary = ThreadSummary {
+        activity_updated_at: None,
         storage_size: None,
         id: format!("fixture-thread-{}", uuid::Uuid::new_v4()),
         title: "Synthetic context fixture".into(),

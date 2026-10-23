@@ -119,6 +119,7 @@ fn authenticated_test_state_with_config_file() -> (crate::state::AppState, Strin
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
     ThreadSummary {
+        activity_updated_at: None,
         storage_size: None,
         id: id.to_string(),
         title: title.to_string(),
@@ -1339,6 +1340,20 @@ fn thread_title_reads_explicit_name_without_using_preview() {
         })),
         None
     );
+}
+
+#[test]
+fn app_server_metadata_updates_preserve_conversation_time_and_probe_freshness() {
+    let mut fallback = fallback_summary("thread-a", "Fixture");
+    fallback.updated_at = Some("2026-01-01T00:00:00Z".into());
+    let response = json!({"threads":[{"id":"thread-a","updatedAt":1780824385}]});
+    let rows = app_server_thread_summaries(&response, &[fallback]);
+    assert_eq!(rows[0].updated_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+    assert!(rows[0].activity_updated_at.is_some());
+    assert!(serde_json::to_value(&rows[0])
+        .unwrap()
+        .get("activity_updated_at")
+        .is_none());
 }
 
 #[test]

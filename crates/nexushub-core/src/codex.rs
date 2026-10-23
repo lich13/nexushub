@@ -102,7 +102,7 @@ pub fn list_threads(
             true
         }
     });
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    ThreadSummary::sort_by_message_time(&mut rows);
     rows.truncate(limit.max(1));
     Ok(rows)
 }
@@ -130,6 +130,8 @@ fn enrich_local_thread_row(
     row: &mut thread_rows::LocalThreadRow,
     index_entry: Option<&SessionIndexEntry>,
 ) -> bool {
+    // Native updated_at also changes on metadata writes; only messages order the list.
+    row.summary.updated_at = None;
     if row.summary.rollout_path.is_none() {
         row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
     }
@@ -215,6 +217,10 @@ fn enrich_thread_from_rollout_with_storage(
     }
     row.message_count = scan.message_count;
     row.latest_message = scan.latest_message;
+    if row.activity_updated_at.is_none() {
+        row.activity_updated_at = row.updated_at.clone();
+    }
+    row.updated_at = scan.last_message_at;
     if !matches!(row.status, ThreadStatus::Archived) {
         if scan.recoverable {
             row.status = ThreadStatus::Recoverable;

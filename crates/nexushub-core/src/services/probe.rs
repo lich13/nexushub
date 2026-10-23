@@ -1053,7 +1053,11 @@ fn probe_reply_needed_thread_is_fresh(thread: &ThreadSummary) -> bool {
 }
 
 fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
-    let Some(updated_at) = thread.updated_at.as_deref() else {
+    let Some(updated_at) = thread
+        .activity_updated_at
+        .as_deref()
+        .or(thread.updated_at.as_deref())
+    else {
         return false;
     };
     let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
@@ -1175,6 +1179,7 @@ mod tests {
     #[test]
     fn passive_notification_plans_are_core_defined() {
         let thread = ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             id: "thread-a".to_string(),
             title: "Thread A".to_string(),

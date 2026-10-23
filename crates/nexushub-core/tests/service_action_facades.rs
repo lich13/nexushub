@@ -654,6 +654,7 @@ fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetai
         subagents: None,
         subagent_updates: Default::default(),
         summary: ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             id: thread_id.to_string(),
             title: format!("Thread {thread_id}"),

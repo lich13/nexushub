@@ -2,10 +2,10 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { QueryClient, useQuery, useQueryClient, type QueryObserverOptions } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ThreadDetail, ThreadStatus } from "../../types";
+import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { getThread } from "../api";
-import { threadDetailRefetchInterval } from "../domain/codexViewModel";
-import { threadQueryKeys, useThreadCacheActions, useThreadDetailQuery } from "./threads";
+import { threadDetailRefetchInterval, threadSelectionView } from "../domain/codexViewModel";
+import { mergeThreadSummaryIntoListCache, threadQueryKeys, useThreadCacheActions, useThreadDetailQuery } from "./threads";
 
 vi.mock("@tanstack/react-query", async original => ({
   ...await original<typeof import("@tanstack/react-query")>(),
@@ -87,4 +87,18 @@ test("explicit invalidation still refreshes a recently cached transcript", async
   await client.invalidateQueries({ queryKey: threadQueryKeys.thread("thread-a"), refetchType: "none" });
   await client.fetchQuery(options);
   expect(getThread).toHaveBeenCalledTimes(2);
+});
+
+test("list selection and cache updates force descending conversation time", () => {
+  const rows: ThreadSummary[] = [
+    { ...detail("old").summary, updated_at: "2026-10-01T11:00:00+08:00" },
+    { ...detail("unknown").summary, updated_at: null },
+    { ...detail("new").summary, updated_at: "2026-10-01T04:00:00Z" }
+  ];
+  expect(threadSelectionView({ threads: rows, selectedId: "old" }).visibleThreads.map(row => row.id)).toEqual(["new", "old", "unknown"]);
+  const renamed = mergeThreadSummaryIntoListCache(rows, { ...rows[0], title: "Renamed fixture" })!;
+  expect(renamed.map(row => row.id)).toEqual(["new", "old", "unknown"]);
+  const replied = mergeThreadSummaryIntoListCache(renamed, { ...rows[0], updated_at: "2026-10-01T05:00:00Z" })!;
+  expect(replied.map(row => row.id)).toEqual(["old", "new", "unknown"]);
+  expect(rows.map(row => row.id)).toEqual(["old", "unknown", "new"]);
 });

@@ -49,6 +49,7 @@ fn provider_history_serialization_matches_refactor_snapshots() {
     fs::write(&codex_path, CODEX_HISTORY).expect("write synthetic Codex rollout");
 
     let codex_summary = ThreadSummary {
+        activity_updated_at: None,
         storage_size: None,
         id: CODEX_ID.into(),
         title: "Synthetic provider snapshot".into(),

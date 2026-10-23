@@ -1,3 +1,4 @@
+import { compareSessionMessageTime } from "./sessionSelection";
 import { machineScope } from "../runtime";
 import { visibleMarkdown } from "./visibleMarkdown";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
@@ -26,7 +27,11 @@ export function threadListItemText(thread: ThreadTitleLike): string {
 }
 
 export function filterVisibleThreadSummaries<T extends Partial<ThreadSummary>>(threads: T[], includeArchived = false): T[] {
-  return threads.filter((thread) => isVisibleMainThread(thread, includeArchived));
+  return threads.filter((thread) => isVisibleMainThread(thread, includeArchived)).sort(compareThreadMessageTime);
+}
+
+export function compareThreadMessageTime(a: Partial<ThreadSummary>, b: Partial<ThreadSummary>): number {
+  return compareSessionMessageTime({ id: a.id, updatedAt: a.updated_at }, { id: b.id, updatedAt: b.updated_at });
 }
 
 export function isVisibleMainThread(thread: Partial<ThreadSummary>, includeArchived = false): boolean {

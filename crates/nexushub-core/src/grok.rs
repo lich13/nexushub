@@ -135,7 +135,17 @@ pub fn list_grok_sessions(
             }
         }
     }
-    result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
+    result.sort_by_cached_key(|session| {
+        (
+            std::cmp::Reverse(
+                session
+                    .updated_at
+                    .as_deref()
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+            ),
+            session.id.clone(),
+        )
+    });
     result.truncate(limit.clamp(1, 200));
     let active = activity::Snapshot::capture(paths);
     for summary in &mut result {
@@ -264,24 +274,75 @@ pub fn grok_session_page(
         None,
         &summary.id,
     ));
-    let updates = summary.path.join("updates.jsonl");
+    let path = summary.path.clone();
+    with_session_history(&path, |state, exists| {
+        summary.updated_at = state.last_message_at.clone();
+        let source = &state.events.events;
+        let total_events = source.len();
+        let (start, end) = match crate::history_navigation::seek_window(
+            source.iter().map(|event| event.id.as_str()),
+            before,
+            limit.unwrap_or(160).clamp(1, 500),
+        )? {
+            Some(window) => window,
+            None => {
+                let end = match before {
+                    Some(id) => source
+                        .iter()
+                        .position(|event| event.id == id)
+                        .context("历史位置已变化，请刷新会话")?,
+                    None => total_events,
+                };
+                (
+                    limit.map_or(0, |n| end.saturating_sub(n.clamp(1, 500))),
+                    end,
+                )
+            }
+        };
+        let mut events = source[start..end].to_vec();
+        for event in &mut events {
+            if event
+                .user_message
+                .as_ref()
+                .is_some_and(|message| !message.attachments.is_empty())
+            {
+                if let Some(message) = Arc::make_mut(event).user_message.as_mut() {
+                    message.refresh_files(Some(&summary.cwd));
+                }
+            }
+        }
+        Ok(GrokSessionDetail {
+            timeline: before.is_none().then(|| state.timeline.clone()),
+            after_cursor: crate::history_navigation::after_cursor(
+                end,
+                total_events,
+                source
+                    .get(end.saturating_sub(1))
+                    .map(|event| event.id.as_str()),
+            ),
+            summary,
+            events,
+            total_events,
+            has_more: start > 0,
+            before_cursor: (start > 0).then(|| source[start].id.clone()),
+            history: exists.then(|| state.journal.metadata(since)),
+        })
+    })
+}
+
+fn with_session_history<R>(
+    directory: &Path,
+    project: impl FnOnce(&GrokReader, bool) -> Result<R>,
+) -> Result<R> {
+    let updates = directory.join("updates.jsonl");
     let native = !updates.exists();
     let path = if native {
-        summary.path.join("chat_history.jsonl")
+        directory.join("chat_history.jsonl")
     } else {
         updates
     };
     if !path.exists() {
-        return Ok(GrokSessionDetail {
-            timeline: Some(Default::default()),
-            after_cursor: None,
-            summary,
-            events: Vec::new(),
-            total_events: 0,
-            has_more: false,
-            before_cursor: None,
-            history: None,
-        });
+        return project(&GrokReader::default(), false);
     }
     static CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
         crate::jsonl_cache::JsonlCache::new(crate::resource_limits::GROK_DETAIL_CACHE_BYTES);
@@ -338,56 +399,7 @@ pub fn grok_session_page(
                     .sum::<u64>()
                     + crate::history_navigation::weight(&state.timeline);
             }
-            let source = &state.events.events;
-            let total_events = source.len();
-            let (start, end) = match crate::history_navigation::seek_window(
-                source.iter().map(|event| event.id.as_str()),
-                before,
-                limit.unwrap_or(160).clamp(1, 500),
-            )? {
-                Some(window) => window,
-                None => {
-                    let end = match before {
-                        Some(id) => source
-                            .iter()
-                            .position(|event| event.id == id)
-                            .context("历史位置已变化，请刷新会话")?,
-                        None => total_events,
-                    };
-                    (
-                        limit.map_or(0, |n| end.saturating_sub(n.clamp(1, 500))),
-                        end,
-                    )
-                }
-            };
-            let mut events = source[start..end].to_vec();
-            for event in &mut events {
-                if event
-                    .user_message
-                    .as_ref()
-                    .is_some_and(|message| !message.attachments.is_empty())
-                {
-                    if let Some(message) = Arc::make_mut(event).user_message.as_mut() {
-                        message.refresh_files(Some(&summary.cwd));
-                    }
-                }
-            }
-            Ok(GrokSessionDetail {
-                timeline: before.is_none().then(|| state.timeline.clone()),
-                after_cursor: crate::history_navigation::after_cursor(
-                    end,
-                    total_events,
-                    source
-                        .get(end.saturating_sub(1))
-                        .map(|event| event.id.as_str()),
-                ),
-                summary,
-                events,
-                total_events,
-                has_more: start > 0,
-                before_cursor: (start > 0).then(|| source[start].id.clone()),
-                history: Some(state.journal.metadata(since)),
-            })
+            project(state, true)
         },
         |state| state.weight,
     )
@@ -398,6 +410,7 @@ thread_local! { static HISTORY_READS: std::cell::Cell<usize> = const { std::cell
 
 #[derive(Default)]
 struct GrokReader {
+    last_message_at: Option<String>,
     previous_count: usize,
     timeline: crate::history_navigation::Timeline,
     events: GrokEvents,
@@ -552,6 +565,12 @@ impl GrokReader {
                     &format!("grok:{user_start}"),
                     &Value::Array(user_parts.clone()),
                 );
+                if !message.text.trim().is_empty() || !message.attachments.is_empty() {
+                    self.last_message_at = value
+                        .get("timestamp")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
                 if same {
                     let previous = Arc::make_mut(events.last_mut().unwrap());
                     dirty.insert(previous.id.clone());
@@ -597,6 +616,14 @@ impl GrokReader {
                 if let Some(id) = &call_id {
                     tool_indices.insert(id.clone(), events.len());
                 }
+            }
+            if kind == "agent_message_chunk"
+                && text.as_ref().is_some_and(|text| !text.trim().is_empty())
+            {
+                self.last_message_at = value
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
             }
             if kind.ends_with("message_chunk") && update.get("messageId").is_none() {
                 if let Some(previous) = events
@@ -670,6 +697,16 @@ fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
 }
 
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
+    let mut summary = read_summary_metadata(path)?;
+    if let Some(summary) = &mut summary {
+        summary.updated_at =
+            with_session_history(path, |state, _| Ok(state.last_message_at.clone()))
+                .unwrap_or_default();
+    }
+    Ok(summary)
+}
+
+fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");
     if !file.is_file() {
         return Ok(Some(fallback_summary(path)));
@@ -715,11 +752,6 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         .unwrap_or("未命名会话")
         .trim()
         .to_string();
-    let updated_at = value
-        .get("updated_at")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("last_active_at").and_then(Value::as_str))
-        .map(ToString::to_string);
     let message_count = value
         .get("num_messages")
         .and_then(Value::as_u64)
@@ -731,7 +763,7 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         title,
         cwd,
         path: path.to_path_buf(),
-        updated_at,
+        updated_at: None,
         message_count,
         last_message: value
             .get("last_turn_summary")

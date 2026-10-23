@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -410,7 +409,7 @@ pub fn filter_thread_summaries(
             true
         }
     });
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    ThreadSummary::sort_by_message_time(&mut rows);
     rows.truncate(limit.max(1));
     rows
 }
@@ -469,11 +468,12 @@ fn apply_running_job_to_thread_list(
 
 fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
     ThreadSummary {
+        activity_updated_at: None,
         storage_size: None,
         id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
         title: "未命名线程".to_string(),
         status: ThreadStatus::Running,
-        updated_at: timestamp_to_rfc3339(job.started_at),
+        updated_at: None,
         archived_at: None,
         message_count: 0,
         latest_message: Some(job.title.clone()),
@@ -520,13 +520,6 @@ fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
             | ("archived", ThreadStatus::Archived)
             | ("recent", ThreadStatus::Recent)
     )
-}
-
-fn timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
-    Local
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|time| time.to_rfc3339())
 }
 
 #[cfg(test)]
@@ -653,6 +646,7 @@ mod tests {
     #[test]
     fn merge_running_jobs_preserves_existing_active_turn_and_uses_job_title_fallback() {
         let mut rows = vec![ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             active_turn_id: Some("turn-from-rollout".to_string()),
             latest_message: None,
@@ -796,6 +790,7 @@ mod tests {
 
     fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {
         ThreadSummary {
+            activity_updated_at: None,
             storage_size: None,
             id: id.to_string(),
             title: format!("Thread {id}"),

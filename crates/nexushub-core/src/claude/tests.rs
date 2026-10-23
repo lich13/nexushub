@@ -71,6 +71,58 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn lists_sort_by_conversation_time_and_ignore_metadata_and_tools() {
+    let f = Fixture::new();
+    let mut first = f.row("u1", None, "user", json!("Fixture request"));
+    first["timestamp"] = json!("2026-10-01T11:00:00+08:00");
+    f.write(&[first]);
+    let second_path = f.file.with_file_name("other-fixture.jsonl");
+    let mut second = f.row(
+        "a2",
+        None,
+        "assistant",
+        json!([{"type":"text","text":"Fixture answer"}]),
+    );
+    second["sessionId"] = json!("other-fixture");
+    second["timestamp"] = json!("2026-10-01T04:00:00Z");
+    fs::write(&second_path, format!("{second}\n")).unwrap();
+    f.append(&json!({"type":"custom-title","timestamp":"2026-12-01T00:00:00Z","customTitle":"Renamed fixture"}));
+    let mut tool = f.row(
+        "tool",
+        Some("u1"),
+        "assistant",
+        json!([{"type":"tool_use","id":"call","name":"Read","input":{}}]),
+    );
+    tool["timestamp"] = json!("2026-12-02T00:00:00Z");
+    f.append(&tool);
+    let first = list_claude_sessions(&f.paths, 1, None).unwrap();
+    assert_eq!(first[0].id, "other-fixture");
+    let mut follow_up = f.row("u2", Some("tool"), "user", json!("Follow up"));
+    follow_up["timestamp"] = json!("2026-10-01T05:00:00Z");
+    f.append(&follow_up);
+    let latest = list_claude_sessions(&f.paths, 1, None).unwrap();
+    assert_eq!(latest[0].id, "native-fixture");
+    assert_eq!(
+        latest[0].updated_at.as_deref(),
+        Some("2026-10-01T05:00:00Z")
+    );
+    assert_eq!(
+        claude_session_detail(
+            &f.paths,
+            &ClaudeDetailRequest {
+                session_key: latest[0].session_key.clone(),
+                limit: None,
+                before: None
+            }
+        )
+        .unwrap()
+        .summary
+        .updated_at,
+        latest[0].updated_at
+    );
+}
+
+#[test]
 fn native_commands_and_automatic_context_preserve_the_real_prompt_and_pending_tools() {
     let f = Fixture::new();
     let args = "Keep line one\n  keep indentation 🙂";

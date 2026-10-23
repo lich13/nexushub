@@ -89,15 +89,22 @@ pub fn app_server_thread_summary(
         .or_else(|| fallback.map(|thread| thread.title.clone()))
         .unwrap_or_else(|| "未命名线程".to_string());
     let mut summary = ThreadSummary {
+        activity_updated_at: thread
+            .get("updatedAt")
+            .and_then(Value::as_i64)
+            .and_then(timestamp_to_rfc3339)
+            .or_else(|| {
+                fallback.and_then(|row| {
+                    row.activity_updated_at
+                        .clone()
+                        .or_else(|| row.updated_at.clone())
+                })
+            }),
         storage_size: fallback.and_then(|row| row.storage_size.clone()),
         id: id.clone(),
         title,
         status: status.clone(),
-        updated_at: thread
-            .get("updatedAt")
-            .and_then(Value::as_i64)
-            .and_then(timestamp_to_rfc3339)
-            .or_else(|| fallback.and_then(|thread| thread.updated_at.clone())),
+        updated_at: fallback.and_then(|thread| thread.updated_at.clone()),
         archived_at: thread
             .get("archivedAt")
             .or_else(|| thread.get("archived_at"))
@@ -183,7 +190,7 @@ pub fn apply_app_server_thread_detail(detail: &mut ThreadDetail, value: &Value) 
         .and_then(Value::as_i64)
         .and_then(timestamp_to_rfc3339)
     {
-        detail.summary.updated_at = Some(updated_at);
+        detail.summary.activity_updated_at = Some(updated_at);
     }
     if let Some(cwd) = thread.get("cwd").and_then(Value::as_str) {
         detail.summary.cwd = Some(cwd.to_string());

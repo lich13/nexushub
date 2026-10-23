@@ -33,3 +33,12 @@ export function clickSessionSelection(state: SessionSelectionState, visible: str
   }
   return { ...state, anchor: key, notice: null };
 }
+
+type MessageTimeSummary = { id?: string; sessionKey?: string; updatedAt?: string | null };
+export function compareSessionMessageTime(a: MessageTimeSummary, b: MessageTimeSummary): number {
+  const time = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
+  const first = time(a.updatedAt), second = time(b.updatedAt);
+  return first === second
+    ? String(a.sessionKey ?? a.id ?? "").localeCompare(String(b.sessionKey ?? b.id ?? ""))
+    : first > second ? -1 : 1;
+}
