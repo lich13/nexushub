@@ -17,10 +17,8 @@ DEFAULT_ROOTS = {
     Path("/root/.claude"),
     Path("/root/.dsh/sessions"),
     Path("/root/.dsh/storages"),
-    Path("/home/ubuntu/.dsh/sessions"),
-    Path("/home/ubuntu/.dsh/storages"),
 }
-DEFAULT_DSH_HOMES = {Path("/root/.dsh"), Path("/home/ubuntu/.dsh")}
+DEFAULT_DSH_HOMES = {Path("/root/.dsh")}
 PROTECTED_FILES = {
     "GROK_HOME": ("auth.json", "config.toml", "endpoint.env", "sandbox.toml", "trusted_folders.toml"),
     "CLAUDE_CONFIG_DIR": (".credentials.json", ".claude.json", "settings.json", "settings.local.json"),

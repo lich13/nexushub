@@ -33,6 +33,9 @@ class ProviderWritePathsTests(unittest.TestCase):
         unit = (args.module.parent / "systemd.service").read_text()
         self.assertIn("-/root/.dsh/sessions -/root/.dsh/storages", unit)
         self.assertNotIn("-/root/.dsh ", unit)
+        for path in provider_paths.DEFAULT_ROOTS:
+            if "/.dsh/" in str(path):
+                self.assertIn("-" + str(path), unit)
 
     def test_custom_roots_cover_indexes_and_protect_settings(self):
         values = {"GROK_HOME": "/srv/fixture-grok", "CLAUDE_CONFIG_DIR": "/srv/fixture-claude", "CODEX_HOME": "/srv/fixture-codex"}
