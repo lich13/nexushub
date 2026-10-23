@@ -239,6 +239,7 @@ small { font-size: 12px; }
 .message-stream, .provider-events { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
 .message-stream > *, .provider-events > * { flex: none; min-width: 0; max-width: 100%; }
 .chat-row { width: 100%; display: grid; gap: 6px; }
+.chat-row.assistant { display: block; }
 .chat-row.user { align-self: flex-end; width: min(85%, 680px); justify-items: end; }
 .chat-meta, .message-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .chat-meta small { display: none; }
