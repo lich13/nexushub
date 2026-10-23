@@ -27,6 +27,7 @@ export const OPS_PANEL_TITLES = {
   updates: "本机 App 更新",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
+  dshArchiveCleanup: "DSH 归档清理",
   jobs: "Job History"
 } as const;
 
@@ -35,6 +36,7 @@ export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[
   return [
     updatePanelTitle(capabilities),
     ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
+    OPS_PANEL_TITLES.dshArchiveCleanup,
     OPS_PANEL_TITLES.jobs
   ];
 }

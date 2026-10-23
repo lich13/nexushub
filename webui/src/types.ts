@@ -267,6 +267,7 @@ export type SystemCapabilities = {
   prune_backups: boolean;
   thread_cleanup?: boolean;
   hidden_cleanup_scan?: boolean;
+  dsh_archive_cleanup?: boolean;
   codex_delete_tree?: boolean;
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;
@@ -581,3 +582,9 @@ export type { RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionR
 export type ClaudeHooksAction = "status" | "install" | "remove";
 export type ClaudeHooksRequest = { action: ClaudeHooksAction; confirmed?: boolean };
 export type ClaudeHooksStatus = { installed: boolean; managedCount: number; changed: boolean };
+
+export type DshArchiveSelection = { id: string; archiveId: string };
+export type DshArchiveCandidate = DshArchiveSelection & { parentId: string | null; reason: string | null };
+export type DshArchiveDeletePlan = { available: boolean; archivedThreads: number; candidates: DshArchiveCandidate[]; issues: string[] };
+export type DshArchiveDeleteRequest = { confirmed: boolean; targets: DshArchiveSelection[] };
+export type DshArchiveDeleteResult = { items: HiddenThreadItemResult[]; deletedThreads: number; deletedBytes: number };

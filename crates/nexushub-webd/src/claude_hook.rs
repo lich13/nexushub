@@ -115,8 +115,7 @@ pub(super) fn context(hook: &HookEvent) -> Result<claude::ClaudeNotificationCont
         .as_ref()
         .and_then(|id| context.prompts.get(id));
     ensure!(
-        prompt.is_some_and(|p| !p.ambiguous
-            && (!matches!(hook.kind.as_str(), "completion" | "failure") || !p.cancelled)),
+        prompt.is_some_and(|p| !p.ambiguous),
         "hook prompt identity is not yet verified"
     );
     Ok(context)

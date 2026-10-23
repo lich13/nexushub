@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/root/.codex /home/ubuntu/.codex -/root/.grok -/root/.claude /etc/nexushub-webd /var/lib/nexushub-webd /var/log/nexushub-webd
+ReadWritePaths=-/root/.dsh/sessions -/root/.dsh/storages /root/.codex /home/ubuntu/.codex -/root/.grok -/root/.claude /etc/nexushub-webd /var/lib/nexushub-webd /var/log/nexushub-webd
 ReadOnlyPaths=-/root/.grok/auth.json -/root/.grok/config.toml -/root/.grok/endpoint.env -/root/.grok/sandbox.toml -/root/.grok/trusted_folders.toml -/root/.claude/.credentials.json -/root/.claude/.claude.json -/root/.claude/settings.json -/root/.claude/settings.local.json
 
 [Install]

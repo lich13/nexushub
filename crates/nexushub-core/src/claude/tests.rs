@@ -2059,6 +2059,18 @@ fn notification_prompts_are_native_prompt_ids_and_completed_turns_survive_later_
     );
     assert!(!context.prompts.contains_key("message-one"));
     assert_eq!(context.prompts["prompt-two"].turn_id, "message-two");
+    assert_eq!(
+        context.hook_state("prompt-one", "failure", i64::MAX, None),
+        ClaudeNotificationState::Obsolete
+    );
+    assert_eq!(
+        context.hook_state("prompt-one", "completion", i64::MAX, None),
+        ClaudeNotificationState::Current
+    );
+    assert_eq!(
+        context.hook_state("prompt-two", "completion", i64::MAX, None),
+        ClaudeNotificationState::Pending
+    );
     let mut partial = f.row(
         "partial-two",
         Some("message-two"),
@@ -2070,4 +2082,129 @@ fn notification_prompts_are_native_prompt_ids_and_completed_turns_survive_later_
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
     f.append(&json!({"type":"system","subtype":"cancelled"}));
     assert_eq!(reader::read(&f.file).unwrap().native_events.len(), 1);
+}
+
+#[test]
+fn failure_hooks_expire_on_execution_but_not_metadata_and_error_text_is_not_completion() {
+    let f = Fixture::new();
+    let mut user = f.row("request", None, "user", json!("Request"));
+    user["promptId"] = json!("prompt");
+    let mut error = f.row(
+        "api-error",
+        Some("request"),
+        "assistant",
+        json!("API error fixture"),
+    );
+    error["isApiErrorMessage"] = json!(true);
+    f.write(&[user, error]);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert!(context.stream.events.is_empty());
+    let cutoff = Some(context.stream.record_count);
+    assert_eq!(
+        context.hook_state("prompt", "failure", i64::MAX, cutoff),
+        ClaudeNotificationState::Current
+    );
+    f.append(&json!({"type":"system","subtype":"turn_duration","durationMs":10}));
+    assert_eq!(
+        notification_context(&f.paths, &f.file).unwrap().hook_state(
+            "prompt",
+            "failure",
+            i64::MAX,
+            cutoff
+        ),
+        ClaudeNotificationState::Current
+    );
+    let mut resumed = f.row(
+        "resumed",
+        Some("api-error"),
+        "assistant",
+        json!("Working again"),
+    );
+    resumed["message"]["stop_reason"] = Value::Null;
+    f.append(&resumed);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(
+        context.hook_state("prompt", "failure", i64::MAX, cutoff),
+        ClaudeNotificationState::Obsolete
+    );
+    assert_eq!(
+        context.hook_state("prompt", "failure", i64::MAX, None),
+        ClaudeNotificationState::Obsolete
+    );
+    f.append(&f.row("completed", Some("resumed"), "assistant", json!("Done")));
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(
+        context.hook_state("prompt", "completion", i64::MAX, None),
+        ClaudeNotificationState::Current
+    );
+    assert_eq!(
+        context.hook_state("prompt", "failure", i64::MAX, None),
+        ClaudeNotificationState::Obsolete
+    );
+    f.append(&json!({"type":"system","subtype":"cancelled"}));
+    assert_eq!(
+        notification_context(&f.paths, &f.file).unwrap().hook_state(
+            "prompt",
+            "completion",
+            i64::MAX,
+            None
+        ),
+        ClaudeNotificationState::Obsolete
+    );
+}
+
+#[test]
+fn polling_drops_old_failures_when_a_new_prompt_starts() {
+    let f = Fixture::new();
+    let mut user = f.row("request", None, "user", json!("Request"));
+    user["promptId"] = json!("prompt");
+    f.write(&[user, json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture error"],"timestamp":"2026-09-29T00:00:01Z"})]);
+    assert_eq!(
+        notification_context(&f.paths, &f.file)
+            .unwrap()
+            .stream
+            .events[0]
+            .kind,
+        "failure"
+    );
+    let mut next = f.row("next", Some("request"), "user", json!("Continue"));
+    next["promptId"] = json!("next-prompt");
+    f.append(&next);
+    assert!(notification_context(&f.paths, &f.file)
+        .unwrap()
+        .stream
+        .events
+        .is_empty());
+}
+
+#[test]
+fn failure_evidence_written_after_the_hook_is_not_resumed_execution() {
+    let f = Fixture::new();
+    let mut user = f.row("request", None, "user", json!("Request"));
+    user["promptId"] = json!("prompt");
+    f.write(&[user]);
+    let initial = notification_context(&f.paths, &f.file).unwrap();
+    let received = initial.prompts["prompt"].timestamp_ms + 1;
+    let mut error = f.row(
+        "error",
+        Some("request"),
+        "assistant",
+        json!("Fixture API error"),
+    );
+    error["isApiErrorMessage"] = json!(true);
+    error["timestamp"] = json!(chrono::DateTime::from_timestamp_millis(received + 10)
+        .unwrap()
+        .to_rfc3339());
+    f.append(&error);
+    let context = notification_context(&f.paths, &f.file).unwrap();
+    assert_eq!(
+        context.hook_state(
+            "prompt",
+            "failure",
+            received,
+            Some(initial.stream.record_count)
+        ),
+        ClaudeNotificationState::Current
+    );
+    assert!(context.stream.events.is_empty());
 }

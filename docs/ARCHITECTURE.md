@@ -165,6 +165,8 @@ Claude 的稳定定位键由项目相对路径和文件名身份生成，与正�
 
 cleanup.hiddenDryRun 保留 start/poll/cancel、扫描 ID 与游标和旧完整响应。只扫描元数据及原生父子关系，不核验正文或指纹；每页最多 100 项，候选总数没有业务上限。同源最多一个活动扫描，进程最多两个上下文；五分钟无请求释放。界面加载完整确认范围后允许执行，停止结果不能执行，切换机器隔离迟到响应。
 
+DSH 使用独立 cleanup.dshArchiveDryRun／cleanup.dshArchiveExecute，通过共享 CleanupUseCases、Linux RPC、Tauri 与远端 allowlist 接入，能力字段 dsh_archive_cleanup 可缺省为不支持，API 仍为 2。不增加完整会话 Provider。DSH_HOME 默认为用户 .dsh，以 storages/workspace.json v2 归档名单为准，读取明文／Zstandard session 头，只有 origin=subagent 且 parentSession 可核验的后代随归档根入选，独立 fork 保留。预览可在 DSH 运行时读取，执行必须先退出 DSH；固定 id/archiveId 经重新核验后删除专属目录、锁和投影缓存，仅移除成功身份的归档、置顶及工作区引用。后续新增归档不自动纳入，恢复或归属变化跳过，文件／索引并发变化停止相关写入，失败项目保留原因供重试。共享附件、项目和配置不清理，损坏或自定义持久化格式明确拒绝，缺少存储为空状态；systemd 仅对 sessions 和 storages 子目录授权写入，覆盖默认及自定义根。
+
 Claude 空文件、命名记录和仅元数据会话显示“暂无对话”；缺少 cwd 或版本不产生读取失败。Grok 优先读取 updates.jsonl，缺失时读取 chat_history.jsonl，映射用户、助手和工具调用／结果，复用分页、增量缓存、搜索和时间线。系统提示、system_reminder 和加密推理不作为普通对话展示。
 
 ## 远程连接与认证
@@ -193,7 +195,7 @@ claude.hooks 是仅限本机的 status／install／remove 操作。安装须设�
 
 受管 hook 使用 exec 程序与参数、async=true，handler 自行限制总时间五秒，不依赖异步 timeout 字段，不输出审批、模型上下文或唤醒指令。Stop 使用 last_assistant_message；Notification 的 permission_prompt 为授权，elicitation_dialog／elicitation_url_dialog／agent_needs_input 为回复；StopFailure 仅使用过滤后的错误类别。idle_prompt 不独立提醒，仅在尚未通知完成、未被启用基线覆盖且可核实终态时作为完成兜底。
 
-hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成仅在来源替换、截断、分支回退等真实失效时撤销。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
+hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成还须具备对应回合终态，保留有效分支上较早回合的完成补发。StopFailure 为 API 错误结束的候选；Hook 首次处理、首次发送与每次重试均核验当前主回合、执行活动及终态，轮询失败使用相同规则。新回合、同回合恢复、成功或取消使旧失败过期并清空待投递正文；普通元数据追加和仍打开的进程不表示恢复执行，独立后台任务不阻挡主回合提醒。身份或终态未写完整时沿用有限重试。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
 
 三种 Provider 共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 NexusHub 深链。
 

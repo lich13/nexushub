@@ -15,6 +15,8 @@ DEFAULT_ROOTS = {
     Path("/home/ubuntu/.codex"),
     Path("/root/.grok"),
     Path("/root/.claude"),
+    Path("/root/.dsh/sessions"),
+    Path("/root/.dsh/storages"),
 }
 PROTECTED_FILES = {
     "GROK_HOME": ("auth.json", "config.toml", "endpoint.env", "sandbox.toml", "trusted_folders.toml"),
@@ -32,6 +34,7 @@ SUPPORTED_KEYS = {
     "CODEX_HOME",
     "GROK_HOME",
     "CLAUDE_CONFIG_DIR",
+    "DSH_HOME",
 }
 
 
@@ -88,7 +91,13 @@ def configured_roots(values: dict[str, str], config: dict | None = None) -> dict
 
 
 def custom_session_roots(values: dict[str, str], config: dict | None = None) -> list[Path]:
-    return sorted(set(configured_roots(values, config).values()) - DEFAULT_ROOTS, key=str)
+    roots = set()
+    for key, root in configured_roots(values, config).items():
+        if key == "DSH_HOME":
+            roots.update(normalize_session_root(str(root / name), key) for name in ("sessions", "storages"))
+        else:
+            roots.add(root)
+    return sorted(roots - DEFAULT_ROOTS, key=str)
 
 
 def systemd_quote(value: str) -> str:

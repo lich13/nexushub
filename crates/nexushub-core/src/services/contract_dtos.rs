@@ -1,4 +1,9 @@
 pub const CONTRACT_DTO_NAMES: &[&str] = &[
+    "DshArchiveSelection",
+    "DshArchiveCandidate",
+    "DshArchiveDeletePlan",
+    "DshArchiveDeleteRequest",
+    "DshArchiveDeleteResult",
     "DesktopThreadRequest",
     "DesktopSessionRequest",
     "DesktopActionRequest",

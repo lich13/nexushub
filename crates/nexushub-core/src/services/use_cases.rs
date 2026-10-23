@@ -364,6 +364,23 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::execute_archived_with_capability(self.platform, paths, candidates)
     }
 
+    pub fn dsh_archive_dry_run(
+        self,
+        paths: &crate::dsh::DshPaths,
+    ) -> Result<crate::dsh::DshArchiveDeletePlan> {
+        system::require_capability(self.platform, Capability::ThreadCleanup)?;
+        crate::dsh::preview(paths)
+    }
+
+    pub fn dsh_archive_execute(
+        self,
+        paths: &crate::dsh::DshPaths,
+        request: crate::dsh::DshArchiveDeleteRequest,
+    ) -> Result<crate::dsh::DshArchiveDeleteResult> {
+        system::require_capability(self.platform, Capability::ThreadCleanup)?;
+        crate::dsh::execute(paths, request)
+    }
+
     pub fn dry_run_hidden(
         self,
         paths: &crate::codex::CodexPaths,

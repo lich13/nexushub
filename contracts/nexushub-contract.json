@@ -72,7 +72,8 @@
       "更新与维护",
       "执行记录",
       "归档任务清理",
-      "隐藏任务清理"
+      "隐藏任务清理",
+      "DSH 归档清理"
     ],
     "actionLabels": {
       "dryRun": "Dry-run",
@@ -380,6 +381,30 @@
       "linuxRpc": "updates.prune",
       "webuiWrapper": "updates.prune",
       "hostOnlyReason": "Linux server release backup prune only; Tauri updater must not expose Linux prune"
+    },
+    {
+      "id": "cleanup.dshArchiveDryRun",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "cleanup.dshArchiveDryRun",
+      "linuxRpc": "cleanup.dshArchiveDryRun",
+      "tauriCommand": "commands::settings::dryRunDshArchiveDelete",
+      "webuiWrapper": "dryRunDshArchiveDelete",
+      "dtoOwner": "cleanup",
+      "requestDto": "NoRequest",
+      "responseDto": "DshArchiveDeletePlan"
+    },
+    {
+      "id": "cleanup.dshArchiveExecute",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "cleanup.dshArchiveExecute",
+      "linuxRpc": "cleanup.dshArchiveExecute",
+      "tauriCommand": "commands::settings::startDshArchiveDelete",
+      "webuiWrapper": "startDshArchiveDelete",
+      "dtoOwner": "cleanup",
+      "requestDto": "DshArchiveDeleteRequest",
+      "responseDto": "DshArchiveDeleteResult"
     },
     {
       "id": "cleanup.archiveDryRun",
@@ -1246,6 +1271,26 @@
     "ClaudeOwnershipProcess": {
       "core": "ClaudeOwnershipProcess",
       "webui": "ClaudeOwnershipProcess"
+    },
+    "DshArchiveSelection": {
+      "core": "DshArchiveSelection",
+      "webui": "DshArchiveSelection"
+    },
+    "DshArchiveCandidate": {
+      "core": "DshArchiveCandidate",
+      "webui": "DshArchiveCandidate"
+    },
+    "DshArchiveDeletePlan": {
+      "core": "DshArchiveDeletePlan",
+      "webui": "DshArchiveDeletePlan"
+    },
+    "DshArchiveDeleteRequest": {
+      "core": "DshArchiveDeleteRequest",
+      "webui": "DshArchiveDeleteRequest"
+    },
+    "DshArchiveDeleteResult": {
+      "core": "DshArchiveDeleteResult",
+      "webui": "DshArchiveDeleteResult"
     }
   },
   "retiredActions": [

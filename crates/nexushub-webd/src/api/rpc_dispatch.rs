@@ -1,8 +1,9 @@
 use super::{
-    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread, get_probe_events,
-    get_probe_settings, get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail,
-    grok_list, grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute,
-    job_detail, list_jobs, list_providers, patch_probe_settings, platform_overview, rename_thread,
+    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread,
+    dsh_archive_delete_dry_run, dsh_archive_delete_execute, get_probe_events, get_probe_settings,
+    get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail, grok_list,
+    grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute, job_detail,
+    list_jobs, list_providers, patch_probe_settings, platform_overview, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
     ProbeEventsQuery, ProbeStatusQuery,
@@ -235,6 +236,17 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::PROBE_INSTALL_HOOKS => {
             start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
+        }
+        rpc_commands::CLEANUP_DSH_ARCHIVE_DRY_RUN => {
+            dsh_archive_delete_dry_run(State(state), headers).await
+        }
+        rpc_commands::CLEANUP_DSH_ARCHIVE_EXECUTE => {
+            dsh_archive_delete_execute(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
         }
         rpc_commands::CLEANUP_ARCHIVE_DRY_RUN => {
             archive_delete_dry_run(State(state), headers).await

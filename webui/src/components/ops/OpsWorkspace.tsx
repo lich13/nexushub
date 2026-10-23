@@ -1,3 +1,5 @@
+import { DshArchiveCleanup } from "./DshArchiveCleanup";
+import { machineScope } from "../../lib/query/connection";
 import { UpdatePanel } from "./UpdatePanel";
 import {
   Archive,
@@ -127,6 +129,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           )}
         </div>
       </Panel>}
+      <DshArchiveCleanup key={machineScope()} supported={capabilities.dshArchiveCleanup === true} />
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
           <span role="status" className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{hiddenScan ? `${scanLabels[hiddenScan.phase]} · ${hiddenScan.processed} / ${hiddenScan.total}` : opsView.hiddenCleanupStage.label}</span>

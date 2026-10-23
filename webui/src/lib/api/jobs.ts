@@ -1,5 +1,8 @@
 import type {
   ArchiveDeletePlan,
+  DshArchiveDeletePlan,
+  DshArchiveDeleteRequest,
+  DshArchiveDeleteResult,
   ArchiveDeleteResult,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
@@ -77,4 +80,14 @@ export async function getJob(id: string): Promise<JobRecord> {
     return demoJob(id);
   }
   return callCommand<JobRecord>("jobs.detail", { id });
+}
+
+export async function dryRunDshArchiveDelete(): Promise<DshArchiveDeletePlan> {
+  if (USE_DEMO) return { available: false, archivedThreads: 0, candidates: [], issues: [] };
+  return callCommand<DshArchiveDeletePlan>("cleanup.dshArchiveDryRun", {});
+}
+
+export async function startDshArchiveDelete(request: DshArchiveDeleteRequest): Promise<DshArchiveDeleteResult> {
+  if (USE_DEMO) return { items: [], deletedThreads: 0, deletedBytes: 0 };
+  return callCommand<DshArchiveDeleteResult>("cleanup.dshArchiveExecute", { request });
 }

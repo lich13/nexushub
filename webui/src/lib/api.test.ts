@@ -914,6 +914,8 @@ describe("archive delete API compatibility", () => {
       ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
     ].map((match) => match[1]);
     const allowedCommands = [
+      "cleanup.dshArchiveDryRun",
+      "cleanup.dshArchiveExecute",
       "cleanup.archiveDryRun",
       "cleanup.archiveExecute",
       "cleanup.hiddenDryRun",

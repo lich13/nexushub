@@ -12,6 +12,8 @@ const harness = vi.hoisted(() => ({
   opsActions: null as any
 }));
 
+vi.mock("./DshArchiveCleanup", () => ({ DshArchiveCleanup: () => null }));
+
 vi.mock("react", async importOriginal => {
   const actual = await importOriginal<typeof import("react")>();
   return {

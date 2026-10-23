@@ -116,3 +116,34 @@ pub async fn claudeHooks(
     .map_err(|_| "Claude 设置任务未完成".to_string())?
     .map_err(|error| error.to_string())
 }
+
+#[tauri::command(rename = "cleanup.dshArchiveDryRun")]
+pub async fn dryRunDshArchiveDelete(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::dsh::DshArchiveDeletePlan, String> {
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+            .cleanup()
+            .dsh_archive_dry_run(&nexushub_core::dsh::DshPaths::default_for_user())
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|_| "DSH 归档预览任务未完成".to_string())?
+}
+
+#[tauri::command(rename = "cleanup.dshArchiveExecute")]
+pub async fn startDshArchiveDelete(
+    state: tauri::State<'_, DesktopState>,
+    request: nexushub_core::dsh::DshArchiveDeleteRequest,
+) -> Result<nexushub_core::dsh::DshArchiveDeleteResult, String> {
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+            .cleanup()
+            .dsh_archive_execute(&nexushub_core::dsh::DshPaths::default_for_user(), request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|_| "DSH 归档清理任务未完成".to_string())?
+}

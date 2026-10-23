@@ -41,6 +41,8 @@ export {
 export type { ThreadDetailOptions } from "./api/threads";
 export {
   dryRunArchiveDelete,
+  dryRunDshArchiveDelete,
+  startDshArchiveDelete,
   startArchiveDelete,
   dryRunHiddenThreadDelete,
   startHiddenThreadDelete,
