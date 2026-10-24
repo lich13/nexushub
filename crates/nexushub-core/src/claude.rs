@@ -441,15 +441,9 @@ pub fn list_claude_sessions(
         }
     }
     result.sort_by_cached_key(|session| {
-        (
-            std::cmp::Reverse(
-                session
-                    .updated_at
-                    .as_deref()
-                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
-            ),
-            session.session_key.clone(),
-        )
+        (std::cmp::Reverse(session.updated_at.as_deref().and_then(
+            |time| chrono::DateTime::parse_from_rfc3339(time).ok(),
+        )),)
     });
     result.truncate(limit.clamp(1, 200));
     for summary in &mut result {

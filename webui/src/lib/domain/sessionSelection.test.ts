@@ -63,5 +63,5 @@ test("provider lists sort known conversation times newest first with stable unkn
     { id: "second", sessionKey: "a", updatedAt: "2026-10-01T04:00:00Z" },
     { id: "unknown-a", updatedAt: null }
   ];
-  expect(rows.sort(compareSessionMessageTime).map(row => row.id)).toEqual(["second", "first", "unknown-a", "unknown-b"]);
+  expect(rows.sort(compareSessionMessageTime).map(row => row.id)).toEqual(["second", "first", "unknown-b", "unknown-a"]);
 });

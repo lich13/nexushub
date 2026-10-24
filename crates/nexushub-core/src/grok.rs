@@ -136,15 +136,9 @@ pub fn list_grok_sessions(
         }
     }
     result.sort_by_cached_key(|session| {
-        (
-            std::cmp::Reverse(
-                session
-                    .updated_at
-                    .as_deref()
-                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
-            ),
-            session.id.clone(),
-        )
+        (std::cmp::Reverse(session.updated_at.as_deref().and_then(
+            |time| chrono::DateTime::parse_from_rfc3339(time).ok(),
+        )),)
     });
     result.truncate(limit.clamp(1, 200));
     let active = activity::Snapshot::capture(paths);

@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.10，核心提交为 [`8e222e1`](https://github.com/lich13/nexushub/commit/8e222e1612199f5d23bfd8ffb67793918edefb83)，默认 DSH 路径修复为 [`d5f9564`](https://github.com/lich13/nexushub/commit/d5f9564544655df9a6247c681eab2eed984c6e24)，版本收尾提交为 [`54f40dd`](https://github.com/lich13/nexushub/commit/54f40dd88fef63b5f3dcd5661163d97e281ebcae)，基线为 `d13e4d6 / v1.3.9`。本轮修复 Claude 旧失败提醒的首次发送与重试校验，新增本机及远端 DSH 归档清理。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.10，核心提交为 [`8e222e1`](https://github.com/lich13/nexushub/commit/8e222e1612199f5d23bfd8ffb67793918edefb83)，默认 DSH 路径修复为 [`d5f9564`](https://github.com/lich13/nexushub/commit/d5f9564544655df9a6247c681eab2eed984c6e24)，版本收尾提交为 [`54f40dd`](https://github.com/lich13/nexushub/commit/54f40dd88fef63b5f3dcd5661163d97e281ebcae)，基线为 `d13e4d6 / v1.3.9`。本轮修复 Claude 旧失败提醒的首次发送与重试校验，新增本机及远端 DSH 归档清理，并按用户或助手最后一条对话消息时间倒序排列线程。API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -20,6 +20,7 @@
 | Bark 与 hooks | 新事件统一单条短摘要；本机 hooks 须明确安装，远端继续轮询。Claude prompt 身份核验后每回合每类认领一次，保留有效旧完成以补发，完成后不单独提醒空闲。Codex 保留逐问题身份和提醒。 | `01be4b4` |
 | Claude 提醒复核 | 首次处理、首次发送和每次重试均复核当前主回合与实际执行活动；新回合、恢复执行、成功及取消终结旧失败提醒，保留有效旧完成补发。 | `8e222e1` |
 | DSH 归档清理 | 当前机器的维护页预览归档及已核验 subagent 后代；退出 DSH 后按固定身份清理专属文件和匹配索引，支持压缩文件、自定义根、并发保护与逐项重试。 | `8e222e1` |
+| 线程消息排序 | Codex、Claude Code 和 Grok Build 均按用户或助手最后一条对话消息时间倒序；工具、改名和其他元数据更新时间不改变顺序，未知时间保持稳定。 | `5770133` |
 
 实现、安全边界、旧字段与旧队列兼容见[架构说明](../ARCHITECTURE.md)。删除按确认目标逐项执行，失败返回 residuals 并继续其他目标；归档、恢复和改名仍沿用各自规则。Claude 删除不触碰工作目录或共享文件中的非目标记录。
 
