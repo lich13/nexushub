@@ -6,7 +6,7 @@ import { claudeHistoryAdapter } from "./historyWindows";
 import { usePagedHistory } from "./usePagedHistory";
 
 export function useClaudeSessions(q: string) {
-  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: async () => (await listClaudeSessions({ q, limit: 100 })).sort(compareSessionMessageTime), refetchInterval: 5000 });
+  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: async () => (await listClaudeSessions({ q, limit: 100 })).slice().sort(compareSessionMessageTime), refetchInterval: 5000 });
 }
 export function useClaudeDetail(sessionKey?: string) {
   return usePagedHistory({

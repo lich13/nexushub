@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -468,7 +469,7 @@ fn apply_running_job_to_thread_list(
 
 fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
     ThreadSummary {
-        activity_updated_at: None,
+        activity_updated_at: timestamp_to_rfc3339(job.started_at),
         storage_size: None,
         id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
         title: "未命名线程".to_string(),
@@ -520,6 +521,13 @@ fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
             | ("archived", ThreadStatus::Archived)
             | ("recent", ThreadStatus::Recent)
     )
+}
+
+fn timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|time| time.to_rfc3339())
 }
 
 #[cfg(test)]

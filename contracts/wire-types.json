@@ -2289,6 +2289,13 @@
       "ThreadSummary": {
         "fields": [
           {
+            "name": "activity_updated_at",
+            "serde": [
+              "serde (skip)"
+            ],
+            "type": "Option < String >"
+          },
+          {
             "name": "storage_size",
             "serde": [
               "serde (default , rename = \"storageSize\" , skip_serializing_if = \"Option::is_none\")"
