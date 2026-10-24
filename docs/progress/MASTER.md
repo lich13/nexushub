@@ -26,7 +26,7 @@
 
 ## 必要验证
 
-以下证据覆盖 1.3.10 核心实现及收尾；版本提交的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40030435588) 已通过（前端 Ubuntu 依赖下载超时后重跑该作业）。后续提交与正式发布门禁以对应的 GitHub Actions 为准。
+以下证据覆盖 1.3.10 核心实现及收尾；最终提交 [`6811cb4`](https://github.com/lich13/nexushub/commit/6811cb4e7a8d7ea763191640b2badd42e6e93807) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40045161446) 与 [`v1.3.10` Release CI](https://github.com/lich13/nexushub/actions/runs/40046131999) 已通过。
 
 | 范围 | 已通过证据 |
 |---|---|
@@ -42,7 +42,7 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 正式交付
 
-1.3.10 的发布、腾讯云部署和 Mac 原地安装尚待最终提交的 CI 与 Release CI 通过后完成。
+1.3.10 已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.10)。已使用正式 Linux 服务包部署腾讯云 `nexushub-webd 1.3.10`，service 为 `active`、health 为 `{"ok":true}`；已使用 `NexusHub-1.3.10-darwin-arm64.dmg` 原地安装 macOS App，bundle 版本为 1.3.10，签名核验通过且启动运行，没有保留旧副本。
 
 1.3.9 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39865303352)与 [`v1.3.9` Release CI](https://github.com/lich13/nexushub/actions/runs/39866444443) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.9)。已使用正式 Linux 服务包部署远端 API，版本为 1.3.9、service 为 active、health 为 `{"ok":true}`；已用 `NexusHub-1.3.9-darwin-arm64.dmg` 原地安装 macOS App，校验文件和签名通过，bundle 版本为 1.3.9 且启动成功，没有保留旧副本。安装与部署脚本已清理各自临时文件；真实用户会话未执行删除，仍待用户验收。
 
