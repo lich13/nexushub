@@ -32,13 +32,20 @@ pub enum NativeProvider {
     Grok,
     #[serde(rename = "claude_code")]
     Claude,
+    Antigravity,
+    Dsh,
 }
 impl NativeProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Grok => "grok",
             Self::Claude => "claude_code",
+            Self::Antigravity => "antigravity",
+            Self::Dsh => "dsh",
         }
+    }
+    pub fn local_only(self) -> bool {
+        matches!(self, Self::Antigravity | Self::Dsh)
     }
     pub fn enabled(self, config: &Config) -> bool {
         config.probe.enabled
@@ -46,6 +53,8 @@ impl NativeProvider {
             && match self {
                 Self::Grok => config.probe.notifications.notify_grok,
                 Self::Claude => config.probe.notifications.notify_claude,
+                Self::Antigravity => config.probe.notifications.notify_antigravity,
+                Self::Dsh => config.probe.notifications.notify_dsh,
             }
     }
     pub fn event_enabled(self, config: &Config, kind: &str) -> bool {
@@ -57,6 +66,20 @@ impl NativeProvider {
             }
             (Self::Grok, "completion") => config.probe.notifications.notify_grok_completion,
             (Self::Grok, "failure") => config.probe.notifications.notify_grok_failure,
+            (Self::Antigravity, "completion") => {
+                config.probe.notifications.notify_antigravity_completion
+            }
+            (Self::Antigravity, "failure") => config.probe.notifications.notify_antigravity_failure,
+            (Self::Antigravity, "reply_needed") => {
+                config.probe.notifications.notify_antigravity_reply_needed
+            }
+            (Self::Antigravity, "authorization") => {
+                config.probe.notifications.notify_antigravity_authorization
+            }
+            (Self::Dsh, "completion") => config.probe.notifications.notify_dsh_completion,
+            (Self::Dsh, "failure") => config.probe.notifications.notify_dsh_failure,
+            (Self::Dsh, "reply_needed") => config.probe.notifications.notify_dsh_reply_needed,
+            (Self::Dsh, "authorization") => config.probe.notifications.notify_dsh_authorization,
             _ => false,
         }
     }
@@ -156,6 +179,7 @@ pub fn retry_event_is_current(provider: NativeProvider, id: &str, event: &Native
     match provider {
         NativeProvider::Grok => crate::grok::notification_event_current(id, event.position),
         NativeProvider::Claude => true, // Claude snapshots retain terminal events on the valid branch.
+        NativeProvider::Antigravity | NativeProvider::Dsh => true, // Re-read by the local source verifier.
     }
 }
 
@@ -166,6 +190,12 @@ pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
         }
         NativeProvider::Grok => {
             crate::grok::notification_snapshots(&crate::grok::GrokPaths::default_for_user())
+        }
+        NativeProvider::Dsh => {
+            crate::dsh::notifications::scan(&crate::dsh::DshPaths::default_for_user())
+        }
+        NativeProvider::Antigravity => {
+            anyhow::bail!("Antigravity requires the local native transport")
         }
     }
 }
@@ -210,7 +240,7 @@ pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
     )
 }
 
-fn timestamp(value: &Value) -> Option<i64> {
+pub(crate) fn timestamp(value: &Value) -> Option<i64> {
     value
         .as_i64()
         .map(|n| {

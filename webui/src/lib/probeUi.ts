@@ -45,6 +45,16 @@ export type ProbeSettingsDraft = {
     notify_claude_completion: boolean;
     notify_claude_failure: boolean;
     notify_claude_reply_needed: boolean;
+    notify_antigravity: boolean;
+    notify_antigravity_completion: boolean;
+    notify_antigravity_failure: boolean;
+    notify_antigravity_reply_needed: boolean;
+    notify_antigravity_authorization: boolean;
+    notify_dsh: boolean;
+    notify_dsh_completion: boolean;
+    notify_dsh_failure: boolean;
+    notify_dsh_reply_needed: boolean;
+    notify_dsh_authorization: boolean;
 
 
   };
@@ -106,7 +116,17 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_claude: notifications.notify_claude !== false,
       notify_claude_completion: notifications.notify_claude_completion !== false,
       notify_claude_failure: notifications.notify_claude_failure !== false,
-      notify_claude_reply_needed: notifications.notify_claude_reply_needed !== false
+      notify_claude_reply_needed: notifications.notify_claude_reply_needed !== false,
+      notify_antigravity: notifications.notify_antigravity === true,
+      notify_antigravity_completion: notifications.notify_antigravity_completion === true,
+      notify_antigravity_failure: notifications.notify_antigravity_failure === true,
+      notify_antigravity_reply_needed: notifications.notify_antigravity_reply_needed === true,
+      notify_antigravity_authorization: notifications.notify_antigravity_authorization === true,
+      notify_dsh: notifications.notify_dsh === true,
+      notify_dsh_completion: notifications.notify_dsh_completion === true,
+      notify_dsh_failure: notifications.notify_dsh_failure === true,
+      notify_dsh_reply_needed: notifications.notify_dsh_reply_needed === true,
+      notify_dsh_authorization: notifications.notify_dsh_authorization === true
     },
     observability: {
       event_retention_days: toBoundedInteger(probe.observability?.event_retention_days, 2) ?? 2,
@@ -149,7 +169,17 @@ export function buildProbeSettingsPayload(
     notify_claude: draft.notifications.notify_claude,
     notify_claude_completion: draft.notifications.notify_claude_completion,
     notify_claude_failure: draft.notifications.notify_claude_failure,
-    notify_claude_reply_needed: draft.notifications.notify_claude_reply_needed
+    notify_claude_reply_needed: draft.notifications.notify_claude_reply_needed,
+    notify_antigravity: draft.notifications.notify_antigravity,
+    notify_antigravity_completion: draft.notifications.notify_antigravity_completion,
+    notify_antigravity_failure: draft.notifications.notify_antigravity_failure,
+    notify_antigravity_reply_needed: draft.notifications.notify_antigravity_reply_needed,
+    notify_antigravity_authorization: draft.notifications.notify_antigravity_authorization,
+    notify_dsh: draft.notifications.notify_dsh,
+    notify_dsh_completion: draft.notifications.notify_dsh_completion,
+    notify_dsh_failure: draft.notifications.notify_dsh_failure,
+    notify_dsh_reply_needed: draft.notifications.notify_dsh_reply_needed,
+    notify_dsh_authorization: draft.notifications.notify_dsh_authorization
   };
   if (deviceKey) {
     notifications.device_key = deviceKey;

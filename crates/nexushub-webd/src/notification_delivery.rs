@@ -250,6 +250,8 @@ pub async fn native(
             match delivery.provider {
                 native_probe::NativeProvider::Claude => "Claude Code",
                 native_probe::NativeProvider::Grok => "Grok",
+                native_probe::NativeProvider::Antigravity => "Antigravity",
+                native_probe::NativeProvider::Dsh => "DSH",
             },
             &delivery.event.kind,
             &delivery.title,
@@ -285,7 +287,8 @@ fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
                 && probe_service::probe_event_bark_switch_enabled(config, &event.kind)
         }
         Source::Native { delivery } => {
-            delivery.provider.enabled(config)
+            (!delivery.provider.local_only() || cfg!(target_os = "macos"))
+                && delivery.provider.enabled(config)
                 && delivery
                     .provider
                     .event_enabled(config, &delivery.event.kind)
@@ -647,8 +650,10 @@ async fn process(
                 }));
         };
         let claude_state = claude_source_state(db, candidate).await;
+        let local_state = local_native_source_state(candidate).await;
         let valid_source = match claude_state {
             Some(state) => state != ClaudeNotificationState::Obsolete,
+            None if local_state.is_some() => !matches!(local_state, Some(Ok(false))),
             None => {
                 !(revalidate || lease.chunk_attempts > 1)
                     || current(&checked_config, db, candidate).await
@@ -679,8 +684,14 @@ async fn process(
             )
         } else if secret.is_empty() {
             ProbeBarkOutcome::skipped("device_key_missing", channel.enabled(config), true, false)
-        } else if claude_state == Some(ClaudeNotificationState::Pending) {
-            claude_source_outcome(ClaudeNotificationState::Pending, true, true)
+        } else if claude_state == Some(ClaudeNotificationState::Pending)
+            || matches!(local_state, Some(Err(_)))
+        {
+            let mut outcome = claude_source_outcome(ClaudeNotificationState::Pending, true, true);
+            if local_state.is_some() {
+                outcome.reason = Some("native_source_pending".into());
+            }
+            outcome
         } else if candidate.request.presentation.is_some()
             && super::claude_hook::installed()
             && matches!(&candidate.source, Source::Native { delivery } if delivery.provider == native_probe::NativeProvider::Claude && delivery.event.prompt_id.is_none())
@@ -911,7 +922,31 @@ async fn claude_source_state(
     }
 }
 
+async fn local_native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
+    let Source::Native { delivery } = &candidate.source else {
+        return None;
+    };
+    if !delivery.provider.local_only() {
+        return None;
+    }
+    if !cfg!(target_os = "macos") {
+        return Some(Ok(false));
+    }
+    Some(
+        if delivery.provider == native_probe::NativeProvider::Antigravity {
+            super::antigravity::source_current(delivery).await
+        } else {
+            super::provider_monitor::scan(delivery.provider)
+                .await
+                .and_then(|scan| super::provider_monitor::local_event_current(&scan, delivery))
+        },
+    )
+}
+
 async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
+    if let Some(state) = local_native_source_state(candidate).await {
+        return state.unwrap_or(false);
+    }
     if let Some(state) = claude_source_state(db, candidate).await {
         return state == ClaudeNotificationState::Current;
     }

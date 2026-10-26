@@ -1,4 +1,5 @@
 use nexushub_core::shell::{shell_quote, QuoteStyle};
+mod antigravity;
 mod claude_hook;
 mod cli;
 mod hooks;

@@ -268,6 +268,8 @@ export type SystemCapabilities = {
   thread_cleanup?: boolean;
   hidden_cleanup_scan?: boolean;
   dsh_archive_cleanup?: boolean;
+  antigravity_notifications?: boolean;
+  dsh_notifications?: boolean;
   codex_delete_tree?: boolean;
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;
@@ -527,6 +529,16 @@ export type ProbeSettings = {
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;
     notify_claude_reply_needed?: boolean;
+    notify_antigravity?: boolean;
+    notify_antigravity_completion?: boolean;
+    notify_antigravity_failure?: boolean;
+    notify_antigravity_reply_needed?: boolean;
+    notify_antigravity_authorization?: boolean;
+    notify_dsh?: boolean;
+    notify_dsh_completion?: boolean;
+    notify_dsh_failure?: boolean;
+    notify_dsh_reply_needed?: boolean;
+    notify_dsh_authorization?: boolean;
 
 
     };
@@ -557,6 +569,16 @@ export type ProbeSettings = {
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;
     notify_claude_reply_needed?: boolean;
+    notify_antigravity?: boolean;
+    notify_antigravity_completion?: boolean;
+    notify_antigravity_failure?: boolean;
+    notify_antigravity_reply_needed?: boolean;
+    notify_antigravity_authorization?: boolean;
+    notify_dsh?: boolean;
+    notify_dsh_completion?: boolean;
+    notify_dsh_failure?: boolean;
+    notify_dsh_reply_needed?: boolean;
+    notify_dsh_authorization?: boolean;
 
 
   };

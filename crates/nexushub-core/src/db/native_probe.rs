@@ -82,16 +82,25 @@ impl PanelDb {
                 || old.as_ref().is_some_and(|(identity, cursor)| {
                     identity != &stream.identity || *cursor > stream.record_count
                 });
+            // Antigravity mutates a waiting step in place. A new request on a
+            // previously baselined step keeps that step's original timestamp.
+            let known_mutable_source = provider == NativeProvider::Antigravity && old.is_some();
             let cursor = if reset {
-                stream.record_count
+                if provider.local_only() {
+                    stream.settled_count.min(stream.record_count)
+                } else {
+                    stream.record_count
+                }
             } else {
                 old.map_or(0, |(_, cursor)| cursor)
             };
-            if !reset {
+            if !reset || provider.local_only() {
                 for event in &stream.events {
-                    if event.position <= cursor
-                        || event.timestamp_ms < activated_ms
-                        || !provider.event_enabled(config, &event.kind)
+                    if !reset
+                        && (event.position <= cursor
+                            || (!known_mutable_source && event.timestamp_ms < activated_ms)
+                            || (!provider.local_only()
+                                && !provider.event_enabled(config, &event.kind)))
                     {
                         continue;
                     }
@@ -109,7 +118,15 @@ impl PanelDb {
                         title: redact_output(&stream.title),
                         event: event.clone(),
                     };
-                    queued += tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,'pending',?4,?4)", params![delivery.event_key,provider.as_str(),serde_json::to_string(&delivery)?,Self::now()])?;
+                    let status = if reset || !provider.event_enabled(config, &event.kind) {
+                        "skipped"
+                    } else {
+                        "pending"
+                    };
+                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),serde_json::to_string(&delivery)?,status,Self::now()])?;
+                    if status == "pending" {
+                        queued += inserted;
+                    }
                 }
             }
             let cursor = cursor.max(stream.settled_count.min(stream.record_count));
@@ -227,7 +244,15 @@ impl PanelDb {
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
         let mut statuses = Vec::new();
-        for provider in [NativeProvider::Grok, NativeProvider::Claude] {
+        for provider in [
+            NativeProvider::Grok,
+            NativeProvider::Claude,
+            NativeProvider::Antigravity,
+            NativeProvider::Dsh,
+        ] {
+            if provider.local_only() && !cfg!(target_os = "macos") {
+                continue;
+            }
             let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
             let failed:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status='failed'",[provider.as_str()],|r|r.get(0))?;
@@ -412,6 +437,150 @@ mod tests {
         let old = scan("imported", 20, now - 86_400_000);
         assert_eq!(
             db.stage_native_notifications(NativeProvider::Grok, &old, &c)
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[cfg(test)]
+mod local_provider_tests {
+    use super::*;
+    use crate::native_probe::NativeStreamSnapshot;
+    fn config() -> Config {
+        let mut c = Config::default();
+        c.probe.enabled = true;
+        c.probe.notifications.enabled = true;
+        let n = &mut c.probe.notifications;
+        n.notify_antigravity = true;
+        n.notify_antigravity_completion = true;
+        n.notify_antigravity_failure = true;
+        n.notify_antigravity_reply_needed = true;
+        n.notify_antigravity_authorization = true;
+        n.notify_dsh = true;
+        n.notify_dsh_completion = true;
+        n.notify_dsh_failure = true;
+        n.notify_dsh_reply_needed = true;
+        n.notify_dsh_authorization = true;
+        c
+    }
+    fn scan(provider: NativeProvider, kind: &str, request: &str) -> NativeScan {
+        NativeScan {
+            errors: 0,
+            streams: vec![NativeStreamSnapshot {
+                provider,
+                session_key: "fixture".into(),
+                id: "fixture".into(),
+                title: "Fixture".into(),
+                identity: "source".into(),
+                record_count: 2,
+                settled_count: 0,
+                events: vec![NativeTurnEvent {
+                    prompt_id: None,
+                    position: 2,
+                    turn_id: request.into(),
+                    kind: kind.into(),
+                    body: "Fixture question".into(),
+                    timestamp_ms: chrono::Utc::now().timestamp_millis() + 1000,
+                }],
+            }],
+        }
+    }
+    #[test]
+    fn pending_baseline_restart_and_reenable_preserve_dedupe_without_losing_same_step_completion() {
+        for provider in [NativeProvider::Antigravity, NativeProvider::Dsh] {
+            let mut c = config();
+            let db = PanelDb::open(":memory:").unwrap();
+            let old = scan(provider, "reply_needed", "execution-1");
+            assert_eq!(
+                db.stage_native_notifications(provider, &old, &c).unwrap(),
+                0
+            );
+            assert_eq!(
+                db.stage_native_notifications(provider, &old, &c).unwrap(),
+                0
+            );
+            let completed = scan(provider, "completion", "execution-1");
+            assert_eq!(
+                db.stage_native_notifications(provider, &completed, &c)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                db.stage_native_notifications(provider, &completed, &c)
+                    .unwrap(),
+                0
+            );
+            c.probe.notifications.enabled = false;
+            db.stage_native_notifications(provider, &NativeScan::default(), &c)
+                .unwrap();
+            c.probe.notifications.enabled = true;
+            let new = scan(provider, "authorization", "request-2");
+            assert_eq!(
+                db.stage_native_notifications(provider, &new, &c).unwrap(),
+                0
+            );
+            assert_eq!(
+                db.stage_native_notifications(provider, &new, &c).unwrap(),
+                0
+            );
+            let later = scan(provider, "authorization", "request-3");
+            assert_eq!(
+                db.stage_native_notifications(provider, &later, &c).unwrap(),
+                1
+            );
+        }
+    }
+    #[test]
+    fn disabled_categories_do_not_replay_existing_waits_when_enabled() {
+        for provider in [NativeProvider::Antigravity, NativeProvider::Dsh] {
+            let mut c = config();
+            let db = PanelDb::open(":memory:").unwrap();
+            db.stage_native_notifications(provider, &NativeScan::default(), &c)
+                .unwrap();
+            c.probe.notifications.notify_antigravity_reply_needed = false;
+            c.probe.notifications.notify_dsh_reply_needed = false;
+            let waiting = scan(provider, "reply_needed", "request");
+            assert_eq!(
+                db.stage_native_notifications(provider, &waiting, &c)
+                    .unwrap(),
+                0
+            );
+            c.probe.notifications.notify_antigravity_reply_needed = true;
+            c.probe.notifications.notify_dsh_reply_needed = true;
+            assert_eq!(
+                db.stage_native_notifications(provider, &waiting, &c)
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn new_interaction_on_a_baselined_step_keeps_its_original_creation_time() {
+        let provider = NativeProvider::Antigravity;
+        let c = config();
+        let db = PanelDb::open(":memory:").unwrap();
+        let mut waiting = scan(provider, "reply_needed", "old-request");
+        waiting.streams[0].events[0].timestamp_ms = 1;
+        assert_eq!(
+            db.stage_native_notifications(provider, &waiting, &c)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.stage_native_notifications(provider, &waiting, &c)
+                .unwrap(),
+            0
+        );
+        waiting.streams[0].events[0].turn_id = "new-request".into();
+        assert_eq!(
+            db.stage_native_notifications(provider, &waiting, &c)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.stage_native_notifications(provider, &waiting, &c)
                 .unwrap(),
             0
         );

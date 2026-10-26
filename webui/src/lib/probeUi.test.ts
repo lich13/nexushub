@@ -402,6 +402,16 @@ describe("Probe UI helpers", () => {
           notify_claude_completion: true,
           notify_claude_failure: true,
           notify_claude_reply_needed: true,
+          notify_antigravity: false,
+          notify_antigravity_completion: false,
+          notify_antigravity_failure: false,
+          notify_antigravity_reply_needed: false,
+          notify_antigravity_authorization: false,
+          notify_dsh: false,
+          notify_dsh_completion: false,
+          notify_dsh_failure: false,
+          notify_dsh_reply_needed: false,
+          notify_dsh_authorization: false,
 
           notify_recoverable: true
         },
@@ -611,4 +621,21 @@ describe("Probe UI helpers", () => {
     ]);
   });
 
+});
+
+test("local providers default off and all four categories survive a settings round trip", () => {
+  const draft = buildProbeSettingsDraft(settings);
+  expect(draft.notifications.notify_antigravity).toBe(false);
+  expect(draft.notifications.notify_dsh).toBe(false);
+  for (const provider of ["antigravity", "dsh"] as const) {
+    for (const suffix of ["", "_completion", "_failure", "_reply_needed", "_authorization"] as const) {
+      draft.notifications[`notify_${provider}${suffix}`] = true;
+    }
+  }
+  const payload = buildProbeSettingsPayload(draft);
+  for (const provider of ["antigravity", "dsh"] as const) {
+    for (const suffix of ["", "_completion", "_failure", "_reply_needed", "_authorization"] as const) {
+      expect(payload.probe.notifications?.[`notify_${provider}${suffix}`]).toBe(true);
+    }
+  }
 });

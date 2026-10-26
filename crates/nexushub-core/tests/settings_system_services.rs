@@ -28,6 +28,8 @@ fn linux_capabilities_expose_api_and_maintenance_features() {
     assert!(capabilities.thread_cleanup);
     assert!(capabilities.thread_archive_actions);
     assert!(capabilities.systemd);
+    assert!(!capabilities.antigravity_notifications);
+    assert!(!capabilities.dsh_notifications);
     assert!(capabilities.linux_update_job);
     assert!(capabilities.prune_backups);
 }
@@ -51,6 +53,8 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() 
     assert!(capabilities.thread_cleanup);
     assert!(capabilities.thread_archive_actions);
     assert!(!capabilities.systemd);
+    assert!(capabilities.antigravity_notifications);
+    assert!(capabilities.dsh_notifications);
     assert!(!capabilities.linux_update_job);
     assert!(!capabilities.prune_backups);
 
@@ -421,4 +425,45 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
             .as_nanos()
     );
     std::env::temp_dir().join(format!("{label}-{unique}"))
+}
+
+#[test]
+fn local_notification_switches_default_off_and_round_trip_through_settings_and_toml() {
+    use nexushub_core::config::{patch_probe_config_toml, ProbeConfigFilePatch};
+    let config = Config::default();
+    let defaults = serde_json::to_value(&config.probe.notifications).unwrap();
+    let fields = [
+        "notify_antigravity",
+        "notify_antigravity_completion",
+        "notify_antigravity_failure",
+        "notify_antigravity_reply_needed",
+        "notify_antigravity_authorization",
+        "notify_dsh",
+        "notify_dsh_completion",
+        "notify_dsh_failure",
+        "notify_dsh_reply_needed",
+        "notify_dsh_authorization",
+    ];
+    let mut values = serde_json::Map::new();
+    for field in fields {
+        assert_eq!(defaults[field], false);
+        values.insert(field.into(), serde_json::Value::Bool(true));
+    }
+    let patch: ProbeNotificationsConfigPatch = serde_json::from_value(values.into()).unwrap();
+    let mut merged = ProbeNotificationsConfigPatch::default();
+    merge_probe_notification_patch(&mut merged, patch);
+    let file_patch = ProbeConfigFilePatch {
+        probe: Some(ProbeSettingsPatch {
+            notifications: Some(merged),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let updated = patch_probe_config_toml(&toml::to_string(&config).unwrap(), &file_patch).unwrap();
+    let reloaded: Config = toml::from_str(&updated).unwrap();
+    let view = build_settings_view(&reloaded, ProbeSecretState::Configured);
+    let value = serde_json::to_value(view.notifications).unwrap();
+    for field in fields {
+        assert_eq!(value[field], true);
+    }
 }

@@ -13,9 +13,17 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     db.recover_interrupted_native_deliveries()?;
 
     let mut snapshots = Vec::new();
-    for provider in [NativeProvider::Grok, NativeProvider::Claude] {
+    for provider in [
+        NativeProvider::Grok,
+        NativeProvider::Claude,
+        NativeProvider::Antigravity,
+        NativeProvider::Dsh,
+    ] {
+        if provider.local_only() && !cfg!(target_os = "macos") {
+            continue;
+        }
         let scan = if provider.enabled(config) {
-            match tokio::task::spawn_blocking(move || native_probe::scan(provider)).await? {
+            match scan(provider).await {
                 Ok(scan) => scan,
                 Err(_) => NativeScan {
                     streams: vec![],
@@ -71,7 +79,10 @@ async fn deliver_pending(
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let outcome = if (!still_current && delivery.provider != NativeProvider::Claude) || !enabled
+        let outcome = if (!still_current
+            && delivery.provider != NativeProvider::Claude
+            && !delivery.provider.local_only())
+            || !enabled
         {
             ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
@@ -85,6 +96,33 @@ async fn deliver_pending(
         db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
     }
     Ok(())
+}
+
+pub(super) async fn scan(provider: NativeProvider) -> Result<NativeScan> {
+    if provider == NativeProvider::Antigravity {
+        super::antigravity::scan().await
+    } else {
+        tokio::task::spawn_blocking(move || native_probe::scan(provider)).await?
+    }
+}
+
+pub(super) fn local_event_current(
+    scan: &NativeScan,
+    delivery: &nexushub_core::db::NativeDelivery,
+) -> Result<bool> {
+    if let Some(stream) = scan.streams.iter().find(|s| {
+        s.provider == delivery.provider
+            && s.id == delivery.thread_id
+            && s.session_key == delivery.session_key
+    }) {
+        return Ok(stream.event_key(&delivery.event) == delivery.event_key
+            && stream
+                .events
+                .iter()
+                .any(|e| native_probe::same_event(e, &delivery.event)));
+    }
+    anyhow::ensure!(scan.errors == 0, "native notification source pending");
+    Ok(false)
 }
 
 #[cfg(test)]

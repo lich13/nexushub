@@ -185,6 +185,14 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 
 ## 通知与监测
 
+Antigravity 与 DSH 是仅本机的通知来源，不提供完整会话阅读入口。`system.capabilities` 的可选 `antigravity_notifications`／`dsh_notifications` 仅由本机 macOS Tauri 声明；远端隐藏入口且 Linux monitor 不运行这两项，协议仍为 2。每种来源提供总开关及完成、失败、需要回复、需要授权四类开关，默认关闭，沿用现有 Probe 间隔、数据库、持久化认领和加密队列。
+
+Antigravity 从已运行且同用户的原生 language server 获取摘要和轨迹，仅允许两个固定只读方法；凭据留在本机内存，请求限回环并禁止代理和重定向。完成取主执行的明确终态，不等待独立后台任务；失败必须是当前执行的明确错误终态。只有 WAITING 与可识别 requestedInteraction 同时存在才发问题或授权提醒，按执行、步骤、请求内容及已处理请求数去重；普通工具、中间错误、取消和自动继续不推断失败。服务未运行、身份不明或读取失败在 Probe 来源状态显示异常。
+
+DSH 复用标准存储边界，读取 v4 JSONL 或逐帧解压追加的 Zstandard，未写完整的尾部等待下次扫描，完整记录按序列核验。turn/start 与 turn/end 决定主回合终态；approval/asked 与 approval/decided 配对授权；ask_user_question 调用、结果及 user-question-reply 身份配对问题。超时返回 pending 的异步问题跨正常回合结束仍保持待回复，实际回答、取消或明确失效解除。子代理、归档和 fork 继承范围不产生主线程通知；不支持的版本、持久化格式及未知必要记录显示读取异常。
+
+两者首次启用及重新启用建立基线，不补发历史；按来源、会话和回合／请求身份认领，同一请求不因摘要变化重复发送。首次发送及每次重试前读取原生状态，恢复执行淘汰旧失败，已处理问题／审批清除重试正文；正常完成沿用既有有效期补发。无法复核时只使用既有有限重试，不猜测终态。
+
 事件识别与 Bark HTTP 投递分离。Codex 错误绑定规范主任务身份；普通自然语言反馈仅在确认终态后本地识别，monitor、Stop Hook 和完成入口共享 `assistant_question` 与持久化认领。Grok 使用主回合结束证据；Claude 轮询要求明确终态且无 pending tools，空完成内容回退到本回合最后一段助手回复。兼容警告继续可读，仅致命解析/身份错误禁止扫描。
 
 原生 Codex 问题解析位于 `codex/user_input.rs`，统一同步 question、异步 title 和字符串/对象选项。tracker 以原始 turn/call/question 身份配对完整回复，处理明确取消与替换；工具确认、背景进度或正常完成不能关闭尚未回答的问题。异步 monitor 独立于列表状态，与 Hook、passive、Stop 共用发送前复核。启用基线和原子 per-call 认领保证首次跳过旧历史、部分回答不产生新身份，重启/TTL 过期不重发已确认调用。
@@ -197,7 +205,7 @@ claude.hooks 是仅限本机的 status／install／remove 操作。安装须设�
 
 hook 先进入现有加密队列，再至多进行一次有界发送，重试由 monitor 处理。prompt_id 与 transcript promptId 必须经原生映射验证，消息 uuid 不能代替 prompt ID；不明确时保留队列等待核验。去重绑定机器、Provider、会话、文件来源身份、prompt 和类别；仅 Claude hooks 及其同机轮询每回合每类认领一次，兼容旧投递键与成功记录。已确认回复／授权不因新回合撤销；完成还须具备对应回合终态，保留有效分支上较早回合的完成补发。StopFailure 为 API 错误结束的候选；Hook 首次处理、首次发送与每次重试均核验当前主回合、执行活动及终态，轮询失败使用相同规则。新回合、同回合恢复、成功或取消使旧失败过期并清空待投递正文；普通元数据追加和仍打开的进程不表示恢复执行，独立后台任务不阻挡主回合提醒。身份或终态未写完整时沿用有限重试。远端继续轮询；Codex 的逐问题身份、Stop、PreToolUse 与问题跟踪不变。
 
-三种 Provider 共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 NexusHub 深链。
+所有通知来源共用摘要格式：标题 Provider｜状态｜线程标题，状态仅完成／需要回复／需要授权／失败，缺失标题回退项目名再固定名称。正文取对应事件内容，去 Markdown、代码块、工具输出及内部元数据，最多四个非空行、300 个 Unicode 字符，截断加省略号，不附线程／回合 ID。每个新事件一条摘要；group 为既有前缀加 Provider，回复／授权 level=timeSensitive，其余 active，保留声音与合法显式 URL，不构造 NexusHub 深链。
 
 Bark 保存和发送前共用 URL 校验。HTTPS 拒绝回环、未指定、链路本地、IPv4 私网、IPv6 ULA 及对应映射地址；拒绝数字 IP 别名、非法 authority 和 URL 凭据。保留普通 HTTPS 主机名与真实 HTTP 回环服务，不作 DNS 解析。无效配置保留原值并停止投递，不改用默认服务携带原密钥发送。
 

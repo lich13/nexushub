@@ -5,6 +5,8 @@ export type RuntimeCapabilityMatrix = {
   threadSubagents?: boolean;
   hiddenCleanupScan?: boolean;
   dshArchiveCleanup?: boolean;
+  antigravityNotifications?: boolean;
+  dshNotifications?: boolean;
   codexDesktop?: boolean;
   updatePrune: boolean; threadCleanup: boolean; threadArchiveActions: boolean; updateServiceLabels: boolean;
 };
@@ -24,6 +26,8 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     threadSubagents: core.thread_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
     dshArchiveCleanup: core.dsh_archive_cleanup === true,
+    antigravityNotifications: !remote && core.antigravity_notifications === true,
+    dshNotifications: !remote && core.dsh_notifications === true,
     codexDesktop: !remote && core.codex_desktop === true,
     threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: remote && core.linux_update_job };

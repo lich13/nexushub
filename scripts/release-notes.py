@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.11": [
+        "新增本机 Antigravity 与 DSH 的完成、失败、需要回复、需要授权 Bark 提醒，沿用 Probe 轮询及现有通知配置。",
+        "首发和重试前复核原生身份与状态，恢复执行或处理交互后停止旧提醒，首次启用不补发历史。",
+    ],
     "1.3.10": [
         "修复 Claude StopFailure 首次发送与重试前的回合校验；新回合、恢复执行、成功或取消后不再投递旧失败提醒，同时保留有效旧回合的完成补发。",
         "新增本机和远端 DSH 归档清理，支持明文与 Zstandard 会话、可核验的 subagent 后代、预览确认、并发保护、逐项重试和自定义 DSH_HOME。",
@@ -207,6 +211,38 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.11":
+        sections = {
+            "版本概览": ["新增 Antigravity 与 DSH 的本机 Bark 通知，完成按主回合结束判断；API 协议保持 2。"],
+            "功能调整": [
+                "本机 Probe 设置增加两种来源的总开关及完成、失败、需要回复、需要授权四类开关，沿用现有轮询间隔。",
+                "Antigravity 读取运行中原生服务的明确执行终态与待交互状态；DSH 读取标准 v4 JSONL 和多帧 Zstandard 日志。",
+            ],
+            "问题修复": [
+                "每次发送前复核状态，恢复执行后淘汰旧失败，已回答问题和已处理审批不再重试；异步问题超时但仍可回答时保留待回复状态。",
+                "重复扫描和重启沿用持久化认领；排除子代理及 fork 继承记录，首次或重新启用不补发历史。",
+            ],
+            "兼容性与迁移": [
+                "新通知开关默认关闭，仅本机支持；旧服务缺少能力字段时隐藏入口，Linux 服务不运行这两种来源。",
+                "复用现有数据库、Bark 配置、加密队列和有限重试；读取失败、未知身份或不支持格式显示异常。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API，再安装 macOS App；在本机 Probe 中开启需要的通知来源，Antigravity 原生服务须保持运行。",
+                "分别触发四类提醒，处理交互或恢复执行后确认旧提醒停止重试；手机实收和真实交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.10":
         sections = {

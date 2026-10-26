@@ -1,4 +1,5 @@
 //! Offline cleanup of the standard DeepSeek Harness file store.
+pub mod notifications;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -91,7 +92,7 @@ struct Inventory {
     plan: DshArchiveDeletePlan,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct FileStamp {
     len: u64,
     modified: SystemTime,

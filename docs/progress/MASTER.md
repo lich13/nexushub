@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.10，核心提交为 [`8e222e1`](https://github.com/lich13/nexushub/commit/8e222e1612199f5d23bfd8ffb67793918edefb83)，默认 DSH 路径修复为 [`d5f9564`](https://github.com/lich13/nexushub/commit/d5f9564544655df9a6247c681eab2eed984c6e24)，版本收尾提交为 [`54f40dd`](https://github.com/lich13/nexushub/commit/54f40dd88fef63b5f3dcd5661163d97e281ebcae)，基线为 `d13e4d6 / v1.3.9`。本轮修复 Claude 旧失败提醒的首次发送与重试校验，新增本机及远端 DSH 归档清理，并按用户或助手最后一条对话消息时间倒序排列线程。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.11，基线为 `8b48ded / v1.3.10`。新增本机 Antigravity 与 DSH 的完成、失败、需要回复及需要授权 Bark 通知，沿用 Probe 轮询、加密队列与持久化认领。首次和重新启用建立基线，首发及每次重试复核原生状态，恢复执行及已处理交互终结旧提醒。API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -10,6 +10,7 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| 本机 Antigravity／DSH 通知 | 原生执行终态、WAITING 交互、v4 明文／多帧压缩读取；四类独立开关、启用基线、身份去重、回复和审批解除、旧失败失效。只在本机运行。 | `v1.3.11` |
 | 多选与菜单 | 三种 Provider 共用 ⌘／Shift／普通／键盘点击和锚点；删除无数量上限，归档／恢复按 100 项分批，轮询不新增选择，切换范围清空。 | `5ffd995` |
 | Codex 删除 | 按确认的原生父子关系直接删除普通／归档 rollout、压缩副本、writer lock、shell snapshots、visualizations、数据库、分页历史和名称索引；循环去重，错误逐项返回。 | `5ffd995` |
 | Claude 管理 | 改名保留原有身份与占用规则；删除按项目相对路径和文件名定位主文件、同名目录、旁路及共享索引，不依赖正文完整性。 | `5ffd995` |
@@ -25,6 +26,8 @@
 实现、安全边界、旧字段与旧队列兼容见[架构说明](../ARCHITECTURE.md)。删除按确认目标逐项执行，失败返回 residuals 并继续其他目标；归档、恢复和改名仍沿用各自规则。Claude 删除不触碰工作目录或共享文件中的非目标记录。
 
 ## 必要验证
+
+1.3.11 本机已通过 core 全量测试、WebUI 全量测试及类型检查、Tauri 测试和 Clippy；新增实际 CLI 回环用例验证 DSH 四类投递、重启去重及处理交互／恢复后的旧提醒停止重试。Antigravity 原生 API 仅作只读结构核对；事件识别、请求身份、服务不可用及非等待状态由合成用例验证。正式构建与完整回归以对应提交 CI 为准，真实交互及手机实收待用户验收。
 
 以下证据覆盖 1.3.10 核心实现及收尾；最终提交 [`6811cb4`](https://github.com/lich13/nexushub/commit/6811cb4e7a8d7ea763191640b2badd42e6e93807) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40045161446) 与 [`v1.3.10` Release CI](https://github.com/lich13/nexushub/actions/runs/40046131999) 已通过。
 
@@ -55,6 +58,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 1.3.7 核心实现由 [`6ca0716`](https://github.com/lich13/nexushub/commit/6ca0716)、[`e363069`](https://github.com/lich13/nexushub/commit/e363069)、[`d73b2d4`](https://github.com/lich13/nexushub/commit/d73b2d4)、[`0d7afea`](https://github.com/lich13/nexushub/commit/0d7afea) 和 [`70602df`](https://github.com/lich13/nexushub/commit/70602df) 完成；版本、文档和发布说明收尾提交为 [`cffb3e9`](https://github.com/lich13/nexushub/commit/cffb3e9)。该提交对应的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39727312472) 与 [`v1.3.7` Release CI](https://github.com/lich13/nexushub/actions/runs/39728000909) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.7)。已使用正式 Linux 服务包升级远端 API，服务版本为 1.3.7、systemd 为 active、回环 healthz 成功；已安装正式 macOS ARM64 App，bundle 版本为 1.3.7 且启动成功，并保留 1.3.6 回退 App。安装和部署临时文件已清理，未自动启用 Claude hooks。
 
 ## 待用户验收
+
+在本机 Probe 查看 Antigravity 和 DSH 开关，分别触发完成、失败、提问及授权并确认手机收到对应提醒；回答问题、处理审批或恢复执行后，确认旧提醒不再重试。Antigravity 原生服务须保持运行，DSH 使用标准 v4 文件存储；自动测试不代替手机实收和真实交互。
 
 在本机和远端“更新与维护 → DSH 归档清理”预览归档，退出对应机器的 DSH 后清理专门测试线程，重开确认归档消失且其他线程保留。使用 Claude 时确认恢复执行后不再收到旧失败提醒；真实线程删除及手机实收由用户验收。
 

@@ -135,6 +135,26 @@ pub struct ProbeNotificationsConfig {
     pub notify_claude_failure: bool,
     #[serde(default = "default_true")]
     pub notify_claude_reply_needed: bool,
+    #[serde(default)]
+    pub notify_antigravity: bool,
+    #[serde(default)]
+    pub notify_antigravity_completion: bool,
+    #[serde(default)]
+    pub notify_antigravity_failure: bool,
+    #[serde(default)]
+    pub notify_antigravity_reply_needed: bool,
+    #[serde(default)]
+    pub notify_antigravity_authorization: bool,
+    #[serde(default)]
+    pub notify_dsh: bool,
+    #[serde(default)]
+    pub notify_dsh_completion: bool,
+    #[serde(default)]
+    pub notify_dsh_failure: bool,
+    #[serde(default)]
+    pub notify_dsh_reply_needed: bool,
+    #[serde(default)]
+    pub notify_dsh_authorization: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,6 +223,16 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_claude_completion: Option<bool>,
     pub notify_claude_failure: Option<bool>,
     pub notify_claude_reply_needed: Option<bool>,
+    pub notify_antigravity: Option<bool>,
+    pub notify_antigravity_completion: Option<bool>,
+    pub notify_antigravity_failure: Option<bool>,
+    pub notify_antigravity_reply_needed: Option<bool>,
+    pub notify_antigravity_authorization: Option<bool>,
+    pub notify_dsh: Option<bool>,
+    pub notify_dsh_completion: Option<bool>,
+    pub notify_dsh_failure: Option<bool>,
+    pub notify_dsh_reply_needed: Option<bool>,
+    pub notify_dsh_authorization: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -295,6 +325,16 @@ impl Default for ProbeNotificationsConfig {
             notify_claude_completion: true,
             notify_claude_failure: true,
             notify_claude_reply_needed: true,
+            notify_antigravity: false,
+            notify_antigravity_completion: false,
+            notify_antigravity_failure: false,
+            notify_antigravity_reply_needed: false,
+            notify_antigravity_authorization: false,
+            notify_dsh: false,
+            notify_dsh_completion: false,
+            notify_dsh_failure: false,
+            notify_dsh_reply_needed: false,
+            notify_dsh_authorization: false,
         }
     }
 }
@@ -855,6 +895,56 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 "probe.notifications",
                 "notify_claude_reply_needed",
                 notifications.notify_claude_reply_needed,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_antigravity",
+                notifications.notify_antigravity,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_antigravity_completion",
+                notifications.notify_antigravity_completion,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_antigravity_failure",
+                notifications.notify_antigravity_failure,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_antigravity_reply_needed",
+                notifications.notify_antigravity_reply_needed,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_antigravity_authorization",
+                notifications.notify_antigravity_authorization,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_dsh",
+                notifications.notify_dsh,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_dsh_completion",
+                notifications.notify_dsh_completion,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_dsh_failure",
+                notifications.notify_dsh_failure,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_dsh_reply_needed",
+                notifications.notify_dsh_reply_needed,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_dsh_authorization",
+                notifications.notify_dsh_authorization,
             );
             editor.set_bool("probe.notifications", "enabled", notifications.enabled);
             editor.set_string(

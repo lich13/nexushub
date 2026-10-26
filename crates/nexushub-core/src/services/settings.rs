@@ -106,6 +106,16 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_claude_failure: bool,
     pub notify_claude_completion: bool,
     pub notify_claude: bool,
+    pub notify_antigravity: bool,
+    pub notify_antigravity_completion: bool,
+    pub notify_antigravity_failure: bool,
+    pub notify_antigravity_reply_needed: bool,
+    pub notify_antigravity_authorization: bool,
+    pub notify_dsh: bool,
+    pub notify_dsh_completion: bool,
+    pub notify_dsh_failure: bool,
+    pub notify_dsh_reply_needed: bool,
+    pub notify_dsh_authorization: bool,
 }
 
 pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -> SettingsView {
@@ -164,6 +174,16 @@ pub fn probe_notifications_settings_view(
         notify_claude_failure: notifications.notify_claude_failure,
         notify_claude_completion: notifications.notify_claude_completion,
         notify_claude: notifications.notify_claude,
+        notify_antigravity: notifications.notify_antigravity,
+        notify_antigravity_completion: notifications.notify_antigravity_completion,
+        notify_antigravity_failure: notifications.notify_antigravity_failure,
+        notify_antigravity_reply_needed: notifications.notify_antigravity_reply_needed,
+        notify_antigravity_authorization: notifications.notify_antigravity_authorization,
+        notify_dsh: notifications.notify_dsh,
+        notify_dsh_completion: notifications.notify_dsh_completion,
+        notify_dsh_failure: notifications.notify_dsh_failure,
+        notify_dsh_reply_needed: notifications.notify_dsh_reply_needed,
+        notify_dsh_authorization: notifications.notify_dsh_authorization,
     }
 }
 
@@ -223,6 +243,36 @@ pub fn merge_probe_notification_patch(
     if source.notify_claude_reply_needed.is_some() {
         target.notify_claude_reply_needed = source.notify_claude_reply_needed;
     }
+    if source.notify_antigravity.is_some() {
+        target.notify_antigravity = source.notify_antigravity;
+    }
+    if source.notify_antigravity_completion.is_some() {
+        target.notify_antigravity_completion = source.notify_antigravity_completion;
+    }
+    if source.notify_antigravity_failure.is_some() {
+        target.notify_antigravity_failure = source.notify_antigravity_failure;
+    }
+    if source.notify_antigravity_reply_needed.is_some() {
+        target.notify_antigravity_reply_needed = source.notify_antigravity_reply_needed;
+    }
+    if source.notify_antigravity_authorization.is_some() {
+        target.notify_antigravity_authorization = source.notify_antigravity_authorization;
+    }
+    if source.notify_dsh.is_some() {
+        target.notify_dsh = source.notify_dsh;
+    }
+    if source.notify_dsh_completion.is_some() {
+        target.notify_dsh_completion = source.notify_dsh_completion;
+    }
+    if source.notify_dsh_failure.is_some() {
+        target.notify_dsh_failure = source.notify_dsh_failure;
+    }
+    if source.notify_dsh_reply_needed.is_some() {
+        target.notify_dsh_reply_needed = source.notify_dsh_reply_needed;
+    }
+    if source.notify_dsh_authorization.is_some() {
+        target.notify_dsh_authorization = source.notify_dsh_authorization;
+    }
     if source.notify_recoverable.is_some() {
         target.notify_recoverable = source.notify_recoverable;
     }
@@ -270,6 +320,16 @@ pub struct ProbeNotificationsSavePatch {
     pub notify_claude_failure: Option<bool>,
     pub notify_claude_completion: Option<bool>,
     pub notify_claude: Option<bool>,
+    pub notify_antigravity: Option<bool>,
+    pub notify_antigravity_completion: Option<bool>,
+    pub notify_antigravity_failure: Option<bool>,
+    pub notify_antigravity_reply_needed: Option<bool>,
+    pub notify_antigravity_authorization: Option<bool>,
+    pub notify_dsh: Option<bool>,
+    pub notify_dsh_completion: Option<bool>,
+    pub notify_dsh_failure: Option<bool>,
+    pub notify_dsh_reply_needed: Option<bool>,
+    pub notify_dsh_authorization: Option<bool>,
 
     pub device_key: Option<String>,
 }
@@ -422,6 +482,16 @@ impl ProbeNotificationsSavePatch {
                 notify_claude_failure: self.notify_claude_failure,
                 notify_claude_completion: self.notify_claude_completion,
                 notify_claude: self.notify_claude,
+                notify_antigravity: self.notify_antigravity,
+                notify_antigravity_completion: self.notify_antigravity_completion,
+                notify_antigravity_failure: self.notify_antigravity_failure,
+                notify_antigravity_reply_needed: self.notify_antigravity_reply_needed,
+                notify_antigravity_authorization: self.notify_antigravity_authorization,
+                notify_dsh: self.notify_dsh,
+                notify_dsh_completion: self.notify_dsh_completion,
+                notify_dsh_failure: self.notify_dsh_failure,
+                notify_dsh_reply_needed: self.notify_dsh_reply_needed,
+                notify_dsh_authorization: self.notify_dsh_authorization,
             },
             normalize_bark_device_key(self.device_key),
         )
@@ -479,6 +549,16 @@ fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> 
         && patch.notify_claude_completion.is_none()
         && patch.notify_claude_failure.is_none()
         && patch.notify_claude_reply_needed.is_none()
+        && patch.notify_antigravity.is_none()
+        && patch.notify_antigravity_completion.is_none()
+        && patch.notify_antigravity_failure.is_none()
+        && patch.notify_antigravity_reply_needed.is_none()
+        && patch.notify_antigravity_authorization.is_none()
+        && patch.notify_dsh.is_none()
+        && patch.notify_dsh_completion.is_none()
+        && patch.notify_dsh_failure.is_none()
+        && patch.notify_dsh_reply_needed.is_none()
+        && patch.notify_dsh_authorization.is_none()
 }
 
 pub fn normalize_probe_config_file_patch(

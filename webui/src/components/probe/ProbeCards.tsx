@@ -117,6 +117,20 @@ export function ProbeRuntimeSettingsCard({
         <label className="toggle-row"><span>Claude Code 回复通知</span><input type="checkbox" checked={draft.notifications.notify_claude_reply_needed} onChange={(event) => setNotifications({ notify_claude_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span title="包含 Plan、进行中的同步或异步提问，以及最终回复中明确等待确认或反馈的请求">Codex 回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span>Codex 异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
+        {capabilities.antigravityNotifications && <>
+          <label className="toggle-row"><span>Antigravity 通知</span><input type="checkbox" checked={draft.notifications.notify_antigravity} onChange={(event) => setNotifications({ notify_antigravity: event.target.checked })} /></label>
+          <label className="toggle-row"><span>Antigravity 完成</span><input type="checkbox" checked={draft.notifications.notify_antigravity_completion} onChange={(event) => setNotifications({ notify_antigravity_completion: event.target.checked })} /></label>
+          <label className="toggle-row"><span>Antigravity 失败</span><input type="checkbox" checked={draft.notifications.notify_antigravity_failure} onChange={(event) => setNotifications({ notify_antigravity_failure: event.target.checked })} /></label>
+          <label className="toggle-row"><span>Antigravity 需要回复</span><input type="checkbox" checked={draft.notifications.notify_antigravity_reply_needed} onChange={(event) => setNotifications({ notify_antigravity_reply_needed: event.target.checked })} /></label>
+          <label className="toggle-row"><span>Antigravity 需要授权</span><input type="checkbox" checked={draft.notifications.notify_antigravity_authorization} onChange={(event) => setNotifications({ notify_antigravity_authorization: event.target.checked })} /></label>
+        </>}
+        {capabilities.dshNotifications && <>
+          <label className="toggle-row"><span>DSH 通知</span><input type="checkbox" checked={draft.notifications.notify_dsh} onChange={(event) => setNotifications({ notify_dsh: event.target.checked })} /></label>
+          <label className="toggle-row"><span>DSH 完成</span><input type="checkbox" checked={draft.notifications.notify_dsh_completion} onChange={(event) => setNotifications({ notify_dsh_completion: event.target.checked })} /></label>
+          <label className="toggle-row"><span>DSH 失败</span><input type="checkbox" checked={draft.notifications.notify_dsh_failure} onChange={(event) => setNotifications({ notify_dsh_failure: event.target.checked })} /></label>
+          <label className="toggle-row"><span>DSH 需要回复</span><input type="checkbox" checked={draft.notifications.notify_dsh_reply_needed} onChange={(event) => setNotifications({ notify_dsh_reply_needed: event.target.checked })} /></label>
+          <label className="toggle-row"><span>DSH 需要授权</span><input type="checkbox" checked={draft.notifications.notify_dsh_authorization} onChange={(event) => setNotifications({ notify_dsh_authorization: event.target.checked })} /></label>
+        </>}
         <label className="toggle-row"><span>管理 Codex Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
       </div>
       {status?.provider_notifications?.map((provider) => <div key={provider.provider} className="muted-row">{provider.provider.toUpperCase()} · {provider.enabled ? "监控中" : "已停用"} · {provider.streams} 个会话 · {provider.read_errors} 个读取异常 · {provider.failed_deliveries} 次投递失败</div>)}

@@ -29,7 +29,7 @@ describe("machine demo fixtures", () => {
   test("remote API fixture retains Linux service, update and backup capabilities", () => {
     const view = buildDemoSystemCapabilities("linux-api");
     expect(view.host_surface).toBe("linux_server_api");
-    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "hidden_cleanup_scan", "codex_delete_tree"].sort());
+    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "dsh_archive_cleanup", "antigravity_notifications", "dsh_notifications", "hidden_cleanup_scan", "codex_delete_tree"].sort());
     expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
     expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/nexushub-demo", config_file: "/srv/nexushub-demo/config.toml", log_dir: "/srv/nexushub-demo/logs", service_kind: "systemd", service_name: "nexushub-webd" });
   });
@@ -37,4 +37,19 @@ describe("machine demo fixtures", () => {
   test("retired standalone and LAN browser fixtures are unavailable", () => {
     for (const key of ["linux-web", "desktop-lan-webui"]) expect(() => buildDemoFixture(key as DemoFixtureKey)).toThrow("Unsupported host surface");
   });
+});
+
+test("new provider notifications are local-only and absent on old servers", async () => {
+  const { runtimeCapabilitiesFromResponse } = await import("./capabilities");
+  const local = runtimeCapabilitiesFromResponse(buildDemoSystemCapabilities("macos-tauri"));
+  const remote = runtimeCapabilitiesFromResponse(buildDemoSystemCapabilities("linux-api"));
+  expect(local.antigravityNotifications).toBe(true);
+  expect(local.dshNotifications).toBe(true);
+  expect(remote.antigravityNotifications).toBe(false);
+  expect(remote.dshNotifications).toBe(false);
+  const old = buildDemoSystemCapabilities("linux-api");
+  delete old.capabilities.antigravity_notifications;
+  delete old.capabilities.dsh_notifications;
+  expect(runtimeCapabilitiesFromResponse(old).antigravityNotifications).toBe(false);
+  expect(runtimeCapabilitiesFromResponse(old).dshNotifications).toBe(false);
 });

@@ -59,7 +59,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 单条、批量、归档清理和隐藏清理共用直接删除实现。Codex 覆盖普通／归档明文与压缩 rollout、writer 锁、shell snapshots、visualizations、原生状态和分页历史数据库、名称索引。父子关系去重遍历，循环不阻断；不反向扩大到引用方。执行仅处理确认时提交的 ID 集合，不加入后来出现的后代。
 - Claude 定位键取项目相对路径及文件名身份；覆盖主 JSONL、同名目录、file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 按各工作区的 ID 目录定位，摘要缺失或损坏不影响删除。
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围，expectedCount 不再比较。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
-- DSH 只提供独立归档清理，不新增 Provider 阅读入口。以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 定位归档根及后代；独立 fork 不扩入。预览可运行中读取，执行前要求对应机器的 DSH 退出。请求固定 id/archiveId，不接受路径；恢复、归属变化或并发修改停止对应清理，共享索引只原子移除成功目标。systemd 仅开放 DSH sessions/storages 子目录，旧服务缺少 dsh_archive_cleanup 能力时禁用入口。
+- DSH 提供独立归档清理及本机通知，不新增 Provider 阅读入口。以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 定位归档根及后代；独立 fork 不扩入。预览可运行中读取，执行前要求对应机器的 DSH 退出。请求固定 id/archiveId，不接受路径；恢复、归属变化或并发修改停止对应清理，共享索引只原子移除成功目标。systemd 仅开放 DSH sessions/storages 子目录，旧服务缺少 dsh_archive_cleanup 能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
 - Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。先删除自有队列中的 Pi JSON，再移除 Pi 提供方/流/投递/事件及专属设置；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
@@ -99,6 +99,8 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 外部通知服务卸载归运维仓库，须明确配置与数据归属；不改共用 Nginx/TLS、其他服务或用户原生会话。
 
 ## Bark 投递边界
+
+- Antigravity 和 DSH 仅在本机运行通知，通过可选能力展示总开关和四类开关，默认关闭；协议保持 2。沿用 Probe 轮询、数据库和加密队列，首次启用／重新启用建立基线。Antigravity 只读原生服务，明确执行终态和 WAITING + requestedInteraction 才产生对应事件；DSH 只读标准 v4 日志及多帧 Zstandard，按主回合、问题和审批身份配对。子代理和 fork 继承记录不成为主线程事件；读取或身份不明显示异常，不推断终态。首发与重试均复核，恢复执行淘汰旧失败，问题和审批解除后终结重试；异步问题超时仍可回答时继续待回复。
 
 - 每分段最多 3 次，重试等待 15/60 秒并加入 ±20% 抖动；首次投递起 10 分钟内有效。尊重 Retry-After，不提前发送或无限保留。
 - 网络失败、结果未知和明确临时拒绝可重试；凭据、证书验证、重定向、非法请求及已知永久 APNs 拒绝不能重试。日志仅含安全分类、状态码、耗时、次数和匿名身份，不含原始异常、地址、Key 或正文。
