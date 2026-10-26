@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.11，基线为 `8b48ded / v1.3.10`。新增本机 Antigravity 与 DSH 的完成、失败、需要回复及需要授权 Bark 通知，沿用 Probe 轮询、加密队列与持久化认领。首次和重新启用建立基线，首发及每次重试复核原生状态，恢复执行及已处理交互终结旧提醒。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.3.11，基线为 `8b48ded / v1.3.10`，功能提交为 [`8426aaf`](https://github.com/lich13/nexushub/commit/8426aaf8cfb3ede993a303f0bc1c10f388b6cbe0)，发布提交为 [`1af6332`](https://github.com/lich13/nexushub/commit/1af6332)。新增本机 Antigravity 与 DSH 的完成、失败、需要回复及需要授权 Bark 通知，沿用 Probe 轮询、加密队列与持久化认领。首次和重新启用建立基线，首发及每次重试复核原生状态，恢复执行及已处理交互终结旧提醒。API 协议仍为 2；macOS App 是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -44,6 +44,8 @@
 DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代，独立 fork 保留。执行请求不接受路径，恢复或归属变化跳过；共享索引仅原子移除成功目标，无匹配不写入。自定义持久化后端和无法识别格式明确拒绝，缺少数据目录显示空状态。
 
 ## 正式交付
+
+1.3.11 发布提交 `1af6332` 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40361843004)与 [Release CI](https://github.com/lich13/nexushub/actions/runs/40363304134)已通过，发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.11)。已使用对应 Linux 产物部署远程服务器，服务版本为 1.3.11、service 为 active、health 为 `{"ok":true}`；已使用对应 DMG 原地安装 Mac，版本为 1.3.11 且启动运行，没有保留旧副本。本机 Antigravity／DSH 总开关及四类提醒已按授权开启，复用原有 Bark 配置；首次扫描无读取错误并跳过历史，监控进程运行。云端两项开关关闭。真实交互及手机实收仍待用户验收。
 
 1.3.10 已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.10)。已使用正式 Linux 服务包部署远程服务器 `nexushub-webd 1.3.10`，service 为 `active`、health 为 `{"ok":true}`；已使用 `NexusHub-1.3.10-darwin-arm64.dmg` 原地安装 macOS App，bundle 版本为 1.3.10，签名核验通过且启动运行，没有保留旧副本。
 
