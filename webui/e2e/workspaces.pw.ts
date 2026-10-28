@@ -19,7 +19,7 @@ const claudeSummary = {
 
 for (const colorScheme of ["light", "dark"] as const) {
   for (const viewport of viewports) {
-    test(`${colorScheme} ${viewport.width}: five workspaces and list transitions`, async ({ page }, info) => {
+    test(`${colorScheme} ${viewport.width}: seven workspaces and list transitions`, async ({ page }, info) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ colorScheme });
       const errors: string[] = [];
@@ -69,6 +69,24 @@ for (const colorScheme of ["light", "dark"] as const) {
       await nav.getByRole("button", { name: "Claude Code", exact: true }).click();
       await page.locator(".provider-session").first().click();
       await expect(page.locator(".provider-events")).toContainText("Claude fixture result");
+      await assertContrast(page, ".provider-detail .conversation-title, .provider-events .markdown-content");
+      await assertNoOverflow(page);
+      if (viewport.width <= 767) {
+        await page.getByTitle("返回任务列表").click();
+        await expect(page.locator(".provider-session")).toBeVisible();
+      }
+      await nav.getByRole("button", { name: "Antigravity", exact: true }).click();
+      await page.locator(".provider-session").first().click();
+      await expect(page.locator(".provider-events")).toContainText("Antigravity fixture result");
+      await assertContrast(page, ".provider-detail .conversation-title, .provider-events .markdown-content");
+      await assertNoOverflow(page);
+      if (viewport.width <= 767) {
+        await page.getByTitle("返回任务列表").click();
+        await expect(page.locator(".provider-session")).toBeVisible();
+      }
+      await nav.getByRole("button", { name: "DeepSeek Harness", exact: true }).click();
+      await page.locator(".provider-session").first().click();
+      await expect(page.locator(".provider-events")).toContainText("DSH fixture result");
       await assertContrast(page, ".provider-detail .conversation-title, .provider-events .markdown-content");
       await assertNoOverflow(page);
       if (viewport.width <= 767) {

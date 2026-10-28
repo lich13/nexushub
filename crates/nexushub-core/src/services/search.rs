@@ -63,6 +63,8 @@ pub struct SearchUseCases {
     codex: codex::CodexPaths,
     grok: grok::GrokPaths,
     claude: claude::ClaudePaths,
+    antigravity: crate::antigravity::sessions::AntigravityPaths,
+    dsh: crate::dsh::DshPaths,
 }
 
 impl SearchUseCases {
@@ -71,6 +73,8 @@ impl SearchUseCases {
             codex,
             grok: grok::GrokPaths::default_for_user(),
             claude: claude::ClaudePaths::default_for_user(),
+            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+            dsh: crate::dsh::DshPaths::default_for_user(),
         }
     }
 
@@ -88,6 +92,12 @@ impl SearchUseCases {
             }
             SessionProvider::Grok => {
                 self.search_grok(&request, &needle, &mut matches, &mut warnings)?
+            }
+            SessionProvider::Antigravity => {
+                self.search_antigravity(&request, &needle, &mut matches, &mut warnings)?
+            }
+            SessionProvider::Dsh => {
+                self.search_dsh(&request, &needle, &mut matches, &mut warnings)?
             }
         }
         let offset = request
@@ -304,6 +314,110 @@ impl SearchUseCases {
                 before = page.before_cursor;
                 if before.is_none() {
                     break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn search_antigravity(
+        &self,
+        request: &SessionSearchRequest,
+        needle: &str,
+        output: &mut Vec<SessionSearchResult>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
+        let summaries = crate::antigravity::sessions::list_sessions(
+            &self.antigravity,
+            &crate::provider_sessions::ProviderListRequest {
+                limit: Some(MAX_SESSIONS),
+                ..Default::default()
+            },
+        )?;
+        self.search_provider_events(
+            request,
+            needle,
+            summaries,
+            |key| crate::antigravity::sessions::load_all_events(&self.antigravity, key),
+            output,
+            warnings,
+        )
+    }
+
+    fn search_dsh(
+        &self,
+        request: &SessionSearchRequest,
+        needle: &str,
+        output: &mut Vec<SessionSearchResult>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
+        let summaries = crate::dsh::sessions::list_sessions(
+            &self.dsh,
+            &crate::provider_sessions::ProviderListRequest {
+                limit: Some(MAX_SESSIONS),
+                ..Default::default()
+            },
+        )?;
+        self.search_provider_events(
+            request,
+            needle,
+            summaries,
+            |key| crate::dsh::sessions::load_all_events(&self.dsh, key),
+            output,
+            warnings,
+        )
+    }
+
+    fn search_provider_events(
+        &self,
+        request: &SessionSearchRequest,
+        needle: &str,
+        summaries: Vec<crate::provider_sessions::ProviderSessionSummary>,
+        load: impl Fn(&str) -> Result<Vec<crate::provider_sessions::ProviderHistoryEvent>>,
+        output: &mut Vec<SessionSearchResult>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
+        for summary in summaries {
+            if request.scope == SearchScope::Thread
+                && request.session_key.as_deref() != Some(summary.session_key.as_str())
+            {
+                continue;
+            }
+            let metadata =
+                strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
+            if metadata.to_lowercase().contains(needle) {
+                push_metadata(
+                    output,
+                    &summary.session_key,
+                    &summary.id,
+                    &summary.title,
+                    (!summary.cwd.is_empty()).then(|| summary.cwd.clone()),
+                    &metadata,
+                    needle,
+                    summary.updated_at.clone(),
+                );
+            }
+            let events = match load(&summary.session_key) {
+                Ok(events) => events,
+                Err(_) => {
+                    push_warning(warnings);
+                    continue;
+                }
+            };
+            for event in &events {
+                let corpus = json_corpus(event)?;
+                if let Some(snippet) = find_snippet(&corpus, needle) {
+                    push_result(
+                        output,
+                        &summary.session_key,
+                        &summary.id,
+                        &summary.title,
+                        (!summary.cwd.is_empty()).then(|| summary.cwd.clone()),
+                        &event.kind,
+                        event.id.clone(),
+                        snippet,
+                        event.timestamp.clone(),
+                    );
                 }
             }
         }
@@ -701,6 +815,12 @@ mod tests {
                 projects: root.join("claude/projects"),
             },
             grok,
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+                root.join("antigravity"),
+            ),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
+            },
         };
         let results = service
             .search(SessionSearchRequest {

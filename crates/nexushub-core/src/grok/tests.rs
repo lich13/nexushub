@@ -387,6 +387,12 @@ fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_file
             projects: paths.home.join("unused-claude-projects"),
         },
         grok: paths.clone(),
+        antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+            paths.home.join("unused-antigravity"),
+        ),
+        dsh: crate::dsh::DshPaths {
+            home: paths.home.join("unused-dsh"),
+        },
         platform: crate::platform::PlatformPaths::for_kind(crate::platform::PlatformKind::Macos),
     };
     let batch = sessions

@@ -1,5 +1,5 @@
 import { replaceEqualDeep, type InfiniteData } from "@tanstack/react-query";
-import type { ClaudeSessionDetail, SubagentDetailResponse, GrokSessionDetail, ThreadDetail } from "../../types";
+import type { ClaudeSessionDetail, ProviderSessionDetail, SubagentDetailResponse, GrokSessionDetail, ThreadDetail } from "../../types";
 import { mergeBlocksPreservingHistory } from "../threadMessageStore";
 import { historyCursorIndex, stableHistoryCursor } from "../domain/historyCursor";
 
@@ -119,4 +119,32 @@ export const subagentHistoryAdapter: HistoryAdapter<SubagentDetailResponse> = {
   ids: page => codexHistoryAdapter.ids(page.detail), history: page => page.detail.history, total: page => page.detail.total_blocks,
   cursor: page => codexHistoryAdapter.cursor(page.detail), cursorAfter: (page, index) => codexHistoryAdapter.cursorAfter(page.detail, index),
   merge: retainSubagentHistory
+};
+
+export function retainProviderHistory(previous: unknown, incoming: unknown): InfiniteData<ProviderSessionDetail> {
+  return retainHistoryWindows<ProviderSessionDetail>(previous, incoming, {
+    identity: page => JSON.stringify([page.summary.sessionKey, page.summary.id]),
+    total: page => page.totalEvents,
+    merge: (oldPage, page) => {
+      const boundary = retainedBoundary(
+        { hasMore: oldPage.hasMore, cursor: oldPage.beforeCursor },
+        { hasMore: page.hasMore, cursor: page.beforeCursor },
+      );
+      return {
+        ...page,
+        events: mergeBlocksPreservingHistory(oldPage.events, page.events),
+        hasMore: Boolean(boundary.hasMore),
+        beforeCursor: boundary.cursor,
+      };
+    }
+  });
+}
+
+export const providerHistoryAdapter: HistoryAdapter<ProviderSessionDetail> = {
+  ids: page => page.events.map(event => event.id),
+  history: page => page.history,
+  total: page => page.totalEvents,
+  cursor: page => page.hasMore ? page.beforeCursor ?? undefined : undefined,
+  cursorAfter: (page, index) => page.events[index + 1]?.id,
+  merge: retainProviderHistory,
 };

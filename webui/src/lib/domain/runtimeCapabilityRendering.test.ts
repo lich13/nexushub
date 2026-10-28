@@ -104,7 +104,15 @@ describe("runtime capability rendering", () => {
 
   test("task controls and desktop LAN service are absent from the visual contract", () => {
     const contract = visualContractForRuntime(macosTauriCapabilities);
-    expect(contract.sharedNavigation).toEqual(["Codex", "Claude Code", "Grok Build", "Probe", "设置"]);
+    expect(contract.sharedNavigation).toEqual([
+      "Codex",
+      "Claude Code",
+      "Grok Build",
+      "Antigravity",
+      "DeepSeek Harness",
+      "Probe",
+      "设置"
+    ]);
     expect(contract.sharedActions).not.toEqual(expect.arrayContaining(["发送", "停止", "恢复 Goal"]));
     expect(contract.desktopTauriOnly).toEqual([]);
   });

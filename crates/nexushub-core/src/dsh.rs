@@ -1,5 +1,6 @@
 //! Offline cleanup of the standard DeepSeek Harness file store.
 pub mod notifications;
+pub mod sessions;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

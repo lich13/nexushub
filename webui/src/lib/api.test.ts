@@ -7,6 +7,8 @@ import apiSource from "./api.ts?raw";
 import apiGrokSource from "./api/grok.ts?raw";
 import apiSessionsSource from "./api/sessions.ts?raw";
 import apiClaudeSource from "./api/claude.ts?raw";
+import apiAntigravitySource from "./api/antigravity.ts?raw";
+import apiDshSource from "./api/dsh.ts?raw";
 import apiJobsSource from "./api/jobs.ts?raw";
 import apiProbeSource from "./api/probe.ts?raw";
 import apiSharedSource from "./api/shared.ts?raw";
@@ -15,6 +17,7 @@ import apiThreadsSource from "./api/threads.ts?raw";
 import apiUpdatesSource from "./api/updates.ts?raw";
 import queryOpsSource from "./query/ops.ts?raw";
 import queryProbeSource from "./query/probe.ts?raw";
+import queryProviderSessionsSource from "./query/providerSessions.ts?raw";
 import querySystemSource from "./query/system.ts?raw";
 import queryThreadsSource from "./query/threads.ts?raw";
 import runtimeSource from "./runtime.ts?raw";
@@ -25,6 +28,8 @@ import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetai
 const domainApiSource = [
   apiGrokSource,
   apiClaudeSource,
+  apiAntigravitySource,
+  apiDshSource,
   apiSessionsSource,
   apiJobsSource,
   apiProbeSource,
@@ -37,6 +42,7 @@ const domainApiSource = [
 const querySource = [
   queryOpsSource,
   queryProbeSource,
+  queryProviderSessionsSource,
   querySystemSource,
   queryThreadsSource
 ].join("\n");
@@ -914,6 +920,11 @@ describe("archive delete API compatibility", () => {
       ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
     ].map((match) => match[1]);
     const allowedCommands = [
+      "antigravity.archive",
+      "antigravity.detail",
+      "antigravity.list",
+      "antigravity.rename",
+      "antigravity.restore",
       "cleanup.dshArchiveDryRun",
       "cleanup.dshArchiveExecute",
       "cleanup.archiveDryRun",
@@ -926,6 +937,11 @@ describe("archive delete API compatibility", () => {
       "claude.hooks",
       "claude.list",
       "claude.rename",
+      "dsh.archive",
+      "dsh.detail",
+      "dsh.list",
+      "dsh.rename",
+      "dsh.restore",
       "grok.deleteExecute",
       "grok.deletePreview",
       "grok.detail",
@@ -1187,8 +1203,24 @@ describe("archive delete API compatibility", () => {
   test("NexusHub navigation exposes the slim provider workspaces", async () => {
     const app = await import("../test/domain");
 
-    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "claude", "grok", "probe", "ops"]);
-    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Claude Code", "Grok Build", "Probe", "设置"]);
+    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual([
+      "codex",
+      "claude",
+      "grok",
+      "antigravity",
+      "dsh",
+      "probe",
+      "ops"
+    ]);
+    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual([
+      "Codex",
+      "Claude Code",
+      "Grok Build",
+      "Antigravity",
+      "DeepSeek Harness",
+      "Probe",
+      "设置"
+    ]);
   });
 
   test("thread list item text only exposes the title", async () => {

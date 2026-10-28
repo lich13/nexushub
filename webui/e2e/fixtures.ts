@@ -27,6 +27,40 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
   probeSettings.notifications = { ...probeSettings.notifications, enabled: true, device_key_configured: true };
   let jobReads = 0;
   let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "recent" }];
+  let antigravity = [{
+    id: "ag-fixture",
+    sessionKey: "ag:ag-fixture",
+    title: "Antigravity fixture",
+    cwd: "/isolated/antigravity-workspace",
+    path: "/isolated/antigravity/brain/ag-fixture",
+    archived: false,
+    updatedAt: "2026-10-01T00:00:00Z",
+    messageCount: 2,
+    lastMessage: "Antigravity fixture result",
+    status: "recent",
+    formatVersion: "transcript-v1",
+    storageSize: { status: "ready", bytes: 4096 },
+    canRename: true,
+    canArchive: true,
+    canDelete: true
+  }];
+  let dsh = [{
+    id: "dsh-fixture",
+    sessionKey: "dsh:dsh-fixture",
+    title: "DSH fixture",
+    cwd: "/isolated/dsh-workspace",
+    path: "/isolated/dsh/sessions/dsh-fixture",
+    archived: false,
+    updatedAt: "2026-10-01T00:00:00Z",
+    messageCount: 2,
+    lastMessage: "DSH fixture result",
+    status: "recent",
+    formatVersion: "dsh-zstd-v2",
+    storageSize: { status: "ready", bytes: 2048 },
+    canRename: true,
+    canArchive: true,
+    canDelete: true
+  }];
   const dispatch = async (name: string, args: MockArgs = {}, target: "local" | "remote" = "local"): Promise<unknown> => {
     const fixture = () => target === "remote" ? "linux-api" as const : "macos-tauri" as const;
     calls.push(name);
@@ -89,7 +123,80 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
         "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.id !== grok[0]?.id) throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
         "claude.list": () => [],
-
+        "antigravity.list": () => {
+          const req = args.request ?? {};
+          const wantArchived = Boolean(req.archived);
+          const q = String(req.q ?? "").toLowerCase();
+          return antigravity.filter((item) => item.archived === wantArchived && (!q || item.title.toLowerCase().includes(q) || item.id.toLowerCase().includes(q) || item.cwd.toLowerCase().includes(q)));
+        },
+        "antigravity.detail": () => {
+          const key = args.request?.sessionKey;
+          const summary = antigravity.find((item) => item.sessionKey === key) ?? antigravity[0];
+          if (!summary) throw new Error("Antigravity session not found");
+          return {
+            summary,
+            events: [
+              { id: "ag-user-1", kind: "user_message", text: "Inspect isolated Antigravity fixture." },
+              { id: "ag-think-1", kind: "thinking", text: "Isolated reasoning step." },
+              { id: "ag-tool-1", kind: "tool_call", callId: "ag-call-1", role: "run_command", status: "completed", detail: "printf ok" },
+              { id: "ag-out-1", kind: "tool_result", callId: "ag-call-1", status: "completed", result: "ok" },
+              { id: "ag-reply-1", kind: "assistant_message", text: "## Antigravity\n\nAntigravity fixture result." }
+            ],
+            totalEvents: 5,
+            hasMore: false
+          };
+        },
+        "antigravity.rename": () => {
+          const { sessionKey, title } = args.request;
+          antigravity = antigravity.map((item) => item.sessionKey === sessionKey ? { ...item, title } : item);
+          return antigravity.find((item) => item.sessionKey === sessionKey) ?? antigravity[0];
+        },
+        "antigravity.archive": () => {
+          const { sessionKey } = args.request;
+          antigravity = antigravity.map((item) => item.sessionKey === sessionKey ? { ...item, archived: true } : item);
+          return antigravity.find((item) => item.sessionKey === sessionKey) ?? antigravity[0];
+        },
+        "antigravity.restore": () => {
+          const { sessionKey } = args.request;
+          antigravity = antigravity.map((item) => item.sessionKey === sessionKey ? { ...item, archived: false } : item);
+          return antigravity.find((item) => item.sessionKey === sessionKey) ?? antigravity[0];
+        },
+        "dsh.list": () => {
+          const req = args.request ?? {};
+          const wantArchived = Boolean(req.archived);
+          const q = String(req.q ?? "").toLowerCase();
+          return dsh.filter((item) => item.archived === wantArchived && (!q || item.title.toLowerCase().includes(q) || item.id.toLowerCase().includes(q) || item.cwd.toLowerCase().includes(q)));
+        },
+        "dsh.detail": () => {
+          const key = args.request?.sessionKey;
+          const summary = dsh.find((item) => item.sessionKey === key) ?? dsh[0];
+          if (!summary) throw new Error("DSH session not found");
+          return {
+            summary,
+            events: [
+              { id: "dsh-user-1", kind: "user_message", text: "Inspect isolated DSH fixture." },
+              { id: "dsh-think-1", kind: "thinking", text: "Isolated DSH thinking." },
+              { id: "dsh-reply-1", kind: "assistant_message", text: "## DeepSeek Harness\n\nDSH fixture result." }
+            ],
+            totalEvents: 3,
+            hasMore: false
+          };
+        },
+        "dsh.rename": () => {
+          const { sessionKey, title } = args.request;
+          dsh = dsh.map((item) => item.sessionKey === sessionKey ? { ...item, title } : item);
+          return dsh.find((item) => item.sessionKey === sessionKey) ?? dsh[0];
+        },
+        "dsh.archive": () => {
+          const { sessionKey } = args.request;
+          dsh = dsh.map((item) => item.sessionKey === sessionKey ? { ...item, archived: true } : item);
+          return dsh.find((item) => item.sessionKey === sessionKey) ?? dsh[0];
+        },
+        "dsh.restore": () => {
+          const { sessionKey } = args.request;
+          dsh = dsh.map((item) => item.sessionKey === sessionKey ? { ...item, archived: false } : item);
+          return dsh.find((item) => item.sessionKey === sessionKey) ?? dsh[0];
+        },
       };
       const response = responses[name];
       if (!response) throw new Error(`Unmocked command: ${name}`);

@@ -1,5 +1,5 @@
 import { isInstructionFileActivity, visibleMarkdown } from "./visibleMarkdown";
-import type { MessageBlock, GrokHistoryEvent, ClaudeHistoryEvent } from "../../types";
+import type { MessageBlock, GrokHistoryEvent, ClaudeHistoryEvent, ProviderHistoryEvent } from "../../types";
 import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQuestionResultBlock, toolBlockDetailText } from "./conversationViewModel";
 
 export type ExecutionStatus = "running" | "failed" | "completed";
@@ -16,7 +16,7 @@ export type ExecutionGroup = {
   id: string;
   commands: ExecutionCommand[];
   kind: "command" | "tool";
-  provider: "Codex" | "Grok" | "Claude Code";
+  provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness";
   running: boolean;
   failedCount: number;
 };
@@ -27,7 +27,7 @@ export type ExecutionRenderItem<T> =
 const RUNNING = new Set(["pending", "running", "in_progress", "inprogress", "active", "generating"]);
 const FAILED = new Set(["failed", "error", "cancelled", "canceled", "rejected"]);
 const COMMAND_NAMES = new Set([
-  "exec", "exec_command", "run_terminal_command", "sleep", "js", "javascript",
+  "exec", "exec_command", "run_command", "run_terminal_command", "sleep", "js", "javascript",
   "bash", "bash_execution", "bashexecution", "shell", "terminal", "python", "node", "execute", "command_execution", "commandexecution"
 ]);
 
@@ -50,7 +50,7 @@ function commandTitle(...values: Array<string | null | undefined>): string {
     if (!COMMAND_NAMES.has(normalized)) continue;
     if (normalized === "bashexecution" || normalized === "bash_execution") return "bash";
     if (normalized === "commandexecution" || normalized === "command_execution") return "execute";
-    if (normalized === "run_terminal_command") return "exec";
+    if (normalized === "run_terminal_command" || normalized === "run_command") return "exec";
     return normalized;
   }
   return values.find(value => value?.trim())?.trim().split(/\s+/, 1)[0] || "命令";
@@ -223,4 +223,31 @@ export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRender
       ...(event.result ? [{ label: "结果", text: event.result }] : [])
     ]
   })), "Claude Code");
+}
+
+export function groupProviderEvents(
+  events: ProviderHistoryEvent[],
+  provider: "Antigravity" | "DeepSeek Harness",
+): ExecutionRenderItem<ProviderHistoryEvent>[] {
+  const prefix = provider === "Antigravity" ? "antigravity" : "dsh";
+  return groupActivities(events.map(event => ({
+    item: event,
+    key: `${prefix}:${event.id}`,
+    sourceIds: [event.id, event.callId].filter((value): value is string => Boolean(value)),
+    callId: event.callId,
+    turnId: event.turnId,
+    tool: event.kind === "tool_call" || event.kind === "tool_result",
+    instructionFile: isInstructionFileActivity(event.role, event.text, event.detail, event.result),
+    command: isCommandText(event.role) || isCommandText(event.text),
+    title: isCommandText(event.role)
+      ? commandTitle(event.role, event.text)
+      : event.role || event.text?.trim() || "工具活动",
+    preview: activityPreview(event.detail, event.text && event.text !== event.role ? event.text : undefined),
+    phase: event.kind === "tool_result" ? "result" : "call",
+    status: event.status,
+    sections: [
+      ...(event.detail ? [{ label: "调用参数", text: event.detail }] : []),
+      ...(event.result ? [{ label: "结果", text: event.result }] : [])
+    ]
+  })), provider);
 }

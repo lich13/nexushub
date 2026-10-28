@@ -31,5 +31,6 @@ pub mod update;
 pub use config::Config;
 
 pub mod native_probe;
+pub mod provider_sessions;
 
 pub mod user_message;

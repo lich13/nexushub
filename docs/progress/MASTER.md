@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.3.11，基线为 `8b48ded / v1.3.10`，功能提交为 [`8426aaf`](https://github.com/lich13/nexushub/commit/8426aaf8cfb3ede993a303f0bc1c10f388b6cbe0)，发布提交为 [`1af6332`](https://github.com/lich13/nexushub/commit/1af6332)。新增本机 Antigravity 与 DSH 的完成、失败、需要回复及需要授权 Bark 通知，沿用 Probe 轮询、加密队列与持久化认领。首次和重新启用建立基线，首发及每次重试复核原生状态，恢复执行及已处理交互终结旧提醒。API 协议仍为 2；macOS App 是唯一界面。
+当前维护源码版本为 1.4.0，基线为 `1af6332 / v1.3.11`。本版新增 Antigravity 与 DeepSeek Harness（DSH）完整会话工作区（列表、全部／已归档筛选、分页详情、用户时间线、思考与连续工具折叠、搜索、按需图片附件、双击／F2 改名、归档／恢复、复制 ID、复制路径、含子代理后代闭包的永久删除与多选批处理，明确不提供“复制恢复命令”），并将整体前端界面深度重构为 ChatGPT macOS App 风格。API 协议仍为 2，通过可选 `antigravity_sessions` 与 `dsh_sessions` 能力兼容未升级的旧远端节点；macOS App 仍是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
 
@@ -10,6 +10,8 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| Antigravity／DSH 会话工作区 | 七项导航新增 Antigravity 与 DeepSeek Harness；支持全部／已归档筛选、分页阅读、时间线、搜索、双击改名、归档／恢复、复制 ID、复制路径、永久删除（无复制恢复命令）及多选批处理；DSH 写操作遵循 `session.lock` 与宿主进程离线安全守卫。 | `v1.4.0` |
+| ChatGPT macOS App 风格重构 | 统一浅／深色中性侧栏与画布、右侧紧凑胶囊用户气泡、无框助手 Markdown 与圆角代码块、胶囊搜索与分段器、悬浮协作输入舱、圆角菜单／弹窗及卡片化 Probe／设置面板，保持 WCAG `>= 4.5:1` 对比度与 `48px` 折叠导航不变量。 | `v1.4.0` |
 | 本机 Antigravity／DSH 通知 | 原生执行终态、WAITING 交互、v4 明文／多帧压缩读取；四类独立开关、启用基线、身份去重、回复和审批解除、旧失败失效。只在本机运行。 | `v1.3.11` |
 | 多选与菜单 | 三种 Provider 共用 ⌘／Shift／普通／键盘点击和锚点；删除无数量上限，归档／恢复按 100 项分批，轮询不新增选择，切换范围清空。 | `5ffd995` |
 | Codex 删除 | 按确认的原生父子关系直接删除普通／归档 rollout、压缩副本、writer lock、shell snapshots、visualizations、数据库、分页历史和名称索引；循环去重，错误逐项返回。 | `5ffd995` |

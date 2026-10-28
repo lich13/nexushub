@@ -2,12 +2,12 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. Only local, unarchived Codex main threads have a compact collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
+NexusHub follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: neutral light/dark themes, a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
 
 ## Layout and interaction
 
-- Navigation contains Codex, Claude Code, Grok Build, Probe and settings.
-- Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
+- Navigation contains Codex, Claude Code, Grok Build, Antigravity, DeepSeek Harness, Probe and settings.
+- Desktop uses a compact navigation rail (collapsible to `48px`), a `288px` task list and a centered message column up to `768px`. At `767px` and below, each provider keeps one mounted list/detail/back flow and a 7-column mobile tab bar with ellipsis-safe labels.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Claude Code and Grok sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
 - Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
@@ -36,7 +36,7 @@ NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: 
 
 ## User messages and attachments
 
-User messages use a shared right-aligned blue bubble with normal-weight system text and preserved whitespace. Markdown characters are literal in user requests; assistant Markdown and Plan rendering keep their existing rules. User role labels are omitted. The bubble stays within the reading column and narrows on mobile.
+User messages use a shared right-aligned ChatGPT-style neutral pill (`border-radius: 20px`) with normal-weight system text and preserved whitespace. Markdown characters are literal in user requests; assistant Markdown and Plan rendering keep their existing rules. User role labels are omitted. The bubble stays within the reading column and narrows on mobile.
 
 Confirmed native question-reply envelopes become one bubble per answer. A muted one-line question can expand by pointer or keyboard; the answer remains fully visible and literal. The copy button beside each bubble copies only its answer and reports success/failure locally. Native IDs and JSON/XML transport syntax are not displayed.
 
@@ -46,9 +46,9 @@ Image attachments sit above the bubble in reserved 96px square thumbnails, with 
 
 ## Visual tokens
 
-Light: canvas `#ffffff`, surface `#f6f6f6`, selected `#ededed`, text `#242424`, muted `#626262`, border `#dedede`.
+Light: canvas `#ffffff`, surface `#f9f9f9`, user bubble `#f4f4f4`, selected `#eaeaea`, text `#0d0d0d`, muted `#595959`, border `#e8e8e8`.
 
-Dark: canvas `#202020`, surface `#191919`, text `#ececec`, muted `#a3a3a3`, border `#3b3b3b`.
+Dark: canvas `#202020`, surface `#171717`, user bubble `#2f2f2f`, selected `#2f2f2f`, text `#ececec`, muted `#adadad`, border `#2e2e2e`.
 
 Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus indicators and essential borders meet 3:1. Long titles and paths wrap; only code and tables scroll horizontally.
 
@@ -72,7 +72,7 @@ Claude Code keeps a fixed navigation entry on both machine targets. Missing nati
 
 三个 Provider 通过共享选择逻辑处理行和复选框点击：⌘ 进入多选并切换目标，普通点击在多选中切换，否则打开；Shift 按可见顺序追加连续区间，连续 Shift 保留锚点，无有效锚点仅选当前项。键盘生成的点击忽略修饰键，Ctrl 点击仍打开菜单。保留全部已有选择；归档、恢复按 100 项分批执行；机器、Provider、筛选和退出多选清除选择及锚点，轮询不自动选择新项。
 
-Codex 列表菜单不提供重复的“复制答复”，会话头部保留。Claude 菜单统一提供改名、复制线程 ID、复制文件路径、复制恢复命令、在 Finder 中显示和删除；改名理由独立显示，删除不按读取或活动状态禁用。远端 Finder 明确显示不可用原因，恢复命令仅复制，Claude 不提供归档。
+Codex 列表菜单不提供重复的“复制答复”，会话头部保留。Claude 菜单统一提供改名、复制线程 ID、复制文件路径、复制恢复命令、在 Finder 中显示和删除；改名理由独立显示，删除不按读取或活动状态禁用。远端 Finder 明确显示不可用原因，恢复命令仅复制，Claude 不提供归档。Antigravity 与 DeepSeek Harness 提供“全部／已归档”分段切换、搜索、大小徽标与多选批量归档／恢复／永久删除；列表行右键／省略号菜单与会话头部菜单均提供改名、归档／恢复（取消归档）、复制 ID、复制路径和永久删除（头部另含复制答复），均不提供“复制恢复命令”。连接尚未升级的远端服务时，展示升级提示而非协议报错。
 
 列表项与外层改名容器均填满可用宽度，保留 min-width: 0；长短标题、运行 spinner、复选框和选中背景的左右边界一致。
 

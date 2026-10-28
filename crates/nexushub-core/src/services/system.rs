@@ -171,6 +171,10 @@ pub struct SystemCapabilities {
     #[serde(default)]
     pub dsh_notifications: bool,
     #[serde(default)]
+    pub antigravity_sessions: bool,
+    #[serde(default)]
+    pub dsh_sessions: bool,
+    #[serde(default)]
     pub codex_delete_tree: bool,
     pub thread_archive_actions: bool,
     pub systemd: bool,
@@ -276,6 +280,8 @@ pub fn system_capabilities_for_surface(
             && host_surface == HostSurface::DesktopEmbeddedTauri,
         dsh_notifications: platform.kind == PlatformKind::Macos
             && host_surface == HostSurface::DesktopEmbeddedTauri,
+        antigravity_sessions: Capability::Threads.is_supported_on_surface(platform, host_surface),
+        dsh_sessions: Capability::Threads.is_supported_on_surface(platform, host_surface),
         codex_delete_tree: Capability::CodexDeleteTree
             .is_supported_on_surface(platform, host_surface),
         thread_archive_actions: Capability::ThreadArchiveActions

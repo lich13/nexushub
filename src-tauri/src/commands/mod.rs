@@ -3,6 +3,7 @@ pub mod grok;
 pub mod jobs;
 pub mod plans;
 pub mod probe;
+pub mod provider_sessions;
 pub mod sessions;
 pub mod settings;
 pub mod system;

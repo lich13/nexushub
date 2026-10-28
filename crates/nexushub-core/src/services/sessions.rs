@@ -16,6 +16,8 @@ pub enum SessionProvider {
     #[serde(rename = "claude_code")]
     Claude,
     Grok,
+    Antigravity,
+    Dsh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +108,8 @@ pub struct SessionUseCases {
     pub codex: CodexPaths,
     pub grok: GrokPaths,
     pub claude: crate::claude::ClaudePaths,
+    pub antigravity: crate::antigravity::sessions::AntigravityPaths,
+    pub dsh: crate::dsh::DshPaths,
 }
 
 fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[String]) -> Result<()> {
@@ -114,7 +118,10 @@ fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[Stri
         "每批请选择 1 至 100 个线程"
     );
     ensure!(
-        provider == SessionProvider::Codex || operation == SessionOperation::Delete,
+        matches!(
+            provider,
+            SessionProvider::Codex | SessionProvider::Antigravity | SessionProvider::Dsh
+        ) || operation == SessionOperation::Delete,
         "此 provider 不支持归档或恢复"
     );
     let mut unique = HashSet::new();
@@ -153,6 +160,12 @@ impl SessionUseCases {
         let message = match request.provider {
             SessionProvider::Claude => {
                 return crate::claude::read_attachment(&self.claude, &request);
+            }
+            SessionProvider::Antigravity => {
+                return crate::antigravity::sessions::read_attachment(&self.antigravity, &request);
+            }
+            SessionProvider::Dsh => {
+                return crate::dsh::sessions::read_attachment(&self.dsh, &request);
             }
             SessionProvider::Codex => codex::thread_detail(&self.codex, &request.session_key)?
                 .into_iter()
@@ -243,6 +256,14 @@ impl SessionUseCases {
                 )
                 .ok()
                 .map(|s| (s.id, s.title, vec![s.path])),
+            SessionProvider::Antigravity => {
+                crate::antigravity::sessions::session_summary(&self.antigravity, key)
+                    .ok()
+                    .map(|s| (s.id, s.title, vec![s.path]))
+            }
+            SessionProvider::Dsh => crate::dsh::sessions::session_summary(&self.dsh, key)
+                .ok()
+                .map(|s| (s.id, s.title, vec![s.path])),
         };
         if let Some((id, title, paths)) = summary {
             item.id = id;
@@ -300,6 +321,22 @@ impl SessionUseCases {
                 )?;
                 (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
             }
+            SessionProvider::Antigravity => {
+                return crate::antigravity::sessions::preview_batch_item(
+                    &self.antigravity,
+                    key,
+                    operation,
+                    include_descendants,
+                );
+            }
+            SessionProvider::Dsh => {
+                return crate::dsh::sessions::preview_batch_item(
+                    &self.dsh,
+                    key,
+                    operation,
+                    include_descendants,
+                );
+            }
         };
         Ok(SessionBatchItem {
             session_key: key.to_string(),
@@ -340,6 +377,34 @@ impl SessionUseCases {
                 residuals: vec![],
             };
             let action = (|| -> Result<()> {
+                if matches!(
+                    request.provider,
+                    SessionProvider::Antigravity | SessionProvider::Dsh
+                ) {
+                    let outcome = match request.provider {
+                        SessionProvider::Antigravity => {
+                            crate::antigravity::sessions::execute_batch_item(
+                                &self.antigravity,
+                                &item.session_key,
+                                request.operation,
+                                &item.descendants,
+                                request.include_descendants,
+                            )?
+                        }
+                        SessionProvider::Dsh => crate::dsh::sessions::execute_batch_item(
+                            &self.dsh,
+                            &item.session_key,
+                            request.operation,
+                            &item.descendants,
+                            request.include_descendants,
+                        )?,
+                        _ => unreachable!(),
+                    };
+                    result.deleted_ids = outcome.deleted_ids;
+                    result.residuals = outcome.residuals;
+                    result.message = outcome.message;
+                    return Ok(());
+                }
                 if request.operation != SessionOperation::Delete {
                     return selected_codex::execute_archive(
                         &self.codex,
@@ -387,6 +452,7 @@ impl SessionUseCases {
                             result.deleted_ids.push(item.session_key.clone());
                         }
                     }
+                    SessionProvider::Antigravity | SessionProvider::Dsh => unreachable!(),
                 }
                 Ok(())
             })();
@@ -427,6 +493,12 @@ mod tests {
             claude: crate::claude::ClaudePaths {
                 config: root.join("claude"),
                 projects: root.join("claude/projects"),
+            },
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+                root.join("antigravity"),
+            ),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
             },
         };
         let keys = (0..101)

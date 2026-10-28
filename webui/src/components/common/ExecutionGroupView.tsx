@@ -11,8 +11,8 @@ export function executionSummary(group: ExecutionGroup) {
   const kinds = new Set(group.commands.map(command => {
     const name = command.title.trim().split(/\s+/, 1)[0].toLowerCase().split(/[.\/:]/).pop() ?? "";
     if (/^(read|read_file|list|list_files|ls|cat)$/.test(name)) return "read";
-    if (/^(search|search_query|grep|glob|find|web_search|ripgrep)$/.test(name)) return "search";
-    if (/^(exec|exec_command|execute|bash|shell|terminal|sleep|js|javascript|python|node)$/.test(name)) return "command";
+    if (/^(search|search_query|search_web|grep|glob|find|web_search|ripgrep)$/.test(name)) return "search";
+    if (/^(exec|exec_command|run_command|execute|bash|shell|terminal|sleep|js|javascript|python|node)$/.test(name)) return "command";
     return "integration";
   }));
   const words = [kinds.has("read") && "读取文件", kinds.has("search") && "搜索内容", kinds.has("command") && "运行命令", kinds.has("integration") && "调用工具"].filter(Boolean);

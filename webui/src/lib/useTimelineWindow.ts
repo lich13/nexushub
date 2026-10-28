@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import type { ClaudeSessionDetail, GrokSessionDetail, HistoryMetadata, ThreadDetail } from "../types";
+import type { ClaudeSessionDetail, GrokSessionDetail, HistoryMetadata, ProviderSessionDetail, ThreadDetail } from "../types";
 import { locateTimelineTarget } from "../components/common/SessionSearch";
 import { historicalChanges } from "./query/usePagedHistory";
 import { stableHistoryCursor } from "./domain/historyCursor";
@@ -8,6 +8,7 @@ export type TimelinePage<T> = { items: T[]; before?: string | null; after?: stri
 export const codexTimelinePage = (page: ThreadDetail): TimelinePage<ThreadDetail["blocks"][number]> => ({ items: page.blocks, before: stableHistoryCursor(page), after: page.after_cursor, hasMore: Boolean(page.has_more_blocks), history: page.history });
 export const claudeTimelinePage = (page: ClaudeSessionDetail): TimelinePage<ClaudeSessionDetail["events"][number]> => ({ items: page.events, before: page.beforeCursor, after: page.afterCursor, hasMore: page.hasMore, history: page.history });
 export const grokTimelinePage = (page: GrokSessionDetail): TimelinePage<GrokSessionDetail["events"][number]> => ({ items: page.events, before: page.beforeCursor, after: page.afterCursor, hasMore: Boolean(page.hasMore), history: page.history });
+export const providerTimelinePage = (page: ProviderSessionDetail): TimelinePage<ProviderSessionDetail["events"][number]> => ({ items: page.events, before: page.beforeCursor, after: page.afterCursor, hasMore: page.hasMore, history: page.history });
 
 type Window<T> = { scope: string; generation: number; pages: TimelinePage<T>[]; history?: HistoryMetadata | null };
 type Options<T> = {

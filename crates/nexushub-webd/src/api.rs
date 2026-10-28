@@ -17,6 +17,7 @@ mod grok;
 mod jobs;
 mod payload;
 mod probe;
+mod provider_sessions;
 mod routes;
 mod rpc_dispatch;
 mod sessions;
@@ -50,6 +51,10 @@ pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action, ProbeEventsQuery,
     ProbeStatusQuery,
+};
+pub(crate) use provider_sessions::{
+    antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
+    antigravity_restore, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
 pub(crate) use routes::router;
 pub(crate) use system::{

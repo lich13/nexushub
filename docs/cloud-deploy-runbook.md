@@ -15,7 +15,7 @@ NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网�
 - 日志：`/var/log/nexushub-webd/`
 - 监听：仅回环地址；反向代理只转发 `api/rpc/` 和 `healthz`，其他路径返回 404
 
-保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
+保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Grok／Claude／Antigravity／DSH 数据根使用可选的 `ReadWritePaths`，覆盖主会话、旁路、共享索引及原子替换所需的父目录。其凭据和配置文件使用可选的 `ReadOnlyPaths`；只开放 sessions／projects 或单个索引文件不能支持完整删除。自定义根从 `GROK_HOME`、`CLAUDE_CONFIG_DIR`、`ANTIGRAVITY_HOME`、`DSH_HOME`、`CODEX_HOME` 和配置中的 `codex.home` 生成；新增目录或修改根配置后，重新运行安装器生成 drop-in、执行 `daemon-reload` 并重启服务。
 
 Grok 原生 leader 使用 `/var/lib/nexushub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
 

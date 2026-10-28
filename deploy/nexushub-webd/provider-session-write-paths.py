@@ -17,6 +17,7 @@ DEFAULT_ROOTS = {
     Path("/root/.claude"),
     Path("/root/.dsh/sessions"),
     Path("/root/.dsh/storages"),
+    Path("/root/.gemini/antigravity"),
 }
 DEFAULT_DSH_HOMES = {Path("/root/.dsh")}
 PROTECTED_FILES = {
@@ -36,6 +37,7 @@ SUPPORTED_KEYS = {
     "GROK_HOME",
     "CLAUDE_CONFIG_DIR",
     "DSH_HOME",
+    "ANTIGRAVITY_HOME",
 }
 
 

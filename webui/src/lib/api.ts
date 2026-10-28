@@ -51,3 +51,17 @@ export {
 } from "./api/jobs";
 
 export { listClaudeSessions, getClaudeSession, renameClaudeSession, previewClaudeSessionDelete, deleteClaudeSession } from "./api/claude";
+export {
+  listAntigravitySessions,
+  getAntigravitySession,
+  renameAntigravitySession,
+  archiveAntigravitySession,
+  restoreAntigravitySession,
+} from "./api/antigravity";
+export {
+  listDshSessions,
+  getDshSession,
+  renameDshSession,
+  archiveDshSession,
+  restoreDshSession,
+} from "./api/dsh";

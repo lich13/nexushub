@@ -11,6 +11,8 @@
 | Codex | 原生 state/index/rollout/log 读取、归档恢复、直接删除，以及本机主线程的原生桌面协作 |
 | Claude Code | 递归发现、分支历史、原生进程身份、改名与按文件名定位的直接删除 |
 | Grok Build | 原生目录发现、主回合历史、登记与进程校验、改名及定向删除 |
+| Antigravity | 本机在线 Connect-RPC 与离线 SQLite／pbtxt／transcript 双模会话列表、分页详情、改名、归档恢复与含子代理后代的清理 |
+| DeepSeek Harness | `workspace.json` v2 与明文／多帧 Zstandard 会话读取、`session.lock` 并发保护改名，以及要求退出运行中 DSH 后的归档恢复与永久删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
 | NexusHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
 | WebUI | 展示契约、查询状态、执行分组、搜索、附件、Plan 导出及本机 Codex 协作输入区 |
@@ -128,6 +130,14 @@ opaque session key 绑定项目相对路径和文件名身份，同名 ID 互不
 活动快照用一轮进程表校验登记数组/对象、原生可执行文件身份与进程启动时间。退出、僵尸或复用 PID 不能证明仍运行。只有活跃归属与未结束主回合同时成立才显示运行；不可读、损坏和身份不确定保持未知。
 
 冷读消费完整历史，不截取尾部；增量缓存保留文件身份、ctime 和前缀锚点。优先读取 updates.jsonl，缺失时使用 chat_history.jsonl。可选 `deletionEligibility` 保留协议兼容并返回可删除；删除按原生目录定位，不采集进程快照或核验指纹。
+
+### Antigravity 与 DeepSeek Harness
+
+`antigravity.{list,detail,rename,archive,restore}` 与 `dsh.{list,detail,rename,archive,restore}` 经共享 `SessionUseCases`、Linux RPC、Tauri 及远端 allowlist 暴露，同时扩展 `sessions.bulkPreview`／`sessions.bulkExecute`（`archive`、`restore`、`delete`）与 `sessions.search`／`sessions.attachmentRead`。API 协议保持 **2**，通过可选能力 `antigravity_sessions` 与 `dsh_sessions` 探测旧服务并平滑提示升级。
+
+Antigravity 优先通过本机同用户运行中的 language server Connect-RPC 读取摘要与轨迹并执行在线改名、归档和删除；服务未运行或远端环境下回退至 `ANTIGRAVITY_HOME`（默认 `~/.gemini/antigravity`）及 macOS state SQLite／`annotations/*.pbtxt`／`brain/<id>/.system_generated/logs/transcript.jsonl` 离线读写。永久删除按确认集合（含可核验子代理后代）清理 `brain/<id>`、`implicit`、`annotations`、`conversations`、`context_state` 及 SQLite 轨迹摘要条目。
+
+DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。
 
 ## 消息、搜索与界面状态
 

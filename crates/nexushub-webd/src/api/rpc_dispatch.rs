@@ -1,4 +1,9 @@
 use super::{
+    antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
+    antigravity_restore, claude_delete_execute, claude_delete_preview, claude_detail, claude_list,
+    claude_rename, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore, ClaudeListQuery,
+};
+use super::{
     api_error, archive_delete_dry_run, archive_delete_execute, archive_thread,
     dsh_archive_delete_dry_run, dsh_archive_delete_execute, get_probe_events, get_probe_settings,
     get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail, grok_list,
@@ -7,10 +12,6 @@ use super::{
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
     ProbeEventsQuery, ProbeStatusQuery,
-};
-use super::{
-    claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,
-    ClaudeListQuery,
 };
 use crate::{
     api::payload::{
@@ -188,6 +189,86 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::CLAUDE_DELETE_EXECUTE => {
             claude_delete_execute(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::ANTIGRAVITY_LIST => {
+            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
+                Default::default()
+            } else {
+                rpc_wrapped_payload(&args, &["request"])?
+            };
+            antigravity_list(State(state), headers, Json(request)).await
+        }
+        rpc_commands::ANTIGRAVITY_DETAIL => {
+            antigravity_detail(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::ANTIGRAVITY_RENAME => {
+            antigravity_rename(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::ANTIGRAVITY_ARCHIVE => {
+            antigravity_archive(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::ANTIGRAVITY_RESTORE => {
+            antigravity_restore(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::DSH_LIST => {
+            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
+                Default::default()
+            } else {
+                rpc_wrapped_payload(&args, &["request"])?
+            };
+            dsh_list(State(state), headers, Json(request)).await
+        }
+        rpc_commands::DSH_DETAIL => {
+            dsh_detail(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::DSH_RENAME => {
+            dsh_rename(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::DSH_ARCHIVE => {
+            dsh_archive(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::DSH_RESTORE => {
+            dsh_restore(
                 State(state),
                 headers,
                 Json(rpc_wrapped_payload(&args, &["request"])?),

@@ -1,11 +1,15 @@
 import {
+  Activity,
   Bot,
-  HardDrive,
+  Layers,
   Menu,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
-  TriangleAlert
+  SlidersHorizontal,
+  Sparkles,
+  TriangleAlert,
+  Zap
 } from "lucide-react";
 import { Component, ErrorInfo, ReactNode, Suspense, lazy, useState } from "react";
 import { MachineButton, RemoteConnectionSettings } from "./components/connection/RemoteConnection";
@@ -32,12 +36,16 @@ const OpsWorkspace = lazy(() => import("./components/ops/OpsWorkspace").then(mod
 const ProbeWorkspace = lazy(() => import("./components/probe/ProbeWorkspace").then(module => ({ default: module.ProbeWorkspace })));
 const GrokWorkspace = lazy(() => import("./components/grok/GrokWorkspace").then(module => ({ default: module.GrokWorkspace })));
 const ClaudeWorkspace = lazy(() => import("./components/claude/ClaudeWorkspace").then(module => ({ default: module.ClaudeWorkspace })));
+const AntigravityWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.AntigravityWorkspace })));
+const DshWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.DshWorkspace })));
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "codex", label: "Codex", icon: <MessageSquare /> },
   { id: "claude", label: "Claude Code", icon: <Bot /> },
-  { id: "grok", label: "Grok Build", icon: <Bot /> },
-  { id: "probe", label: PROBE_NAV_LABEL, icon: <TriangleAlert /> },
-  { id: "ops", label: "设置", icon: <HardDrive /> }
+  { id: "grok", label: "Grok Build", icon: <Zap /> },
+  { id: "antigravity", label: "Antigravity", icon: <Sparkles /> },
+  { id: "dsh", label: "DeepSeek Harness", icon: <Layers /> },
+  { id: "probe", label: PROBE_NAV_LABEL, icon: <Activity /> },
+  { id: "ops", label: "设置", icon: <SlidersHorizontal /> }
 ];
 
 function navigationItemsForCapabilities(capabilities: RuntimeCapabilityMatrix) {
@@ -90,6 +98,8 @@ export default function App() {
             )}
             {view === "grok" && <GrokWorkspace />}
             {view === "claude" && <ClaudeWorkspace />}
+            {view === "antigravity" && <AntigravityWorkspace capabilities={capabilities} />}
+            {view === "dsh" && <DshWorkspace capabilities={capabilities} />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}
             {view === "ops" && <div className="settings-workspace">
               <header className="settings-header"><h1>设置</h1><div className="settings-tabs" role="tablist">
@@ -187,9 +197,9 @@ function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {
       </div>
       <div className="mobile-tabs">
         {items.map((item) => (
-          <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
+          <button key={item.id} title={item.label} aria-label={item.label} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
             {item.icon}
-            {item.label}
+            <span>{item.label}</span>
           </button>
         ))}
       </div>

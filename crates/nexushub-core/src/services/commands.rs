@@ -12,6 +12,16 @@ pub const CLAUDE_DETAIL: &str = "claude.detail";
 pub const CLAUDE_RENAME: &str = "claude.rename";
 pub const CLAUDE_DELETE_PREVIEW: &str = "claude.deletePreview";
 pub const CLAUDE_DELETE_EXECUTE: &str = "claude.deleteExecute";
+pub const ANTIGRAVITY_LIST: &str = "antigravity.list";
+pub const ANTIGRAVITY_DETAIL: &str = "antigravity.detail";
+pub const ANTIGRAVITY_RENAME: &str = "antigravity.rename";
+pub const ANTIGRAVITY_ARCHIVE: &str = "antigravity.archive";
+pub const ANTIGRAVITY_RESTORE: &str = "antigravity.restore";
+pub const DSH_LIST: &str = "dsh.list";
+pub const DSH_DETAIL: &str = "dsh.detail";
+pub const DSH_RENAME: &str = "dsh.rename";
+pub const DSH_ARCHIVE: &str = "dsh.archive";
+pub const DSH_RESTORE: &str = "dsh.restore";
 pub const AUTH_PUBLIC_SETTINGS: &str = "auth.publicSettings";
 pub const AUTH_LOGIN: &str = "auth.login";
 pub const AUTH_LOGOUT: &str = "auth.logout";
@@ -113,6 +123,16 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     CLAUDE_RENAME,
     CLAUDE_DELETE_PREVIEW,
     CLAUDE_DELETE_EXECUTE,
+    ANTIGRAVITY_LIST,
+    ANTIGRAVITY_DETAIL,
+    ANTIGRAVITY_RENAME,
+    ANTIGRAVITY_ARCHIVE,
+    ANTIGRAVITY_RESTORE,
+    DSH_LIST,
+    DSH_DETAIL,
+    DSH_RENAME,
+    DSH_ARCHIVE,
+    DSH_RESTORE,
     SESSIONS_ATTACHMENT_READ,
     SESSIONS_SEARCH,
     SESSIONS_BULK_PREVIEW,
@@ -145,6 +165,10 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | CLAUDE_LIST
             | CLAUDE_DETAIL
             | CLAUDE_DELETE_PREVIEW
+            | ANTIGRAVITY_LIST
+            | ANTIGRAVITY_DETAIL
+            | DSH_LIST
+            | DSH_DETAIL
             | SESSIONS_ATTACHMENT_READ
             | SESSIONS_SEARCH
             | SESSIONS_BULK_PREVIEW
@@ -170,6 +194,16 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     CLAUDE_RENAME,
     CLAUDE_DELETE_PREVIEW,
     CLAUDE_DELETE_EXECUTE,
+    ANTIGRAVITY_LIST,
+    ANTIGRAVITY_DETAIL,
+    ANTIGRAVITY_RENAME,
+    ANTIGRAVITY_ARCHIVE,
+    ANTIGRAVITY_RESTORE,
+    DSH_LIST,
+    DSH_DETAIL,
+    DSH_RENAME,
+    DSH_ARCHIVE,
+    DSH_RESTORE,
     AUTH_PUBLIC_SETTINGS,
     AUTH_LOGIN,
     AUTH_LOGOUT,

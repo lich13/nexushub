@@ -21,7 +21,7 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const operation = typeof input === "string" ? input : input.operation;
       const sessionKeys = typeof input === "string" ? selection : input.keys;
       const generation = epoch.current.value;
-      const includeDescendants = provider === "codex" && operation === "delete";
+      const includeDescendants = (provider === "codex" || provider === "antigravity") && operation === "delete";
       if (generation !== epoch.current.value) throw new Error("选择范围已变化，请重新预览");
       const response: SessionBatchPreview = { provider, operation, items: [] };
       const size = operation === "delete" ? Math.max(1, sessionKeys.length) : 100;
@@ -46,7 +46,7 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const size = request.operation === "delete" ? Math.max(1, items.length) : 100;
       for (let start = 0; start < items.length; start += size) {
         if (generation !== epoch.current.value) throw new Error("选择范围已变化");
-        const result = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: items.slice(start, start + size), confirmed: true, ...(request.provider === "codex" && request.operation === "delete" ? { includeDescendants: true } : {}) });
+        const result = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: items.slice(start, start + size), confirmed: true, ...((request.provider === "codex" || request.provider === "antigravity") && request.operation === "delete" ? { includeDescendants: true } : {}) });
         response.items.push(...result.items);
       }
       return { response, generation, operation: request.operation };

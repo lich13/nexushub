@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildDemoFixture, buildDemoPlatformOverview, buildDemoSystemCapabilities, type DemoFixtureKey } from "./demoCore";
 
 const fixtureKeys: DemoFixtureKey[] = ["linux-api", "macos-tauri"];
-const sharedKeys = ["app_updater", "codex_desktop", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
+const sharedKeys = ["antigravity_sessions", "app_updater", "codex_desktop", "dsh_sessions", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
 const retiredKeys = ["admin_password", "csrf", "nginx", "public_endpoint", "security_settings", "turnstile", "web_auth"];
 
 describe("machine demo fixtures", () => {
@@ -45,11 +45,19 @@ test("new provider notifications are local-only and absent on old servers", asyn
   const remote = runtimeCapabilitiesFromResponse(buildDemoSystemCapabilities("linux-api"));
   expect(local.antigravityNotifications).toBe(true);
   expect(local.dshNotifications).toBe(true);
+  expect(local.antigravitySessions).toBe(true);
+  expect(local.dshSessions).toBe(true);
   expect(remote.antigravityNotifications).toBe(false);
   expect(remote.dshNotifications).toBe(false);
+  expect(remote.antigravitySessions).toBe(true);
+  expect(remote.dshSessions).toBe(true);
   const old = buildDemoSystemCapabilities("linux-api");
   delete old.capabilities.antigravity_notifications;
   delete old.capabilities.dsh_notifications;
+  delete old.capabilities.antigravity_sessions;
+  delete old.capabilities.dsh_sessions;
   expect(runtimeCapabilitiesFromResponse(old).antigravityNotifications).toBe(false);
   expect(runtimeCapabilitiesFromResponse(old).dshNotifications).toBe(false);
+  expect(runtimeCapabilitiesFromResponse(old).antigravitySessions).toBe(false);
+  expect(runtimeCapabilitiesFromResponse(old).dshSessions).toBe(false);
 });

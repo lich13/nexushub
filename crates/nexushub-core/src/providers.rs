@@ -6,6 +6,8 @@ pub enum AgentProviderId {
     Codex,
     ClaudeCode,
     GrokBuild,
+    Antigravity,
+    DeepseekHarness,
     Cursor,
     Gemini,
 }
@@ -67,6 +69,48 @@ impl Default for ProviderRegistry {
                         "delete_local_session".to_string(),
                     ],
                     safety: "native rename only; deletion is local-session scoped and never touches workspaces or cloud tasks".to_string(),
+                },
+                AgentProviderInfo {
+                    id: AgentProviderId::Antigravity,
+                    label: "Antigravity".to_string(),
+                    status: if crate::antigravity::sessions::AntigravityPaths::default_for_user().available() {
+                        "ready"
+                    } else {
+                        "unavailable"
+                    }
+                    .to_string(),
+                    description: "Antigravity App native conversation trajectories with live Connect-RPC and offline SQLite/prototext management.".to_string(),
+                    capabilities: vec![
+                        "readonly".to_string(),
+                        "sessions".to_string(),
+                        "tools".to_string(),
+                        "attachments".to_string(),
+                        "rename".to_string(),
+                        "archive".to_string(),
+                        "delete_local_session".to_string(),
+                    ],
+                    safety: "uses official UpdateConversationAnnotations / DeleteCascadeTrajectory when running and atomic SQLite/pbtxt updates when offline".to_string(),
+                },
+                AgentProviderInfo {
+                    id: AgentProviderId::DeepseekHarness,
+                    label: "DeepSeek Harness".to_string(),
+                    status: if crate::dsh::DshPaths::default_for_user().home.is_dir() {
+                        "ready"
+                    } else {
+                        "unavailable"
+                    }
+                    .to_string(),
+                    description: "DeepSeek Harness v4 multi-frame Zstandard session logs and workspace v2 index management.".to_string(),
+                    capabilities: vec![
+                        "readonly".to_string(),
+                        "sessions".to_string(),
+                        "tools".to_string(),
+                        "attachments".to_string(),
+                        "rename".to_string(),
+                        "archive".to_string(),
+                        "delete_local_session".to_string(),
+                    ],
+                    safety: "80-byte UTF-8 checksummed session/title frames under exclusive session.lock and stopped-process workspace.json writes".to_string(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::Cursor,

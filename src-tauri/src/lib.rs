@@ -75,6 +75,16 @@ pub fn run() {
         commands::claude::claudeOwnershipDiagnostics,
         commands::claude::previewClaudeSessionDelete,
         commands::claude::deleteClaudeSession,
+        commands::provider_sessions::listAntigravitySessions,
+        commands::provider_sessions::getAntigravitySession,
+        commands::provider_sessions::renameAntigravitySession,
+        commands::provider_sessions::archiveAntigravitySession,
+        commands::provider_sessions::restoreAntigravitySession,
+        commands::provider_sessions::listDshSessions,
+        commands::provider_sessions::getDshSession,
+        commands::provider_sessions::renameDshSession,
+        commands::provider_sessions::archiveDshSession,
+        commands::provider_sessions::restoreDshSession,
     ];
     tauri::Builder::default()
         .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)

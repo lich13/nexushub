@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.4.0": [
+        "新增 Antigravity 与 DeepSeek Harness 会话工作区，支持全部／已归档筛选、分页阅读、搜索、时间线、双击改名、归档／恢复与永久删除。",
+        "整体前端界面深度重构为 ChatGPT macOS App 风格，统一七项导航、圆角气泡、代码块、工具披露、弹窗与设置卡片。",
+    ],
     "1.3.11": [
         "新增本机 Antigravity 与 DSH 的完成、失败、需要回复、需要授权 Bark 提醒，沿用 Probe 轮询及现有通知配置。",
         "首发和重试前复核原生身份与状态，恢复执行或处理交互后停止旧提醒，首次启用不补发历史。",
@@ -211,6 +215,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.4.0":
+        sections = {
+            "版本概览": [
+                "新增 Antigravity 与 DeepSeek Harness（DSH）完整会话工作区，并将整体前端界面深度重构为 ChatGPT macOS App 风格；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "侧栏与移动端导航扩展为 Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness、Probe 与设置七项；两种新工作区提供全部／已归档筛选、搜索、体积统计、运行指示、多选批量归档／恢复／永久删除、分页历史、用户时间线、思考折叠与连续执行组。",
+                "Antigravity 与 DSH 线程行菜单及详情操作菜单支持改名、归档／恢复、复制 ID、复制路径与永久删除（不提供复制恢复命令），详情头部支持复制最新答复；Antigravity 兼容在线 Connect-RPC 与离线转录双模，DSH 兼容明文与多帧 Zstandard 会话日志。",
+                "全局视觉体系重构为 ChatGPT macOS App 风格：浅／深色中性侧栏与画布、右侧紧凑用户胶囊气泡、无框助手 Markdown 与圆角代码块、胶囊搜索框与分段切换、悬浮协作输入舱、圆角菜单／弹窗及卡片化 Probe／设置面板。",
+            ],
+            "问题修复": [
+                "DSH 列表与详情全程无锁只读；改名通过 session.lock 非阻塞排他锁、80 字节 UTF-8 规范化标题与带校验和的 Zstandard 帧追加完成；归档、恢复与含子代理闭包的永久删除在检测无运行中宿主 DSH 进程后原子更新 workspace.json v2。",
+                "Antigravity 在线或离线均可分页读取并按确认目标清理 brain 目录、implicit／annotations／conversations／context_state 旁路及 SQLite 索引记录；确认范围包含已核验子代理后代。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增可选能力字段 antigravity_sessions 与 dsh_sessions；连接尚未升级的远端服务时平滑展示升级提示，不影响其他工作区。",
+                "Linux systemd 为 Antigravity 与 DSH 默认及环境变量数据根补充精确写入路径，同时继续保护凭据与配置只读隔离；既有数据库、Bark 配置、Keychain 与原生会话无需迁移。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再覆盖安装本机 macOS App；随后在本机与远端分别检查 Antigravity、DeepSeek Harness 列表、归档切换、菜单动作与 ChatGPT 风格界面。",
+                "DSH 归档、恢复与永久删除前须退出目标机器正在运行的 DSH 进程；真实用户会话删除与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.11":
         sections = {

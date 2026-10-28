@@ -1,4 +1,5 @@
 //! Pure projection of the native Antigravity App's read-only trajectory API.
+pub mod sessions;
 use crate::native_probe::{self, NativeProvider, NativeStreamSnapshot, NativeTurnEvent};
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;

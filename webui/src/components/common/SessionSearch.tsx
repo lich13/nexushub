@@ -43,12 +43,15 @@ const providerLabels: Record<SessionProvider, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
   grok: "Grok Build",
+  antigravity: "Antigravity",
+  dsh: "DeepSeek Harness",
 };
 
 const kindLabels: Record<string, string> = {
   metadata: "线程信息",
   user_message: "用户消息",
   assistant_message: "助手回复",
+  thinking: "思考",
   plan: "计划",
   tool_call: "工具",
   tool_result: "工具结果",

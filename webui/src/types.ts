@@ -67,6 +67,59 @@ export type ClaudeOwnershipDiagnostics = { ownership: string; reasonCodes: strin
 export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint?: string };
 export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number; residuals?: string[] };
 
+export type ProviderListRequest = { q?: string; archived?: boolean; limit?: number };
+export type ProviderDetailRequest = { sessionKey: string; limit?: number; before?: string };
+export type ProviderRenameRequest = { sessionKey: string; title: string };
+export type ProviderSessionRequest = { sessionKey: string };
+export type ProviderSessionSummary = {
+  storageSize?: SessionStorageSize | null;
+  id: string;
+  sessionKey: string;
+  title: string;
+  cwd: string;
+  path: string;
+  archived: boolean;
+  updatedAt?: string | null;
+  messageCount: number;
+  lastMessage?: string | null;
+  status: string;
+  formatVersion: string;
+  canRename: boolean;
+  renameBlockReason?: string | null;
+  canArchive: boolean;
+  archiveBlockReason?: string | null;
+  canDelete: boolean;
+  deleteBlockReason?: string | null;
+  readError?: string | null;
+  readWarning?: string | null;
+};
+export type ProviderHistoryEvent = {
+  id: string;
+  timestamp?: string | null;
+  kind: string;
+  role?: string | null;
+  text?: string | null;
+  callId?: string | null;
+  turnId?: string | null;
+  status?: string | null;
+  detail?: string | null;
+  result?: string | null;
+  userMessage?: UserMessageContent | null;
+};
+export type ProviderSessionDetail = {
+  timeline?: TimelineEntry[];
+  afterCursor?: string | null;
+  history?: HistoryMetadata | null;
+  summary: ProviderSessionSummary;
+  events: ProviderHistoryEvent[];
+  totalEvents: number;
+  hasMore: boolean;
+  beforeCursor?: string | null;
+};
+export type ProviderListResponse = ProviderSessionSummary[];
+export type ProviderDetailResponse = ProviderSessionDetail;
+export type ProviderMutationResponse = ProviderSessionSummary;
+
 
 
 export type ThreadSummary = {
@@ -218,7 +271,7 @@ export type ThreadBlockPage = {
   before_cursor?: string | null;
 };
 
-export type SearchProvider = "codex" | "claude_code" | "grok";
+export type SearchProvider = "codex" | "claude_code" | "grok" | "antigravity" | "dsh";
 export type SearchScope = "thread" | "provider";
 export type SessionSearchRequest = {
   provider: SearchProvider;
@@ -270,6 +323,8 @@ export type SystemCapabilities = {
   dsh_archive_cleanup?: boolean;
   antigravity_notifications?: boolean;
   dsh_notifications?: boolean;
+  antigravity_sessions?: boolean;
+  dsh_sessions?: boolean;
   codex_delete_tree?: boolean;
   codex_desktop?: boolean;
   thread_archive_actions?: boolean;

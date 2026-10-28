@@ -1,0 +1,1687 @@
+//! DeepSeek Harness (DSH) native session listing, reading, and 5-action mutations.
+//! Backed by `$DSH_HOME/storages/workspace.json` (v2), `storages/session_projcache`,
+//! and `sessions/<project>/<session>/session.v{1..4}.jsonl[.zstd]`.
+use anyhow::{bail, ensure, Context, Result};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use super::{
+    directory, dsh_command, file_stamp, read_bounded, registry, regular_file, remove_cache,
+    remove_references, remove_session, save_registry, standard_layout, valid_id, DshPaths,
+    HEADER_LIMIT,
+};
+use crate::{
+    provider_sessions::{
+        matches_query, paginate_provider_detail, ProviderDetailRequest, ProviderHistoryEvent,
+        ProviderListRequest, ProviderSessionDetail, ProviderSessionSummary,
+    },
+    services::sessions::{SessionBatchItem, SessionBatchItemResult, SessionOperation},
+    session_delete::{self, Outcome},
+    session_storage::{self, SessionStorageSize, StorageScope},
+};
+
+const LOG_FILE_LIMIT: u64 = 128 * 1024 * 1024;
+const PROJCACHE_LIMIT: u64 = 4 * 1024 * 1024;
+pub const MAX_DSH_TITLE_BYTES: usize = 80;
+
+#[derive(Debug, Clone)]
+struct DiscoveredSession {
+    id: String,
+    project_key: String,
+    dir: PathBuf,
+    log_path: PathBuf,
+    version: u32,
+    compressed: bool,
+    header: Value,
+    parent_subagent_of: Option<String>,
+}
+
+impl DiscoveredSession {
+    fn is_subagent(&self) -> bool {
+        self.parent_subagent_of.is_some()
+            || self.header["origin"].as_str() == Some("subagent")
+            || self.header["delegationDepth"].as_u64().unwrap_or(0) > 0
+    }
+
+    fn is_internal_no_cwd(&self) -> bool {
+        self.project_key == "_no-cwd" && self.header.get("cwd").and_then(Value::as_str).is_none()
+    }
+}
+
+fn check_host_dsh_stopped_for(paths: &DshPaths) -> Result<()> {
+    let default_home = DshPaths::default_for_user().home;
+    let same_as_default = paths.home == default_home
+        || (paths.home.canonicalize().ok().is_some()
+            && paths.home.canonicalize().ok() == default_home.canonicalize().ok());
+    if !same_as_default {
+        return Ok(());
+    }
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .context("无法核验 DeepSeek Harness 运行状态")?;
+    ensure!(
+        output.status.success(),
+        "无法核验 DeepSeek Harness 运行状态"
+    );
+    let text = std::str::from_utf8(&output.stdout).context("无法核验 DeepSeek Harness 运行状态")?;
+    ensure!(
+        !text.lines().any(dsh_command),
+        "DeepSeek Harness 正在运行，请先退出后再执行归档、恢复或删除操作"
+    );
+    Ok(())
+}
+
+struct ExclusiveSessionLease {
+    file: File,
+}
+
+impl Drop for ExclusiveSessionLease {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                let _ = libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+}
+
+fn try_acquire_session_lease(session_dir: &Path) -> Result<Option<ExclusiveSessionLease>> {
+    let lock_path = session_dir.join("session.lock");
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(&lock_path)
+        .context("无法打开 DSH 会话锁文件")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::io::AsRawFd;
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            ) {
+                return Ok(None);
+            }
+            return Err(err).context("无法校验 DSH 会话锁状态");
+        }
+        // Verify inode stability after acquiring flock (matches DSH SessionWriteLease)
+        let fd_meta = file.metadata()?;
+        let path_meta = fs::symlink_metadata(&lock_path)?;
+        if (fd_meta.dev(), fd_meta.ino()) != (path_meta.dev(), path_meta.ino()) {
+            unsafe {
+                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
+            return Ok(None);
+        }
+    }
+    Ok(Some(ExclusiveSessionLease { file }))
+}
+
+fn is_session_locked_readonly(session_dir: &Path) -> bool {
+    let lock_path = session_dir.join("session.lock");
+    if !lock_path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+        let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lock_path)
+        else {
+            return false;
+        };
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            unsafe {
+                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
+            false
+        } else {
+            let err = std::io::Error::last_os_error();
+            matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            )
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn pick_generation(session_dir: &Path) -> Result<Option<(u32, bool, PathBuf)>> {
+    let mut generations = Vec::new();
+    for entry in fs::read_dir(session_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(version) = name
+            .strip_prefix("session.v")
+            .and_then(|n| n.split('.').next())
+            .and_then(|v| v.parse::<u32>().ok())
+        {
+            if name == format!("session.v{version}.jsonl")
+                || name == format!("session.v{version}.jsonl.zstd")
+            {
+                generations.push((version, name.ends_with(".zstd"), entry.path()));
+            }
+        }
+    }
+    generations.sort_by_key(|g| g.0);
+    Ok(generations.pop().filter(|(v, _, _)| (1..=4).contains(v)))
+}
+
+fn read_header_json(path: &Path, compressed: bool, expected_id: &str) -> Result<Value> {
+    let file = regular_file(path)?;
+    let reader: Box<dyn Read> = if compressed {
+        Box::new(zstd::stream::read::Decoder::new(file)?)
+    } else {
+        Box::new(file)
+    };
+    let mut line = Vec::new();
+    BufReader::new(reader.take(HEADER_LIMIT + 1)).read_until(b'\n', &mut line)?;
+    ensure!(
+        !line.is_empty() && line.len() as u64 <= HEADER_LIMIT,
+        "DSH 会话头不完整或过大"
+    );
+    let value: Value = serde_json::from_slice(&line).context("DSH 会话头损坏")?;
+    ensure!(
+        value["type"] == "session" && value["id"].as_str() == Some(expected_id),
+        "不匹配的 DSH 会话头身份"
+    );
+    Ok(value)
+}
+
+fn discover_all_sessions(paths: &DshPaths) -> Result<Vec<DiscoveredSession>> {
+    ensure!(paths.home.is_absolute(), "DSH_HOME 必须是绝对路径");
+    if !directory(&paths.home)? {
+        return Ok(Vec::new());
+    }
+    standard_layout(paths)?;
+    let sessions_root = paths.home.join("sessions");
+    if !directory(&sessions_root)? {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for project in fs::read_dir(&sessions_root)? {
+        let project = project?;
+        let ptype = project.file_type()?;
+        if ptype.is_symlink() || !ptype.is_dir() {
+            continue;
+        }
+        let project_key = project.file_name().to_string_lossy().into_owned();
+        if project_key == "resume-pins" {
+            continue;
+        }
+        for entry in fs::read_dir(project.path())? {
+            let entry = entry?;
+            let etype = entry.file_type()?;
+            if etype.is_symlink() || !etype.is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if valid_id(&id).is_err() {
+                continue;
+            }
+            let Ok(Some((version, compressed, log_path))) = pick_generation(&entry.path()) else {
+                continue;
+            };
+            let Ok(header) = read_header_json(&log_path, compressed, &id) else {
+                continue;
+            };
+            let parent_subagent_of = if header["origin"].as_str() == Some("subagent") {
+                header["parentSession"]
+                    .as_str()
+                    .filter(|p| valid_id(p).is_ok())
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            out.push(DiscoveredSession {
+                id,
+                project_key: project_key.clone(),
+                dir: entry.path(),
+                log_path,
+                version,
+                compressed,
+                header,
+                parent_subagent_of,
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn decode_log_lines(
+    path: &Path,
+    compressed: bool,
+    mut on_line: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let file = regular_file(path)?;
+    let mut bytes = Vec::new();
+    file.take(LOG_FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= LOG_FILE_LIMIT,
+        "DSH 会话日志超出读取上限"
+    );
+
+    if compressed {
+        let mut consumed = 0usize;
+        let mut decoded_total = 0usize;
+        while consumed < bytes.len() {
+            let tail = &bytes[consumed..];
+            let magic = [0x28, 0xb5, 0x2f, 0xfd];
+            if tail.len() < 4 || tail[..4] != magic {
+                break;
+            }
+            let size = match zstd::zstd_safe::find_frame_compressed_size(tail) {
+                Ok(size) => size,
+                Err(error) if zstd::zstd_safe::get_error_name(error) == "Src size is incorrect" => {
+                    break
+                }
+                Err(_) => bail!("DSH Zstandard 帧损坏"),
+            };
+            ensure!(size > 0 && size <= tail.len(), "DSH Zstandard 帧长度无效");
+            let mut decoded = Vec::new();
+            zstd::stream::read::Decoder::new(&tail[..size])?
+                .take(LOG_FILE_LIMIT + 1)
+                .read_to_end(&mut decoded)?;
+            decoded_total = decoded_total.saturating_add(decoded.len());
+            ensure!(
+                decoded_total as u64 <= LOG_FILE_LIMIT,
+                "DSH 解压后会话日志超出读取上限"
+            );
+            for raw in decoded.split(|&b| b == b'\n') {
+                if !raw.iter().all(u8::is_ascii_whitespace) {
+                    on_line(raw)?;
+                }
+            }
+            consumed += size;
+        }
+    } else {
+        for raw in bytes.split(|&b| b == b'\n') {
+            if !raw.iter().all(u8::is_ascii_whitespace) {
+                on_line(raw)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn epoch_ms_to_rfc3339(ms: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+}
+
+fn value_timestamp_rfc3339(val: &Value) -> Option<String> {
+    if let Some(ms) = val.as_i64() {
+        return epoch_ms_to_rfc3339(ms);
+    }
+    if let Some(s) = val.as_str().filter(|s| !s.trim().is_empty()) {
+        return Some(s.to_owned());
+    }
+    None
+}
+
+#[derive(Default)]
+struct FoldedMetadata {
+    title: Option<String>,
+    first_prompt: Option<String>,
+    last_message: Option<String>,
+    cwd: Option<String>,
+    updated_at_ms: Option<i64>,
+    message_count: usize,
+    open_turn: bool,
+    last_seq: Option<u64>,
+}
+
+fn extract_content_plain_text(content: &Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_owned();
+    }
+    if let Some(arr) = content.as_array() {
+        let mut chunks = Vec::new();
+        for item in arr {
+            if item["type"].as_str() == Some("text") {
+                if let Some(t) = item["text"].as_str().filter(|s| !s.is_empty()) {
+                    chunks.push(t);
+                }
+            }
+        }
+        return chunks.join("\n");
+    }
+    String::new()
+}
+
+fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<FoldedMetadata> {
+    let cache_path = paths
+        .home
+        .join("storages/session_projcache/sessions")
+        .join(format!("{}.json", session.id));
+    let cache_meta = fs::symlink_metadata(&cache_path).ok()?;
+    if !cache_meta.is_file() || cache_meta.file_type().is_symlink() {
+        return None;
+    }
+    let log_meta = fs::symlink_metadata(&session.log_path).ok()?;
+    if cache_meta.modified().ok()? < log_meta.modified().ok()? {
+        return None;
+    }
+    let bytes = read_bounded(&cache_path, PROJCACHE_LIMIT).ok()?;
+    let json: Value = serde_json::from_slice(&bytes).ok()?;
+    let ver = json["version"].as_u64()?;
+    if !(3..=7).contains(&ver) {
+        return None;
+    }
+    let record = json.get("record")?;
+    if record["identity"]["createdAt"] != session.header["createdAt"] {
+        return None;
+    }
+    let rows = record.get("rows")?;
+    let title = rows["title"]["val"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let cwd = rows["workingDirectory"]["val"]
+        .as_str()
+        .or_else(|| record["identity"]["cwd"].as_str())
+        .map(str::to_owned);
+    let updated_at_ms = rows["sessionListMetadata"]["val"]["lastPromptAt"]
+        .as_i64()
+        .or_else(|| session.header["createdAt"].as_i64());
+    let outline = rows["turnOutline"]["val"].as_array();
+    let message_count = outline.map_or(0, |arr| arr.len() * 2);
+    let last_message = outline
+        .and_then(|arr| arr.last())
+        .and_then(|item| {
+            item["prompt"]
+                .as_str()
+                .or_else(|| item["title"].as_str())
+                .or_else(|| item["summary"].as_str())
+        })
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned);
+    Some(FoldedMetadata {
+        title,
+        first_prompt: last_message.clone(),
+        last_message,
+        cwd,
+        updated_at_ms,
+        message_count,
+        open_turn: false,
+        last_seq: None,
+    })
+}
+
+fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
+    let mut meta = FoldedMetadata {
+        cwd: session.header["cwd"].as_str().map(str::to_owned),
+        updated_at_ms: session.header["createdAt"].as_i64(),
+        ..Default::default()
+    };
+    let mut line_index = 0usize;
+    decode_log_lines(&session.log_path, session.compressed, |line| {
+        if line_index == 0 {
+            line_index += 1;
+            return Ok(());
+        }
+        line_index += 1;
+        let Ok(row) = serde_json::from_slice::<Value>(line) else {
+            return Ok(());
+        };
+        if let Some(seq) = row["seq"].as_u64() {
+            meta.last_seq = Some(seq);
+        }
+        if let Some(ts) = row["time"].as_i64() {
+            meta.updated_at_ms = Some(meta.updated_at_ms.map_or(ts, |prev| prev.max(ts)));
+        }
+        let kind = row["type"].as_str().unwrap_or("");
+        let data = &row["data"];
+        match kind {
+            "session/title" => {
+                if let Some(t) = data["title"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    meta.title = Some(t.to_owned());
+                }
+            }
+            "working-directory/change" => {
+                if let Some(c) = data["cwd"].as_str().filter(|s| !s.is_empty()) {
+                    meta.cwd = Some(c.to_owned());
+                }
+            }
+            "turn/start" => {
+                meta.open_turn = true;
+            }
+            "turn/end" => {
+                meta.open_turn = false;
+            }
+            "user/message" => {
+                let src = data["source"]["kind"].as_str().unwrap_or("user");
+                if src == "user" {
+                    let txt = extract_content_plain_text(&data["content"]);
+                    let trimmed = txt.trim();
+                    if !trimmed.is_empty() {
+                        meta.message_count += 1;
+                        if meta.first_prompt.is_none() {
+                            meta.first_prompt = Some(trimmed.chars().take(120).collect());
+                        }
+                        meta.last_message = Some(trimmed.chars().take(200).collect());
+                    }
+                }
+            }
+            "assistant/message" => {
+                let txt = extract_content_plain_text(&data["message"]["content"]);
+                let trimmed = txt.trim();
+                if !trimmed.is_empty() {
+                    meta.message_count += 1;
+                    meta.last_message = Some(trimmed.chars().take(200).collect());
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(meta)
+}
+
+fn build_summary(
+    paths: &DshPaths,
+    session: &DiscoveredSession,
+    archived_set: &BTreeSet<String>,
+) -> ProviderSessionSummary {
+    let locked = is_session_locked_readonly(&session.dir);
+    let folded = if locked {
+        fold_log_metadata(session).unwrap_or_default()
+    } else {
+        try_read_projcache(paths, session)
+            .or_else(|| fold_log_metadata(session).ok())
+            .unwrap_or_default()
+    };
+    let archived = archived_set.contains(&session.id);
+    let running = !archived && locked && folded.open_turn;
+    let title = folded
+        .title
+        .or_else(|| {
+            folded
+                .first_prompt
+                .as_deref()
+                .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|s| !s.is_empty())
+                .map(|s| s.chars().take(60).collect())
+        })
+        .unwrap_or_else(|| "未命名会话".into());
+    let cwd = folded
+        .cwd
+        .or_else(|| session.header["cwd"].as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let updated_at = folded
+        .updated_at_ms
+        .and_then(epoch_ms_to_rfc3339)
+        .or_else(|| {
+            fs::symlink_metadata(&session.log_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+        });
+    let status = if archived {
+        "archived"
+    } else if running || locked {
+        "running"
+    } else {
+        "idle"
+    };
+    let can_rename = session.version == 4 && !locked;
+    let rename_block_reason = if session.version != 4 {
+        Some("旧版 DSH 会话格式（v1-v3）为只读，不支持改名".into())
+    } else if locked {
+        Some("该会话正在 DeepSeek Harness 中打开，请先关闭或切换会话后再改名".into())
+    } else {
+        None
+    };
+    let storage_size = if session.dir.is_dir() {
+        Some(session_storage::directory_size(
+            &paths.home,
+            &session.dir,
+            Some(&session.log_path),
+            &format!("dsh:{}", session.id),
+        ))
+    } else {
+        Some(SessionStorageSize::unavailable(StorageScope::Directory))
+    };
+
+    ProviderSessionSummary {
+        storage_size,
+        id: session.id.clone(),
+        session_key: session.id.clone(),
+        title,
+        cwd,
+        path: session.log_path.clone(),
+        archived,
+        updated_at,
+        message_count: folded.message_count,
+        last_message: folded.last_message,
+        status: status.into(),
+        format_version: format!("dsh-v{}", session.version),
+        can_rename,
+        rename_block_reason,
+        can_archive: true,
+        archive_block_reason: None,
+        can_delete: !locked,
+        delete_block_reason: locked
+            .then(|| "该会话正在 DeepSeek Harness 中运行，请先退出后再删除".into()),
+        read_error: None,
+        read_warning: None,
+    }
+}
+
+pub fn list_sessions(
+    paths: &DshPaths,
+    request: &ProviderListRequest,
+) -> Result<Vec<ProviderSessionSummary>> {
+    let reg = registry(paths)?;
+    let archived_set = reg.map(|r| r.archived).unwrap_or_default();
+    let discovered = discover_all_sessions(paths)?;
+    let mut items: Vec<ProviderSessionSummary> = discovered
+        .iter()
+        .filter(|s| !s.is_subagent() && !s.is_internal_no_cwd())
+        .map(|s| build_summary(paths, s, &archived_set))
+        .filter(|item| match request.archived {
+            Some(flag) => item.archived == flag,
+            None => true,
+        })
+        .filter(|item| matches_query(item, request.q.as_deref()))
+        .collect();
+
+    items.sort_by(|a, b| {
+        b.updated_at
+            .as_deref()
+            .unwrap_or("")
+            .cmp(a.updated_at.as_deref().unwrap_or(""))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let limit = request.limit.unwrap_or(200).clamp(1, 1000);
+    items.truncate(limit);
+    Ok(items)
+}
+
+fn find_root_session(paths: &DshPaths, id: &str) -> Result<DiscoveredSession> {
+    valid_id(id)?;
+    discover_all_sessions(paths)?
+        .into_iter()
+        .find(|s| s.id == id && !s.is_subagent())
+        .with_context(|| format!("未找到 DeepSeek Harness 会话：{id}"))
+}
+
+pub fn session_summary(paths: &DshPaths, id: &str) -> Result<ProviderSessionSummary> {
+    let reg = registry(paths)?;
+    let archived_set = reg.map(|r| r.archived).unwrap_or_default();
+    let found = find_root_session(paths, id)?;
+    Ok(build_summary(paths, &found, &archived_set))
+}
+
+fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
+    let Some(arr) = content.as_array() else {
+        return content.clone();
+    };
+    let mut out = Vec::new();
+    for part in arr {
+        let ptype = part["type"].as_str().unwrap_or("");
+        if ptype == "image" || ptype == "attachment" || ptype == "file" {
+            let candidate_path = part["path"].as_str().map(PathBuf::from).or_else(|| {
+                part["sha256"].as_str().and_then(|hash| {
+                    if hash.len() >= 4 {
+                        let p1 = paths
+                            .home
+                            .join("cache/attachments/request-images")
+                            .join(&hash[..2])
+                            .join(hash);
+                        if p1.is_file() {
+                            return Some(p1);
+                        }
+                        let p2 = paths.home.join("attachments").join(hash);
+                        if p2.is_file() {
+                            return Some(p2);
+                        }
+                    }
+                    None
+                })
+            });
+            if let Some(resolved) = candidate_path.filter(|p| p.is_file()) {
+                let pstr = resolved.to_string_lossy().into_owned();
+                out.push(json!({"type": "text", "text": format!("<image path=\"{pstr}\">")}));
+                out.push(json!({
+                    "type": "image",
+                    "url": pstr,
+                    "mimeType": part["mimeType"].as_str().unwrap_or("image/png")
+                }));
+                out.push(json!({"type": "text", "text": "</image>"}));
+                continue;
+            }
+        }
+        out.push(part.clone());
+    }
+    Value::Array(out)
+}
+
+pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
+    let session = find_root_session(paths, id)?;
+    let mut events = Vec::new();
+    let mut line_index = 0usize;
+    let mut current_turn: Option<String> = None;
+
+    decode_log_lines(&session.log_path, session.compressed, |line| {
+        if line_index == 0 {
+            line_index += 1;
+            return Ok(());
+        }
+        let idx = line_index;
+        line_index += 1;
+        let Ok(row) = serde_json::from_slice::<Value>(line) else {
+            return Ok(());
+        };
+        let seq = row["seq"].as_u64().unwrap_or(idx as u64);
+        let timestamp = value_timestamp_rfc3339(&row["time"]);
+        let kind = row["type"].as_str().unwrap_or("");
+        let data = &row["data"];
+        if let Some(t) = data["turn"].as_u64() {
+            current_turn = Some(format!("turn-{t}"));
+        }
+
+        match kind {
+            "turn/start" => {
+                if let Some(t) = data["turn"].as_u64() {
+                    current_turn = Some(format!("turn-{t}"));
+                }
+            }
+            "user/message" => {
+                let source_kind = data["source"]["kind"].as_str().unwrap_or("user");
+                if !matches!(source_kind, "user" | "user-question-reply") {
+                    return Ok(());
+                }
+                let event_id = format!("seq-{seq}-user");
+                let normalized_content = resolve_dsh_attachment_parts(paths, &data["content"]);
+                let user_msg =
+                    crate::user_message::parse_user_message(&event_id, &normalized_content);
+                if user_msg.text.trim().is_empty() && user_msg.attachments.is_empty() {
+                    return Ok(());
+                }
+                events.push(ProviderHistoryEvent {
+                    id: event_id,
+                    timestamp,
+                    kind: "user_message".into(),
+                    role: Some("user".into()),
+                    text: Some(user_msg.text.clone()),
+                    call_id: None,
+                    turn_id: current_turn.clone(),
+                    status: Some("completed".into()),
+                    detail: None,
+                    result: None,
+                    user_message: Some(user_msg),
+                });
+            }
+            "assistant/message" => {
+                let msg = &data["message"];
+                if let Some(reasoning) = msg["reasoning_content"]
+                    .as_str()
+                    .or_else(|| msg["reasoningContent"].as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    events.push(ProviderHistoryEvent {
+                        id: format!("seq-{seq}-thinking"),
+                        timestamp: timestamp.clone(),
+                        kind: "thinking".into(),
+                        role: Some("assistant".into()),
+                        text: Some(reasoning.to_owned()),
+                        call_id: None,
+                        turn_id: current_turn.clone(),
+                        status: Some("completed".into()),
+                        detail: None,
+                        result: None,
+                        user_message: None,
+                    });
+                }
+                if let Some(blocks) = msg["content"].as_array() {
+                    let mut text_parts = Vec::new();
+                    for (bi, block) in blocks.iter().enumerate() {
+                        match block["type"].as_str().unwrap_or("") {
+                            "thinking" | "reasoning" => {
+                                if let Some(t) = block["thinking"]
+                                    .as_str()
+                                    .or_else(|| block["text"].as_str())
+                                    .filter(|s| !s.trim().is_empty())
+                                {
+                                    events.push(ProviderHistoryEvent {
+                                        id: format!("seq-{seq}-thinking-{bi}"),
+                                        timestamp: timestamp.clone(),
+                                        kind: "thinking".into(),
+                                        role: Some("assistant".into()),
+                                        text: Some(t.to_owned()),
+                                        call_id: None,
+                                        turn_id: current_turn.clone(),
+                                        status: Some("completed".into()),
+                                        detail: None,
+                                        result: None,
+                                        user_message: None,
+                                    });
+                                }
+                            }
+                            "text" => {
+                                if let Some(t) = block["text"].as_str().filter(|s| !s.is_empty()) {
+                                    text_parts.push(t);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let joined = text_parts.join("\n");
+                    if !joined.trim().is_empty() {
+                        events.push(ProviderHistoryEvent {
+                            id: format!("seq-{seq}-assistant"),
+                            timestamp,
+                            kind: "assistant_message".into(),
+                            role: Some("assistant".into()),
+                            text: Some(joined),
+                            call_id: None,
+                            turn_id: current_turn.clone(),
+                            status: Some("completed".into()),
+                            detail: None,
+                            result: None,
+                            user_message: None,
+                        });
+                    }
+                } else if let Some(text) = msg["content"].as_str().filter(|s| !s.trim().is_empty())
+                {
+                    events.push(ProviderHistoryEvent {
+                        id: format!("seq-{seq}-assistant"),
+                        timestamp,
+                        kind: "assistant_message".into(),
+                        role: Some("assistant".into()),
+                        text: Some(text.to_owned()),
+                        call_id: None,
+                        turn_id: current_turn.clone(),
+                        status: Some("completed".into()),
+                        detail: None,
+                        result: None,
+                        user_message: None,
+                    });
+                }
+            }
+            "tool/call" => {
+                let name = data["name"].as_str().unwrap_or("tool");
+                let call_id = data["callId"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                let args = if let Some(s) = data["arguments"].as_str() {
+                    s.to_owned()
+                } else if !data["arguments"].is_null() {
+                    serde_json::to_string_pretty(&data["arguments"]).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                events.push(ProviderHistoryEvent {
+                    id: format!("seq-{seq}-toolcall"),
+                    timestamp,
+                    kind: "tool_call".into(),
+                    role: Some(name.to_owned()),
+                    text: Some(name.to_owned()),
+                    call_id,
+                    turn_id: current_turn.clone(),
+                    status: Some("running".into()),
+                    detail: (!args.trim().is_empty()).then_some(args),
+                    result: None,
+                    user_message: None,
+                });
+            }
+            "tool/result" => {
+                let call_id = data["callId"]
+                    .as_str()
+                    .or_else(|| data["message"]["toolCallId"].as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                let name = data["name"]
+                    .as_str()
+                    .or_else(|| data["message"]["name"].as_str())
+                    .unwrap_or("tool");
+                let output = extract_content_plain_text(&data["message"]["content"]);
+                let is_error = data["isError"].as_bool() == Some(true)
+                    || data["message"]["isError"].as_bool() == Some(true)
+                    || data.get("error").is_some_and(|e| !e.is_null());
+                let result_text = if !output.trim().is_empty() {
+                    Some(output)
+                } else {
+                    data["error"]["message"].as_str().map(str::to_owned)
+                };
+                events.push(ProviderHistoryEvent {
+                    id: format!("seq-{seq}-toolresult"),
+                    timestamp,
+                    kind: "tool_result".into(),
+                    role: Some(name.to_owned()),
+                    text: Some(name.to_owned()),
+                    call_id,
+                    turn_id: current_turn.clone(),
+                    status: Some(if is_error { "failed" } else { "completed" }.into()),
+                    detail: None,
+                    result: result_text,
+                    user_message: None,
+                });
+            }
+            "command/run" => {
+                if let Some(cmd) = data["command"]
+                    .as_str()
+                    .or_else(|| data["name"].as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    events.push(ProviderHistoryEvent {
+                        id: format!("seq-{seq}-command"),
+                        timestamp,
+                        kind: "system".into(),
+                        role: Some("command".into()),
+                        text: Some(format!("/{cmd}")),
+                        call_id: None,
+                        turn_id: current_turn.clone(),
+                        status: Some("completed".into()),
+                        detail: None,
+                        result: None,
+                        user_message: None,
+                    });
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(events)
+}
+
+pub fn session_detail(
+    paths: &DshPaths,
+    request: &ProviderDetailRequest,
+) -> Result<ProviderSessionDetail> {
+    let summary = session_summary(paths, &request.session_key)?;
+    let events = load_all_events(paths, &summary.id)?;
+    paginate_provider_detail(summary, &events, request)
+}
+
+pub fn read_attachment(
+    paths: &DshPaths,
+    request: &crate::user_message::SessionAttachmentRequest,
+) -> Result<crate::user_message::SessionAttachmentResponse> {
+    let summary = session_summary(paths, &request.session_key)?;
+    let events = load_all_events(paths, &summary.id)?;
+    let mut message = events
+        .into_iter()
+        .filter_map(|event| event.user_message)
+        .find(|msg| msg.id == request.message_id)
+        .context("会话消息已变化或不存在，请刷新会话")?;
+    message.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
+    message.read_attachment(&request.attachment_id)
+}
+
+/// Exact `@deepseek-ai/dsh-session-title` normalization:
+/// strips ANSI escape sequences, C0/C1 controls, zero-width/bidi controls,
+/// collapses whitespace runs to single ASCII space, and truncates to 80 UTF-8 bytes.
+pub fn normalize_dsh_title(raw: &str) -> Result<String> {
+    let mut stripped = String::with_capacity(raw.len());
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\x1b' {
+            i += 1;
+            if i < chars.len() && chars[i] == '[' {
+                i += 1;
+                while i < chars.len() && !('@'..='~').contains(&chars[i]) {
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            } else if i < chars.len() && chars[i] == ']' {
+                i += 1;
+                while i < chars.len() {
+                    if chars[i] == '\x07' {
+                        i += 1;
+                        break;
+                    }
+                    if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == '\\' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            continue;
+        }
+        let code = ch as u32;
+        let is_zero_width_or_bidi = matches!(
+            code,
+            0x200B
+                | 0x200E
+                | 0x200F
+                | 0x202A..=0x202E
+                | 0x2060..=0x2064
+                | 0x2066..=0x206F
+                | 0xFEFF
+        );
+        if is_zero_width_or_bidi {
+            i += 1;
+            continue;
+        }
+        if ch.is_whitespace() {
+            stripped.push(' ');
+        } else if !ch.is_control() {
+            stripped.push(ch);
+        }
+        i += 1;
+    }
+
+    let collapsed = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut utf8_len = 0usize;
+    let mut truncated = String::with_capacity(collapsed.len().min(MAX_DSH_TITLE_BYTES));
+    for ch in collapsed.chars() {
+        let clen = ch.len_utf8();
+        if utf8_len + clen > MAX_DSH_TITLE_BYTES {
+            break;
+        }
+        utf8_len += clen;
+        truncated.push(ch);
+    }
+    let final_title = truncated.trim().to_owned();
+    ensure!(!final_title.is_empty(), "会话名称不能为空");
+    Ok(final_title)
+}
+
+pub fn rename_session(
+    paths: &DshPaths,
+    id: &str,
+    raw_title: &str,
+) -> Result<ProviderSessionSummary> {
+    let title = normalize_dsh_title(raw_title)?;
+    let session = find_root_session(paths, id)?;
+    ensure!(
+        session.version == 4,
+        "旧版 DSH 会话格式（v1-v3）为只读，不支持改名"
+    );
+    let Some(_lease) = try_acquire_session_lease(&session.dir)? else {
+        bail!("该会话正在 DeepSeek Harness 中打开，请先关闭或切换会话后再改名");
+    };
+
+    // Re-read log under exclusive lease to obtain exact next monotonic seq
+    let mut expected_next_seq = 0u64;
+    let mut saw_header = false;
+    decode_log_lines(&session.log_path, session.compressed, |line| {
+        let row: Value =
+            serde_json::from_slice(line).context("DSH 会话日志记录损坏，已拒绝改名")?;
+        if !saw_header {
+            ensure!(
+                row["type"] == "session" && row["version"] == 4 && row["id"].as_str() == Some(id),
+                "DSH 会话头校验失败"
+            );
+            saw_header = true;
+            return Ok(());
+        }
+        let seq = row["seq"].as_u64().context("DSH 事件缺少序号")?;
+        ensure!(seq == expected_next_seq, "DSH 事件序号不连续，已拒绝改名");
+        expected_next_seq = seq.checked_add(1).context("DSH 事件序号溢出")?;
+        Ok(())
+    })?;
+    ensure!(saw_header, "DSH 会话日志缺少头部记录");
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    // Strict invariant in @deepseek-ai/dsh-session-title:
+    // (messageSeqs.length === 0) === (source.kind === "user")
+    let event = json!({
+        "type": "session/title",
+        "seq": expected_next_seq,
+        "time": now_ms,
+        "data": {
+            "title": title,
+            "messageSeqs": [],
+            "source": { "kind": "user" }
+        }
+    });
+    let mut event_line = serde_json::to_vec(&event)?;
+    event_line.push(b'\n');
+
+    let payload_to_append = if session.compressed {
+        let mut frame = Vec::new();
+        let mut encoder = zstd::stream::write::Encoder::new(&mut frame, 3)?;
+        encoder.include_checksum(true)?;
+        encoder.write_all(&event_line)?;
+        encoder.finish()?;
+        frame
+    } else {
+        event_line
+    };
+
+    let mut log_file = OpenOptions::new()
+        .append(true)
+        .open(&session.log_path)
+        .context("无法写入 DSH 会话日志")?;
+    log_file.write_all(&payload_to_append)?;
+    log_file.sync_all()?;
+    drop(log_file);
+
+    // Invalidate cold projection cache so both NexusHub and DSH fold the new title event
+    let mut cache_outcome = Outcome::default();
+    let _ = remove_cache(paths, id, &mut cache_outcome);
+
+    session_summary(paths, id)
+}
+
+fn ensure_registered_in_workspace(value: &mut Value, id: &str, cwd: &str) {
+    let default_ws = value
+        .pointer("/global/defaultWorkspaceId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let Some(workspaces) = value
+        .pointer_mut("/tables/workspaces")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let already_present = workspaces.values().any(|ws| {
+        ws["sessionIds"]
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some(id)))
+    });
+    if already_present {
+        return;
+    }
+    let matching_key = workspaces
+        .iter()
+        .find(|(_, ws)| !cwd.is_empty() && ws["path"].as_str() == Some(cwd))
+        .map(|(k, _)| k.clone())
+        .or_else(|| default_ws.filter(|k| workspaces.contains_key(k)))
+        .or_else(|| workspaces.keys().next().cloned());
+
+    if let Some(ws_key) = matching_key {
+        if let Some(arr) = workspaces
+            .get_mut(&ws_key)
+            .and_then(|ws| ws.get_mut("sessionIds"))
+            .and_then(Value::as_array_mut)
+        {
+            arr.push(Value::String(id.to_owned()));
+        }
+    } else {
+        let ws_id = "workspace-default".to_owned();
+        let now = chrono::Utc::now().to_rfc3339();
+        workspaces.insert(
+            ws_id.clone(),
+            json!({
+                "path": if cwd.is_empty() { "/" } else { cwd },
+                "title": Path::new(cwd).file_name().and_then(|s| s.to_str()).unwrap_or("Workspace"),
+                "sessionIds": [id],
+                "createdAt": now,
+                "updatedAt": now
+            }),
+        );
+        if let Some(arr) = value
+            .pointer_mut("/global/workspaceIds")
+            .and_then(Value::as_array_mut)
+        {
+            if !arr.iter().any(|v| v.as_str() == Some(&ws_id)) {
+                arr.push(Value::String(ws_id));
+            }
+        }
+    }
+}
+
+pub fn set_archived(paths: &DshPaths, id: &str, archived: bool) -> Result<ProviderSessionSummary> {
+    set_archived_checked(paths, id, archived, || check_host_dsh_stopped_for(paths))
+}
+
+pub fn set_archived_checked(
+    paths: &DshPaths,
+    id: &str,
+    archived: bool,
+    check_stopped: impl Fn() -> Result<()>,
+) -> Result<ProviderSessionSummary> {
+    valid_id(id)?;
+    check_stopped()?;
+    let root = find_root_session(paths, id)?;
+    let cwd = root.header["cwd"].as_str().unwrap_or("");
+
+    if let Some(index) = registry(paths)? {
+        let mut value = index.value.clone();
+        if archived {
+            ensure_registered_in_workspace(&mut value, id, cwd);
+            if let Some(arr) = value
+                .pointer_mut("/global/archivedSessionIds")
+                .and_then(Value::as_array_mut)
+            {
+                if !arr.iter().any(|v| v.as_str() == Some(id)) {
+                    arr.push(Value::String(id.to_owned()));
+                }
+            }
+            // Native @deepseek-ai/dsh-workspace rule: archiving unpins in the same write
+            if let Some(pins) = value
+                .pointer_mut("/global/pinnedSessionIds")
+                .and_then(Value::as_array_mut)
+            {
+                pins.retain(|v| v.as_str() != Some(id));
+            }
+        } else if let Some(arr) = value
+            .pointer_mut("/global/archivedSessionIds")
+            .and_then(Value::as_array_mut)
+        {
+            arr.retain(|v| v.as_str() != Some(id));
+        }
+        save_registry(&index, &value, &check_stopped)?;
+    } else if archived {
+        let storages = paths.home.join("storages");
+        fs::create_dir_all(&storages)?;
+        let ws_path = storages.join("workspace.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let initial = json!({
+            "unit": { "name": "workspace", "version": 2 },
+            "global": {
+                "initialized": true,
+                "workspaceIds": ["workspace-default"],
+                "defaultWorkspaceId": "workspace-default",
+                "archivedSessionIds": [id],
+                "pinnedSessionIds": []
+            },
+            "tables": {
+                "workspaces": {
+                    "workspace-default": {
+                        "path": if cwd.is_empty() { "/" } else { cwd },
+                        "title": "Workspace",
+                        "sessionIds": [id],
+                        "createdAt": now,
+                        "updatedAt": now
+                    }
+                }
+            }
+        });
+        let tmp = storages.join(format!(".nexushub-index-{}", uuid::Uuid::new_v4()));
+        {
+            let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+            serde_json::to_writer(&mut file, &initial)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+        }
+        check_stopped()?;
+        fs::rename(&tmp, &ws_path)?;
+    }
+
+    session_summary(paths, id)
+}
+
+fn find_subagent_descendants(all: &[DiscoveredSession], root_id: &str) -> Vec<String> {
+    let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for s in all {
+        if let Some(parent) = &s.parent_subagent_of {
+            children
+                .entry(parent.clone())
+                .or_default()
+                .push(s.id.clone());
+        }
+    }
+    let mut out = BTreeSet::new();
+    let mut stack = vec![root_id.to_owned()];
+    while let Some(curr) = stack.pop() {
+        if let Some(kids) = children.get(&curr) {
+            for kid in kids {
+                if kid != root_id && out.insert(kid.clone()) {
+                    stack.push(kid.clone());
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn collect_owned_paths_for_ids(
+    paths: &DshPaths,
+    all: &[DiscoveredSession],
+    ids: &[String],
+) -> Vec<PathBuf> {
+    let id_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+    let mut target_paths = Vec::new();
+    for s in all {
+        if id_set.contains(s.id.as_str()) && session_delete::within(&paths.home, &s.dir) {
+            target_paths.push(s.dir.clone());
+        }
+    }
+    let proj_dir = paths.home.join("storages/session_projcache/sessions");
+    for id in ids {
+        let p = proj_dir.join(format!("{id}.json"));
+        if p.exists() && session_delete::within(&paths.home, &p) {
+            target_paths.push(p);
+        }
+    }
+    target_paths
+}
+
+pub fn preview_batch_item(
+    paths: &DshPaths,
+    key: &str,
+    operation: SessionOperation,
+    include_descendants: bool,
+) -> Result<SessionBatchItem> {
+    preview_batch_item_checked(paths, key, operation, include_descendants, || {
+        check_host_dsh_stopped_for(paths)
+    })
+}
+
+pub fn preview_batch_item_checked(
+    paths: &DshPaths,
+    key: &str,
+    operation: SessionOperation,
+    include_descendants: bool,
+    check_stopped: impl Fn() -> Result<()>,
+) -> Result<SessionBatchItem> {
+    check_stopped()?;
+    let _reg = registry(paths)?;
+    let all = discover_all_sessions(paths)?;
+    let summary = session_summary(paths, key)?;
+    if operation == SessionOperation::Delete && !summary.can_delete {
+        bail!(
+            "{}",
+            summary
+                .delete_block_reason
+                .as_deref()
+                .unwrap_or("该会话正在运行，无法删除")
+        );
+    }
+    let descendants = if operation == SessionOperation::Delete && include_descendants {
+        find_subagent_descendants(&all, &summary.id)
+    } else {
+        Vec::new()
+    };
+    let mut all_ids = vec![summary.id.clone()];
+    all_ids.extend(descendants.iter().cloned());
+    let mut target_paths = collect_owned_paths_for_ids(paths, &all, &all_ids);
+    if target_paths.is_empty() {
+        target_paths.push(summary.path.clone());
+    }
+    let (_, bytes) = session_delete::size(&target_paths);
+    let stamp = file_stamp(&summary.path).ok();
+    let fingerprint = hex::encode(Sha256::digest(format!(
+        "dsh:{}:{}:{}:{}",
+        summary.id,
+        summary.archived,
+        bytes,
+        stamp.map_or(0, |s| s.len)
+    )));
+    Ok(SessionBatchItem {
+        session_key: summary.session_key,
+        id: summary.id,
+        title: summary.title,
+        paths: target_paths,
+        bytes,
+        allowed: true,
+        reason: None,
+        fingerprint: Some(fingerprint),
+        descendants,
+        warnings: Vec::new(),
+    })
+}
+
+pub fn execute_batch_item(
+    paths: &DshPaths,
+    key: &str,
+    operation: SessionOperation,
+    descendants: &[String],
+    include_descendants: bool,
+) -> Result<SessionBatchItemResult> {
+    execute_batch_item_checked(
+        paths,
+        key,
+        operation,
+        descendants,
+        include_descendants,
+        || check_host_dsh_stopped_for(paths),
+    )
+}
+
+pub fn execute_batch_item_checked(
+    paths: &DshPaths,
+    key: &str,
+    operation: SessionOperation,
+    descendants: &[String],
+    include_descendants: bool,
+    check_stopped: impl Fn() -> Result<()>,
+) -> Result<SessionBatchItemResult> {
+    valid_id(key)?;
+    match operation {
+        SessionOperation::Archive => {
+            set_archived_checked(paths, key, true, check_stopped)?;
+            Ok(SessionBatchItemResult {
+                session_key: key.to_owned(),
+                status: "succeeded".into(),
+                message: None,
+                deleted_ids: Vec::new(),
+                residuals: Vec::new(),
+            })
+        }
+        SessionOperation::Restore => {
+            set_archived_checked(paths, key, false, check_stopped)?;
+            Ok(SessionBatchItemResult {
+                session_key: key.to_owned(),
+                status: "succeeded".into(),
+                message: None,
+                deleted_ids: Vec::new(),
+                residuals: Vec::new(),
+            })
+        }
+        SessionOperation::Delete => {
+            check_stopped()?;
+            let index = registry(paths)?;
+            let all = discover_all_sessions(paths)?;
+            let root = all
+                .iter()
+                .find(|s| s.id == key && !s.is_subagent())
+                .with_context(|| format!("未找到 DeepSeek Harness 会话：{key}"))?;
+            ensure!(
+                !is_session_locked_readonly(&root.dir),
+                "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
+            );
+
+            let mut delete_ids = BTreeSet::new();
+            delete_ids.insert(key.to_owned());
+            if include_descendants {
+                let discovered = if descendants.is_empty() {
+                    find_subagent_descendants(&all, key)
+                } else {
+                    descendants.to_vec()
+                };
+                for child in discovered {
+                    valid_id(&child)?;
+                    // Never allow a non-subagent user session (e.g. a fork) into descendant deletion
+                    if all.iter().any(|s| s.id == child && s.is_subagent()) {
+                        delete_ids.insert(child);
+                    }
+                }
+            }
+
+            let mut outcome = Outcome::default();
+            let mut parent_project_dirs = BTreeSet::new();
+            for id in &delete_ids {
+                if let Err(err) = remove_cache(paths, id, &mut outcome) {
+                    outcome.residuals.push(format!("投影缓存：{err}"));
+                }
+                for s in all.iter().filter(|s| &s.id == id) {
+                    if let Some(p) = s.dir.parent() {
+                        parent_project_dirs.insert(p.to_path_buf());
+                    }
+                    if let Err(err) = remove_session(&s.dir, &mut outcome) {
+                        outcome.residuals.push(format!("会话目录：{err}"));
+                    }
+                }
+            }
+
+            // Clean optional resume-pins matching deleted IDs
+            let pins_dir = paths.home.join("sessions/resume-pins");
+            if pins_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&pins_dir) {
+                    for entry in entries.flatten() {
+                        let fname = entry.file_name().to_string_lossy().into_owned();
+                        if delete_ids
+                            .iter()
+                            .any(|id| fname == *id || fname.starts_with(&format!("{id}.")))
+                        {
+                            outcome.remove(&entry.path());
+                        }
+                    }
+                }
+            }
+
+            // Prune empty project directories under sessions/
+            for pdir in parent_project_dirs {
+                if pdir.is_dir()
+                    && fs::read_dir(&pdir)
+                        .ok()
+                        .is_some_and(|mut it| it.next().is_none())
+                {
+                    let _ = fs::remove_dir(&pdir);
+                }
+            }
+
+            if outcome.residuals.is_empty() {
+                if let Some(reg) = index {
+                    let mut value = reg.value.clone();
+                    remove_references(&mut value, &delete_ids);
+                    if let Err(err) = save_registry(&reg, &value, &check_stopped) {
+                        outcome.residuals.push(format!("工作区索引：{err}"));
+                    }
+                }
+            }
+            outcome.finish();
+            Ok(SessionBatchItemResult {
+                session_key: key.to_owned(),
+                status: if outcome.residuals.is_empty() {
+                    "succeeded"
+                } else {
+                    "failed"
+                }
+                .into(),
+                message: (!outcome.residuals.is_empty())
+                    .then(|| "部分 DSH 会话数据未清理，请重试".into()),
+                deleted_ids: delete_ids.into_iter().collect(),
+                residuals: outcome.residuals,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_zstd_frames(path: &Path, lines: &[Value]) {
+        let mut all_frames = Vec::new();
+        for row in lines {
+            let mut raw = serde_json::to_vec(row).unwrap();
+            raw.push(b'\n');
+            let mut encoder = zstd::stream::write::Encoder::new(&mut all_frames, 3).unwrap();
+            encoder.include_checksum(true).unwrap();
+            encoder.write_all(&raw).unwrap();
+            encoder.finish().unwrap();
+        }
+        fs::write(path, all_frames).unwrap();
+    }
+
+    #[test]
+    fn dsh_title_normalizer_enforces_80_utf8_bytes_and_strips_controls() {
+        let dirty = "  \x1b[32mHello\x1b[0m\u{200B}   世界\n\tDeepSeek  ";
+        assert_eq!(normalize_dsh_title(dirty).unwrap(), "Hello 世界 DeepSeek");
+
+        // 30 Chinese characters = 90 UTF-8 bytes -> must truncate cleanly at 26 chars (78 bytes)
+        let long_cn = "深".repeat(30);
+        let norm = normalize_dsh_title(&long_cn).unwrap();
+        assert!(norm.len() <= MAX_DSH_TITLE_BYTES);
+        assert_eq!(norm.len(), 78);
+        assert_eq!(norm.chars().count(), 26);
+    }
+
+    #[test]
+    fn dsh_zstd_sessions_support_list_detail_rename_archive_restore_and_subagent_delete() {
+        let home = std::env::temp_dir().join(format!("nexushub-dsh-sess-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/--workspace-demo--");
+        let root_id = "session-11111111";
+        let sub_id = "session-22222222";
+        let fork_id = "session-33333333";
+        fs::create_dir_all(proj.join(root_id)).unwrap();
+        fs::create_dir_all(proj.join(sub_id)).unwrap();
+        fs::create_dir_all(proj.join(fork_id)).unwrap();
+        fs::create_dir_all(home.join("storages/session_projcache/sessions")).unwrap();
+
+        fs::write(
+            home.join("storages/workspace.json"),
+            serde_json::to_vec(&json!({
+                "unit": { "name": "workspace", "version": 2 },
+                "global": {
+                    "initialized": true,
+                    "workspaceIds": ["ws-1"],
+                    "defaultWorkspaceId": "ws-1",
+                    "archivedSessionIds": [],
+                    "pinnedSessionIds": [root_id]
+                },
+                "tables": {
+                    "workspaces": {
+                        "ws-1": {
+                            "path": "/workspace/demo",
+                            "title": "Demo",
+                            "sessionIds": [root_id, fork_id]
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        write_zstd_frames(
+            &proj.join(root_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":root_id,"createdAt":1793000000000i64,"cwd":"/workspace/demo","isSeeded":false}),
+                json!({"type":"turn/start","seq":0,"time":1793000001000i64,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":1793000001000i64,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"请帮我检查 DSH 存储结构"}]}}),
+                json!({"type":"tool/call","seq":2,"time":1793000002000i64,"data":{"turn":1,"callId":"call-1","name":"bash","arguments":{"command":"ls -la"}}}),
+                json!({"type":"tool/result","seq":3,"time":1793000003000i64,"data":{"turn":1,"callId":"call-1","message":{"toolCallId":"call-1","content":[{"type":"text","text":"workspace.json"}]}}}),
+                json!({"type":"assistant/message","seq":4,"time":1793000004000i64,"data":{"turn":1,"message":{"reasoning_content":"先看返回结果","content":[{"type":"text","text":"检查完成，索引为 v2 格式。"}]}}}),
+                json!({"type":"turn/end","seq":5,"time":1793000005000i64,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        // Subagent session (must NOT appear in top-level list, MUST be deleted with root_id)
+        write_zstd_frames(
+            &proj.join(sub_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":sub_id,"createdAt":1793000002000i64,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_id,"delegationDepth":1}),
+            ],
+        );
+        // Forked user session (MUST appear in top-level list, must NOT be deleted with root_id)
+        write_zstd_frames(
+            &proj.join(fork_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":fork_id,"createdAt":1793000006000i64,"cwd":"/workspace/demo","isSeeded":true,"inheritedEventCount":0}),
+                json!({"type":"session/title","seq":0,"time":1793000006000i64,"data":{"title":"分支会话","messageSeqs":[],"source":{"kind":"user"}}}),
+            ],
+        );
+
+        let paths = DshPaths { home: home.clone() };
+
+        // 1. List active sessions: root_id + fork_id (sub_id excluded!)
+        let list = list_sessions(
+            &paths,
+            &ProviderListRequest {
+                archived: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|s| s.id == root_id));
+        assert!(list
+            .iter()
+            .any(|s| s.id == fork_id && s.title == "分支会话"));
+
+        // 2. Detail reading
+        let detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: root_id.into(),
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(detail.events.len(), 5);
+        assert_eq!(detail.events[0].kind, "user_message");
+        assert_eq!(detail.events[1].kind, "tool_call");
+        assert_eq!(detail.events[2].kind, "tool_result");
+        assert_eq!(detail.events[3].kind, "thinking");
+        assert_eq!(detail.events[4].kind, "assistant_message");
+
+        // 3. Rename appends valid checksummed Zstd frame with seq=6 and strict user invariant
+        let renamed = rename_session(&paths, root_id, "DSH 完美改名测试").unwrap();
+        assert_eq!(renamed.title, "DSH 完美改名测试");
+        // Verify dsh::notifications strict reader still parses the multi-frame zstd log cleanly!
+        let mut last_event: Option<Value> = None;
+        decode_log_lines(
+            &proj.join(root_id).join("session.v4.jsonl.zstd"),
+            true,
+            |line| {
+                last_event = Some(serde_json::from_slice(line).unwrap());
+                Ok(())
+            },
+        )
+        .unwrap();
+        let ev = last_event.unwrap();
+        assert_eq!(ev["type"], "session/title");
+        assert_eq!(ev["seq"], 6);
+        assert_eq!(ev["data"]["messageSeqs"], json!([]));
+        assert_eq!(ev["data"]["source"]["kind"], "user");
+
+        // 4. Archive unpins root_id and moves it to archived view; running DSH guard blocks when active
+        assert!(set_archived_checked(&paths, root_id, true, || bail!("DSH running")).is_err());
+        let archived = set_archived_checked(&paths, root_id, true, || Ok(())).unwrap();
+        assert!(archived.archived);
+        let ws_after_archive: Value =
+            serde_json::from_slice(&fs::read(home.join("storages/workspace.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            ws_after_archive["global"]["archivedSessionIds"],
+            json!([root_id])
+        );
+        assert_eq!(ws_after_archive["global"]["pinnedSessionIds"], json!([]));
+
+        let restored = set_archived_checked(&paths, root_id, false, || Ok(())).unwrap();
+        assert!(!restored.archived);
+
+        // 5. Delete removes root_id + sub_id, updates workspace.json, and leaves fork_id intact!
+        let preview =
+            preview_batch_item_checked(&paths, root_id, SessionOperation::Delete, true, || Ok(()))
+                .unwrap();
+        assert_eq!(preview.descendants, vec![sub_id.to_string()]);
+        let del = execute_batch_item_checked(
+            &paths,
+            root_id,
+            SessionOperation::Delete,
+            &preview.descendants,
+            true,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(del.status, "succeeded");
+        assert!(!proj.join(root_id).exists());
+        assert!(!proj.join(sub_id).exists());
+        assert!(proj.join(fork_id).exists());
+
+        let remaining = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, fork_id);
+
+        fs::remove_dir_all(home).unwrap();
+    }
+}

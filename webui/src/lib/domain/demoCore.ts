@@ -27,6 +27,8 @@ const capabilityFields = {
   dsh_archive_cleanup: { "linux-api": true, "macos-tauri": true },
   antigravity_notifications: { "linux-api": false, "macos-tauri": true },
   dsh_notifications: { "linux-api": false, "macos-tauri": true },
+  antigravity_sessions: { "linux-api": true, "macos-tauri": true },
+  dsh_sessions: { "linux-api": true, "macos-tauri": true },
   hidden_cleanup_scan: { "linux-api": false, "macos-tauri": false },
   codex_delete_tree: { "linux-api": false, "macos-tauri": false },
   thread_archive_actions: { "linux-api": true, "macos-tauri": true },
@@ -43,6 +45,8 @@ const macosEnumerableCapabilityKeys: readonly (keyof SystemCapabilities)[] = [
   "app_updater",
   "thread_cleanup",
   "thread_archive_actions",
+  "antigravity_sessions",
+  "dsh_sessions",
 ] satisfies Array<keyof SystemCapabilities>;
 
 function buildDemoCapabilities(fixture: DemoFixtureKey): SystemCapabilities {

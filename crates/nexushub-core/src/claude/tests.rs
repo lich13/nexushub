@@ -665,6 +665,12 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
         codex: crate::codex::CodexPaths::new(f.root.join("codex")),
         grok: crate::grok::GrokPaths::default_for_user(),
         claude: f.paths.clone(),
+        antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+            f.root.join("antigravity"),
+        ),
+        dsh: crate::dsh::DshPaths {
+            home: f.root.join("dsh"),
+        },
     };
     let unknown = format!("claude:{}", "f".repeat(64));
     let preview = cases

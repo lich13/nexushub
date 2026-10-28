@@ -65,7 +65,7 @@ let connection = { target: "local" as MachineTarget, revision: 0, baseUrl: null 
 function publish(patch: Partial<typeof connection>) { connection = { ...connection, ...patch }; listeners.forEach(listener => listener()); }
 export function connectionSnapshot() { return connection; }
 export function machineScope() { return `${connection.target}:${connection.target === "remote" ? connection.baseUrl : ""}`; }
-export function useConnection() { return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, connectionSnapshot); }
+export function useConnection() { return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, connectionSnapshot, connectionSnapshot); }
 let initialization: Promise<void> | undefined;
 export function initializeConnection() {
   return initialization ??= (async () => {
@@ -111,7 +111,7 @@ export async function remoteSelect(target: MachineTarget) {
 }
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
-const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
+const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "antigravity.list", "antigravity.detail", "dsh.list", "dsh.detail", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
 // Local desktop subscriptions/catalogs are reads, but never routed to remote.invoke.
 reads.add("codex.desktop.attach");
 reads.add("codex.desktop.catalog");

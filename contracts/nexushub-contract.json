@@ -65,6 +65,8 @@
       "Codex",
       "Claude Code",
       "Grok Build",
+      "Antigravity",
+      "DeepSeek Harness",
       "Probe",
       "设置"
     ],
@@ -845,6 +847,126 @@
       "requestDto": "ClaudeHooksRequest",
       "responseDto": "ClaudeHooksStatus",
       "hostOnlyReason": "Explicit local macOS Claude settings status/install/remove; never exposed by the server or remote.invoke"
+    },
+    {
+      "id": "antigravity.list",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "antigravity.list",
+      "linuxRpc": "antigravity.list",
+      "tauriCommand": "commands::provider_sessions::listAntigravitySessions",
+      "webuiWrapper": "listAntigravitySessions",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderListRequest",
+      "responseDto": "ProviderListResponse"
+    },
+    {
+      "id": "antigravity.detail",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "antigravity.detail",
+      "linuxRpc": "antigravity.detail",
+      "tauriCommand": "commands::provider_sessions::getAntigravitySession",
+      "webuiWrapper": "getAntigravitySession",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderDetailRequest",
+      "responseDto": "ProviderDetailResponse"
+    },
+    {
+      "id": "antigravity.rename",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "antigravity.rename",
+      "linuxRpc": "antigravity.rename",
+      "tauriCommand": "commands::provider_sessions::renameAntigravitySession",
+      "webuiWrapper": "renameAntigravitySession",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderRenameRequest",
+      "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "antigravity.archive",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "antigravity.archive",
+      "linuxRpc": "antigravity.archive",
+      "tauriCommand": "commands::provider_sessions::archiveAntigravitySession",
+      "webuiWrapper": "archiveAntigravitySession",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderSessionRequest",
+      "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "antigravity.restore",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "antigravity.restore",
+      "linuxRpc": "antigravity.restore",
+      "tauriCommand": "commands::provider_sessions::restoreAntigravitySession",
+      "webuiWrapper": "restoreAntigravitySession",
+      "dtoOwner": "antigravity",
+      "requestDto": "ProviderSessionRequest",
+      "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "dsh.list",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "dsh.list",
+      "linuxRpc": "dsh.list",
+      "tauriCommand": "commands::provider_sessions::listDshSessions",
+      "webuiWrapper": "listDshSessions",
+      "dtoOwner": "dsh",
+      "requestDto": "ProviderListRequest",
+      "responseDto": "ProviderListResponse"
+    },
+    {
+      "id": "dsh.detail",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "dsh.detail",
+      "linuxRpc": "dsh.detail",
+      "tauriCommand": "commands::provider_sessions::getDshSession",
+      "webuiWrapper": "getDshSession",
+      "dtoOwner": "dsh",
+      "requestDto": "ProviderDetailRequest",
+      "responseDto": "ProviderDetailResponse"
+    },
+    {
+      "id": "dsh.rename",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "dsh.rename",
+      "linuxRpc": "dsh.rename",
+      "tauriCommand": "commands::provider_sessions::renameDshSession",
+      "webuiWrapper": "renameDshSession",
+      "dtoOwner": "dsh",
+      "requestDto": "ProviderRenameRequest",
+      "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "dsh.archive",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "dsh.archive",
+      "linuxRpc": "dsh.archive",
+      "tauriCommand": "commands::provider_sessions::archiveDshSession",
+      "webuiWrapper": "archiveDshSession",
+      "dtoOwner": "dsh",
+      "requestDto": "ProviderSessionRequest",
+      "responseDto": "ProviderMutationResponse"
+    },
+    {
+      "id": "dsh.restore",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "dsh.restore",
+      "linuxRpc": "dsh.restore",
+      "tauriCommand": "commands::provider_sessions::restoreDshSession",
+      "webuiWrapper": "restoreDshSession",
+      "dtoOwner": "dsh",
+      "requestDto": "ProviderSessionRequest",
+      "responseDto": "ProviderMutationResponse"
     }
   ],
   "dtoCatalog": {
@@ -1291,6 +1413,34 @@
     "DshArchiveDeleteResult": {
       "core": "DshArchiveDeleteResult",
       "webui": "DshArchiveDeleteResult"
+    },
+    "ProviderListRequest": {
+      "core": "ProviderListRequest",
+      "webui": "ProviderListRequest"
+    },
+    "ProviderListResponse": {
+      "core": "ProviderListResponse",
+      "webui": "ProviderListResponse"
+    },
+    "ProviderDetailRequest": {
+      "core": "ProviderDetailRequest",
+      "webui": "ProviderDetailRequest"
+    },
+    "ProviderDetailResponse": {
+      "core": "ProviderDetailResponse",
+      "webui": "ProviderDetailResponse"
+    },
+    "ProviderRenameRequest": {
+      "core": "ProviderRenameRequest",
+      "webui": "ProviderRenameRequest"
+    },
+    "ProviderSessionRequest": {
+      "core": "ProviderSessionRequest",
+      "webui": "ProviderSessionRequest"
+    },
+    "ProviderMutationResponse": {
+      "core": "ProviderMutationResponse",
+      "webui": "ProviderMutationResponse"
     }
   },
   "retiredActions": [

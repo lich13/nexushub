@@ -148,6 +148,82 @@ test("Grok and Claude context menus expose their provider actions", async ({ pag
   await page.keyboard.press("Escape");
 });
 
+test("Antigravity and DeepSeek Harness menus expose 5 actions, omit 复制恢复命令, and support archive/restore/delete preview", async ({ page }) => {
+  const calls = await mockApi(page);
+  const previews: SessionBatchRequest[] = [];
+  await mockCommand(page, "sessions.bulkPreview", args => {
+    const request = args.request;
+    previews.push(request);
+    return {
+      provider: request.provider,
+      operation: request.operation,
+      items: request.sessionKeys.map((sessionKey: string) => ({
+        sessionKey,
+        id: sessionKey,
+        title: "Provider delete preview fixture",
+        paths: [`/isolated/${request.provider}/${sessionKey}`],
+        bytes: 2048,
+        allowed: true,
+        reason: null,
+        fingerprint: "provider-fixture-fingerprint",
+        descendants: []
+      }))
+    };
+  });
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/");
+
+  const menu = page.locator(".context-task-menu");
+  await page.locator(".side-nav").getByRole("button", { name: "Antigravity", exact: true }).click();
+  const agRow = page.locator(".provider-session").first();
+  await agRow.click({ button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "改名", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "归档", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "复制 ID", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "复制路径", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "永久删除", exact: true })).toBeVisible();
+  await expect(menu.getByText("复制恢复命令")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await agRow.click();
+  await expect(page.locator(".conversation-title")).toHaveText("Antigravity fixture");
+  await page.getByLabel("Antigravity 任务操作", { exact: true }).click();
+  await expect(page.locator(".task-menu-items").getByText("复制恢复命令")).toHaveCount(0);
+  await page.locator(".task-menu-items").getByRole("button", { name: "归档", exact: true }).click();
+  await expect.poll(() => calls.filter(name => name === "antigravity.archive").length).toBe(1);
+
+  await page.getByRole("tab", { name: "已归档", exact: true }).click();
+  const archivedAgRow = page.locator(".provider-session").first();
+  await expect(archivedAgRow).toContainText("Antigravity fixture");
+  await archivedAgRow.click({ button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "恢复", exact: true })).toBeVisible();
+  await expect(menu.getByText("复制恢复命令")).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: "恢复", exact: true }).click();
+  await expect.poll(() => calls.filter(name => name === "antigravity.restore").length).toBe(1);
+
+  await page.locator(".side-nav").getByRole("button", { name: "DeepSeek Harness", exact: true }).click();
+  const dshRow = page.locator(".provider-session").first();
+  await dshRow.click({ button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "改名", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "归档", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "复制 ID", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "复制路径", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "永久删除", exact: true })).toBeVisible();
+  await expect(menu.getByText("复制恢复命令")).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: "永久删除", exact: true }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Provider delete preview fixture");
+  expect(previews.at(-1)).toMatchObject({
+    provider: "dsh",
+    operation: "delete",
+    sessionKeys: ["dsh:dsh-fixture"]
+  });
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
 test("Codex ordinary thread deletion shows an explicit preview before any execution", async ({ page }) => {
   await mockApi(page);
   await mockCommand(page, "system.capabilities", () => demoSystemCapabilities("macos-tauri"));

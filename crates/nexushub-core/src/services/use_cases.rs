@@ -110,6 +110,18 @@ impl<'a> NexusHubUseCases<'a> {
         }
     }
 
+    pub fn antigravity(self) -> AntigravityUseCases {
+        AntigravityUseCases {
+            paths: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+        }
+    }
+
+    pub fn dsh(self) -> DshUseCases {
+        DshUseCases {
+            paths: crate::dsh::DshPaths::default_for_user(),
+        }
+    }
+
     pub fn jobs(self) -> JobUseCases<'a> {
         JobUseCases {
             platform: self.platform,
@@ -125,6 +137,8 @@ impl<'a> NexusHubUseCases<'a> {
             codex,
             grok: crate::grok::GrokPaths::default_for_user(),
             claude: crate::claude::ClaudePaths::default_for_user(),
+            antigravity: crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+            dsh: crate::dsh::DshPaths::default_for_user(),
         }
     }
 
@@ -518,5 +532,69 @@ impl ClaudeUseCases {
         request: crate::claude::ClaudeDeleteRequest,
     ) -> Result<crate::claude::ClaudeDeleteResult> {
         crate::claude::execute_claude_delete(&self.paths, request)
+    }
+}
+
+pub struct AntigravityUseCases {
+    paths: crate::antigravity::sessions::AntigravityPaths,
+}
+
+impl AntigravityUseCases {
+    pub fn list(
+        &self,
+        request: crate::provider_sessions::ProviderListRequest,
+    ) -> Result<Vec<crate::provider_sessions::ProviderSessionSummary>> {
+        crate::antigravity::sessions::list_sessions(&self.paths, &request)
+    }
+    pub fn detail(
+        &self,
+        request: crate::provider_sessions::ProviderDetailRequest,
+    ) -> Result<crate::provider_sessions::ProviderSessionDetail> {
+        crate::antigravity::sessions::session_detail(&self.paths, &request)
+    }
+    pub fn rename(
+        &self,
+        key: &str,
+        title: &str,
+    ) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::antigravity::sessions::rename_session(&self.paths, key, title)
+    }
+    pub fn archive(&self, key: &str) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::antigravity::sessions::set_archived(&self.paths, key, true)
+    }
+    pub fn restore(&self, key: &str) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::antigravity::sessions::set_archived(&self.paths, key, false)
+    }
+}
+
+pub struct DshUseCases {
+    paths: crate::dsh::DshPaths,
+}
+
+impl DshUseCases {
+    pub fn list(
+        &self,
+        request: crate::provider_sessions::ProviderListRequest,
+    ) -> Result<Vec<crate::provider_sessions::ProviderSessionSummary>> {
+        crate::dsh::sessions::list_sessions(&self.paths, &request)
+    }
+    pub fn detail(
+        &self,
+        request: crate::provider_sessions::ProviderDetailRequest,
+    ) -> Result<crate::provider_sessions::ProviderSessionDetail> {
+        crate::dsh::sessions::session_detail(&self.paths, &request)
+    }
+    pub fn rename(
+        &self,
+        key: &str,
+        title: &str,
+    ) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::dsh::sessions::rename_session(&self.paths, key, title)
+    }
+    pub fn archive(&self, key: &str) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::dsh::sessions::set_archived(&self.paths, key, true)
+    }
+    pub fn restore(&self, key: &str) -> Result<crate::provider_sessions::ProviderSessionSummary> {
+        crate::dsh::sessions::set_archived(&self.paths, key, false)
     }
 }

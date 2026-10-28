@@ -1,13 +1,13 @@
 # NexusHub
 
-NexusHub 是一个会话阅读与管理工具，用于在 macOS App 中查看 Codex、Claude Code 和 Grok Build 的本机会话，也可以通过受保护的 API 管理一台远程机器。本机 Codex 主线程支持连接原生桌面继续协作。
+NexusHub 是一个会话阅读与管理工具，用于在 ChatGPT macOS App 风格的桌面界面中查看 Codex、Claude Code、Grok Build、Antigravity 和 DeepSeek Harness（DSH）的本机会话，也可以通过受保护的 API 管理一台远程机器。本机 Codex 主线程支持连接原生桌面继续协作。
 
 ## 主要能力
 
 - 按 Provider 搜索会话、搜索当前线程或全部线程，并用时间线定位消息、Plan、附件和工具活动；时间线短线只显示识别到的用户指令。
-- 保留文本与工具的原始顺序；连续工具活动可以展开查看。Claude 同一回合的思考、临时说明和工具活动合并为默认收起的过程折叠，最终答复单独显示；自动上下文合并为一行默认收起，真实请求与附件正常显示。
-- 复制线程 ID、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
-- 三种 Provider 共用 ⌘ 点击多选、Shift 区间追加和确认后直接删除；双击可改名。Codex 支持归档、恢复和原生后代删除。删除不受会话活动或读取状态限制。
+- 保留文本与工具的原始顺序；连续工具活动可以展开查看。Claude 同一回合的思考、临时说明和工具活动合并为默认收起的过程折叠，Antigravity 与 DSH 的思考块和连续命令／工具执行同样默认折叠，最终答复单独显示；自动上下文合并为一行默认收起，真实请求与附件正常显示。
+- 复制线程 ID、路径、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
+- 五种 Provider 共用 ⌘ 点击多选、Shift 区间追加和确认后直接删除；双击或 `F2` 可改名。Codex、Antigravity 与 DeepSeek Harness 支持“全部／已归档”筛选、归档、恢复和含已核验子代理后代的永久删除；Antigravity 与 DSH 菜单提供改名、归档／恢复、复制 ID、复制路径与永久删除（不提供复制恢复命令）。
 - 通过 Bark 接收完成、需要回复、需要授权和失败的简洁摘要；本机 Claude hooks 可在设置中明确启用，与轮询共用去重，Codex 保留逐问题提醒。
 - 在本机 Codex 新建或继续主线程，发送消息、排队、补充与停止；选择原生模型、思考强度、默认或 Plan 模式，添加文件、图片、技能、应用和插件引用，并处理受支持的审批与问答。
 
@@ -109,7 +109,7 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 
 ## 发布资产
 
-当前源码版本为 1.3.11；[查看正式发布](https://github.com/lich13/nexushub/releases)。正式发布页包含八项资产：
+当前源码版本为 1.4.0；[查看正式发布](https://github.com/lich13/nexushub/releases)。正式发布页包含八项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；
