@@ -38,16 +38,17 @@ def problems(data, private_values, scan_endpoint_literals=True):
     for match in RULES["private_home"].finditer(text):
         if match.group(1) not in EXAMPLE_USERS and not any(c in match.group(1) for c in "$[{(\\"):
             found.add("private_home")
-    for match in RULES["ipv4"].finditer(text):
+    # Native machine code and non-terminated string tables concatenate unrelated
+    # literals and include dependency license contacts. Scan their private values,
+    # paths and credentials; source, Git identities and text payloads retain
+    # IPv4, endpoint and email validation.
+    for match in (() if native_binary else RULES["ipv4"].finditer(text)):
         try:
             address = ipaddress.ip_address(match.group())
             if address.is_global:
                 found.add("public_ip")
         except ValueError:
             pass
-    # Native string tables concatenate unrelated literals and include dependency
-    # license contacts. Scan their private values, paths and credentials below;
-    # source, Git identities and text payloads retain endpoint/email validation.
     for match in (() if native_binary else RULES["email"].finditer(text)):
         if re.fullmatch(r"\d+x\d+@\d+x\.png", match.group()):
             continue

@@ -28,7 +28,7 @@ class PrivacyChecks(unittest.TestCase):
         self.assertIn("credential", rules)
 
     def test_native_payload_checks_private_values_without_string_table_false_positives(self):
-        data = b"\x7fELF\0http://concatenatedliteral\0fixture-private-value\0/Users/" + b"synthetic-person/source"
+        data = b"\x7fELF\01.4.0.1\0http://concatenatedliteral\0fixture-private-value\0/Users/" + b"synthetic-person/source"
         self.assertEqual(privacy.problems(data, ["fixture-private-value"]), ["private_home", "private_value"])
 
     def test_generated_frontend_skips_lexical_url_false_positives(self):
