@@ -220,6 +220,42 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
 
+    if version == "1.5.0":
+        sections = {
+            "版本概览": [
+                "恢复原生二进制公网 IP 隐私门禁并加固子会话删除安全边界，统一五类 Agent 最优交接路径、访达风格 ⌘ 多选与连续中间过程单框折叠，并深度打磨整体视觉体验；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "统一五类 Agent「复制路径」最优交接文件：Antigravity 优先复制完整纯文本转录日志，Grok Build 补齐行菜单与顶栏复制路径（优先 chat_history.jsonl），Codex 覆盖活跃与归档 rollout，Claude Code 与 DeepSeek Harness 保持明文优先的最优日志路径。",
+                "移除 Codex 五类状态栏及 Antigravity／DSH 顶部状态切换，活跃列表更纯净，底部提供按需加载的轻量折叠「已归档」抽屉；移除「多选线程」按钮与行首复选框，改为访达风格 ⌘ 点击切换、Shift 连选、多选右键菜单、⌘A／Escape／⌘⌫ 快捷键与底部轻量选择条。",
+                "参考 ChatGPT macOS App 统一折叠同一回合内交替的思考与工具执行过程，保持单执行组 DOM 结构零膨胀；深度精修浅／深色侧边栏、会话选中层次、阅读排版、代码块、时间线刻度与浮层质感。",
+            ],
+            "问题修复": [
+                "消除回环端口解析在 x86_64 机器码中产生的跨字面量立即数片段，恢复发布载荷对原生二进制的完整公网 IP 隐私扫描门禁。",
+                "Antigravity 与 DSH 删除执行端重新计算真实子会话闭包并拒绝越界或跨根 ID，逐项核验根与全部子会话运行／持锁状态；在线 RPC 或文件系统首错即停，不误删磁盘文件并准确返回 residuals。",
+                "修复带游标分页轮询抹掉首页 timeline、Antigravity 在线批注轮次漏提、Grok 首轮提示缺失及折叠历史定位导致的左侧横线时间线失效；修复 Antigravity 在后台任务、定时器或子代理尚未收敛时提前发送完成 Bark 提醒的问题。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；线程列表查询收敛为布尔 archived 参数（默认返回活跃会话），并支持直接打开 Codex 已归档线程阅读完整详情。",
+                "既有本地数据库、Bark 通知配置、Keychain 远端连接与各 Agent 原生会话目录无需迁移。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App；随后核验五类 Agent 复制路径、底部「已归档」抽屉、访达风格 ⌘／Shift 多选、连续中间过程折叠与左侧横线时间线定位。",
+                "DSH 归档、恢复与永久删除前须退出目标机器正在运行的 DSH 进程；真实用户会话删除、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
+
     if version == "1.4.0":
         sections = {
             "版本概览": [
