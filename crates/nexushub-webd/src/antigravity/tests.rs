@@ -167,3 +167,80 @@ async fn scan_paginates_steps_and_suppresses_completion_while_subtrajectory_runs
 
     task.abort();
 }
+
+#[tokio::test]
+async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_trajectory() {
+    let root_id = "33333333-3333-4333-8333-333333333333";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new()
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectory"),
+            post(|| async { StatusCode::PAYLOAD_TOO_LARGE.into_response() }),
+        )
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectorySteps"),
+            post(|axum::Json(body): axum::Json<Value>| async move {
+                assert_eq!(body["stepOffset"], json!(2305));
+                axum::Json(json!({
+                    "steps": [
+                        {
+                            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": { "executionId": "exec-99", "createdAt": "2026-10-29T04:00:00Z" }
+                        },
+                        {
+                            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "executionId": "exec-99",
+                                "createdAt": "2026-10-29T04:00:02Z",
+                                "completedAt": "2026-10-29T04:00:05Z"
+                            },
+                            "plannerResponse": { "response": "Long session completed via incremental steps." }
+                        }
+                    ]
+                }))
+            }),
+        );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let summaries = json!({
+        "trajectorySummaries": {
+            root_id: {
+                "trajectoryId": "traj-long",
+                "createdTime": "2026-10-28T00:00:00Z",
+                "lastModifiedTime": "2026-10-29T04:00:05Z",
+                "summary": "2300-step long session",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 2307,
+                "lastUserInputStepIndex": 2305,
+                "latestExecutorTerminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL",
+                "trajectoryMetadata": { "rootConversationId": root_id }
+            }
+        }
+    });
+    let scan = scan_at(
+        &client().unwrap(),
+        port,
+        "fixture-token",
+        99,
+        &summaries,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams.len(), 1);
+    assert_eq!(scan.streams[0].record_count, 2307);
+    assert_eq!(scan.streams[0].settled_count, 2307);
+    assert_eq!(scan.streams[0].events.len(), 1);
+    assert_eq!(scan.streams[0].events[0].position, 2307);
+    assert_eq!(scan.streams[0].events[0].turn_id, "exec-99");
+    assert_eq!(
+        scan.streams[0].events[0].body,
+        "Long session completed via incremental steps."
+    );
+    task.abort();
+}

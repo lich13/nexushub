@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use serde_json::{json, Value};
 
@@ -112,8 +115,10 @@ pub fn app_server_thread_summary(
             .and_then(Value::as_str)
             .map(str::to_string)
             .or_else(|| fallback.and_then(|thread| thread.model.clone())),
-        rollout_path: app_thread_rollout_path(thread)
-            .or_else(|| fallback.and_then(|thread| thread.rollout_path.clone())),
+        rollout_path: resolve_preferred_rollout_path(
+            app_thread_rollout_path(thread),
+            fallback.and_then(|thread| thread.rollout_path.as_deref()),
+        ),
         active_turn_id,
         active_job_id: fallback.and_then(|thread| thread.active_job_id.clone()),
         pending_elicitation: if matches!(status, ThreadStatus::ReplyNeeded | ThreadStatus::Archived)
@@ -189,9 +194,10 @@ pub fn apply_app_server_thread_detail(detail: &mut ThreadDetail, value: &Value) 
     {
         detail.summary.model = Some(model.to_string());
     }
-    if detail.summary.rollout_path.is_none() {
-        detail.summary.rollout_path = app_thread_rollout_path(thread);
-    }
+    detail.summary.rollout_path = resolve_preferred_rollout_path(
+        app_thread_rollout_path(thread),
+        detail.summary.rollout_path.as_deref(),
+    );
     let mut rollout_enriched = false;
     if detail.summary.rollout_path.is_some() {
         rollout_enriched = codex::enrich_thread_from_rollout(&mut detail.summary).is_ok();
@@ -754,8 +760,36 @@ fn app_thread_rollout_path(thread: &Value) -> Option<PathBuf> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .filter(|path| path.ends_with(".jsonl") || path.contains("rollout-"))
+        .filter(|path| {
+            path.ends_with(".jsonl")
+                || path.ends_with(".jsonl.zst")
+                || path.ends_with(".zst")
+                || path.contains("rollout-")
+        })
         .map(PathBuf::from)
+}
+
+fn existing_rollout_variant(path: &Path) -> Option<PathBuf> {
+    [
+        crate::codex::rollout_file::plain_path(path),
+        path.to_path_buf(),
+        crate::codex::rollout_file::compressed_path(path),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+}
+
+fn resolve_preferred_rollout_path(
+    app_path: Option<PathBuf>,
+    fallback: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(existing) = app_path.as_deref().and_then(existing_rollout_variant) {
+        return Some(existing);
+    }
+    if let Some(existing) = fallback.and_then(existing_rollout_variant) {
+        return Some(existing);
+    }
+    app_path.or_else(|| fallback.map(Path::to_path_buf))
 }
 
 fn is_app_server_subagent_thread(thread: &Value) -> bool {
@@ -820,4 +854,36 @@ fn thread_archived(thread: &Value) -> bool {
 
 fn timestamp_to_rfc3339(value: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(value, 0).map(|dt| dt.to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn rollout_path_resolution_prefers_existing_compressed_or_relocated_handoff_file() {
+        let dir =
+            std::env::temp_dir().join(format!("nexushub-codex-handoff-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        fs::create_dir_all(dir.join("archived_sessions")).unwrap();
+
+        let stale_plain = dir.join("sessions/rollout-2026-10-29-demo.jsonl");
+        let existing_zst = dir.join("sessions/rollout-2026-10-29-demo.jsonl.zst");
+        fs::write(&existing_zst, b"compressed").unwrap();
+        assert_eq!(
+            resolve_preferred_rollout_path(Some(stale_plain.clone()), None),
+            Some(existing_zst.clone())
+        );
+        fs::remove_file(&existing_zst).unwrap();
+
+        let relocated = dir.join("archived_sessions/rollout-2026-10-29-demo.jsonl");
+        fs::write(&relocated, b"{}\n").unwrap();
+        assert_eq!(
+            resolve_preferred_rollout_path(Some(stale_plain), Some(&relocated)),
+            Some(relocated)
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

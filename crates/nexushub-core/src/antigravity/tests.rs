@@ -269,3 +269,116 @@ fn fork_inherited_executions_never_become_new_completion_events() {
     }
     assert!(snapshot(ID, &s, &r).unwrap().events.is_empty());
 }
+
+#[test]
+fn silent_subagents_and_background_tasks_without_system_message_eventually_deliver_completion() {
+    let sub_id = "22222222-2222-4222-8222-222222222222";
+    let task_id = format!("{ID}/task-202");
+    let summary = json!({
+        "trajectoryId": "fixture-trajectory",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "summary": "Silent subagent and task",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+    // Base timestamp: 2026-01-01T00:00:10Z = 1_767_225_610_000 ms
+    let base_ms = native_probe::timestamp(&json!("2026-01-01T00:00:10Z")).unwrap();
+    let response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "stepOffset": 2300,
+        "numTotalSteps": 2304,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-tail", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "taskDetails": {
+                        "id": task_id,
+                        "movedToBackgroundAt": "2026-01-01T00:00:02Z",
+                        "logUri": "file:///tmp/task-202.log"
+                    },
+                    "generic": { "name": "run_command", "arguments": "{\"IsDaemon\":false}" },
+                    "metadata": { "executionId": "exec-tail", "createdAt": "2026-01-01T00:00:02Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": {
+                        "name": "send_message",
+                        "arguments": format!("{{\"Recipient\":\"{sub_id}\",\"Message\":\"ping\"}}")
+                    },
+                    "metadata": { "executionId": "exec-tail", "createdAt": "2026-01-01T00:00:05Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-tail",
+                        "createdAt": "2026-01-01T00:00:09Z",
+                        "completedAt": "2026-01-01T00:00:10Z"
+                    },
+                    "plannerResponse": { "response": "Completed after subagent & task exit." }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "exec-tail",
+                    "lastStepIdx": 2303,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+
+    // 1. While subagent or task is still active (even 2 minutes later), never fire prematurely
+    let mut ctx = TrajectoryLivenessContext {
+        has_active_subagents: false,
+        now_ms: Some(base_ms + 120_000),
+        subagents: BTreeMap::from([(
+            sub_id.into(),
+            SubagentLiveness {
+                active: true,
+                last_modified_ms: Some(base_ms + 5_000),
+            },
+        )]),
+        tasks: BTreeMap::from([(
+            task_id.clone(),
+            TaskLiveness {
+                active: false,
+                last_activity_ms: Some(base_ms + 4_000),
+            },
+        )]),
+    };
+    assert!(snapshot_with_context(ID, &summary, &response, &ctx)
+        .unwrap()
+        .events
+        .is_empty());
+
+    // 2. Both subagent and task become idle at base_ms + 5_000, inside 15s grace window -> hold
+    ctx.subagents.get_mut(sub_id).unwrap().active = false;
+    ctx.now_ms = Some(base_ms + 5_000 + BACKGROUND_HANDOFF_GRACE_MS - 1);
+    let within_grace = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
+    assert!(within_grace.events.is_empty());
+    assert_eq!(within_grace.settled_count, 2300);
+
+    // 3. Past 15s grace window without SYSTEM_MESSAGE -> guaranteed completion delivery!
+    ctx.now_ms = Some(base_ms + 5_000 + BACKGROUND_HANDOFF_GRACE_MS);
+    let settled = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
+    assert_eq!(settled.record_count, 2304);
+    assert_eq!(settled.settled_count, 2304);
+    assert_eq!(settled.events.len(), 1);
+    assert_eq!(settled.events[0].kind, "completion");
+    assert_eq!(settled.events[0].position, 2304);
+    assert_eq!(settled.events[0].turn_id, "exec-tail");
+    assert_eq!(
+        settled.events[0].body,
+        "Completed after subagent & task exit."
+    );
+}

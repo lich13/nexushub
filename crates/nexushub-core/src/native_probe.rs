@@ -240,7 +240,7 @@ pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
     )
 }
 
-pub(crate) fn timestamp(value: &Value) -> Option<i64> {
+pub fn timestamp(value: &Value) -> Option<i64> {
     value
         .as_i64()
         .map(|n| {

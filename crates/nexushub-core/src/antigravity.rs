@@ -205,32 +205,84 @@ fn cascade_status_is_active(status: Option<&str>) -> bool {
     )
 }
 
-fn has_unsettled_background_work(id: &str, summary_trajectory_id: &str, steps: &[Value]) -> bool {
+pub const BACKGROUND_HANDOFF_GRACE_MS: i64 = 15_000;
+pub const UNTRACKED_TASK_QUIESCENCE_MS: i64 = 60_000;
+
+#[derive(Debug, Clone, Default)]
+pub struct SubagentLiveness {
+    pub active: bool,
+    pub last_modified_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskLiveness {
+    pub active: bool,
+    pub last_activity_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TrajectoryLivenessContext {
+    pub has_active_subagents: bool,
+    pub now_ms: Option<i64>,
+    pub subagents: BTreeMap<String, SubagentLiveness>,
+    pub tasks: BTreeMap<String, TaskLiveness>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingTaskRecord {
+    spawn_ms: Option<i64>,
+    expected_deadline_ms: Option<i64>,
+    log_uri: Option<String>,
+}
+
+fn step_activity_timestamp_ms(step: &Value) -> Option<i64> {
+    native_probe::timestamp(&step["metadata"]["completedAt"])
+        .or_else(|| native_probe::timestamp(&step["metadata"]["finishedGeneratingAt"]))
+        .or_else(|| native_probe::timestamp(&step["metadata"]["createdAt"]))
+}
+
+fn step_is_foreign(id: &str, summary_trajectory_id: &str, step: &Value) -> bool {
+    let source = &step["metadata"]["sourceTrajectoryStepInfo"];
+    source["trajectoryId"]
+        .as_str()
+        .is_some_and(|orig| !summary_trajectory_id.is_empty() && orig != summary_trajectory_id)
+        || source["cascadeId"]
+            .as_str()
+            .is_some_and(|orig| !orig.is_empty() && orig != id)
+}
+
+struct TurnPendingWork {
+    last_root_step_ms: Option<i64>,
+    pending_tasks: BTreeMap<String, PendingTaskRecord>,
+    pending_subagents: BTreeMap<String, Option<i64>>,
+}
+
+fn collect_turn_pending_work(
+    id: &str,
+    summary_trajectory_id: &str,
+    steps: &[Value],
+) -> TurnPendingWork {
     let turn_start = steps
         .iter()
         .enumerate()
         .rev()
         .find(|(_, step)| {
-            let source = &step["metadata"]["sourceTrajectoryStepInfo"];
-            let inherited = source["trajectoryId"]
-                .as_str()
-                .is_some_and(|orig| orig != summary_trajectory_id)
-                || source["cascadeId"].as_str().is_some_and(|orig| orig != id);
-            !inherited && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
+            !step_is_foreign(id, summary_trajectory_id, step)
+                && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
         })
         .map_or(0, |(idx, _)| idx + 1);
 
-    let mut pending_tasks: BTreeSet<String> = BTreeSet::new();
-    let mut pending_subagents: BTreeSet<String> = BTreeSet::new();
+    let mut last_root_step_ms: Option<i64> = None;
+    let mut pending_tasks: BTreeMap<String, PendingTaskRecord> = BTreeMap::new();
+    let mut pending_subagents: BTreeMap<String, Option<i64>> = BTreeMap::new();
 
     for step in &steps[turn_start..] {
-        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
-        if source["trajectoryId"]
-            .as_str()
-            .is_some_and(|orig| orig != summary_trajectory_id)
-            || source["cascadeId"].as_str().is_some_and(|orig| orig != id)
-        {
+        if step_is_foreign(id, summary_trajectory_id, step) {
             continue;
+        }
+        let step_ms = step_activity_timestamp_ms(step);
+        if let Some(ms) = step_ms {
+            last_root_step_ms = Some(last_root_step_ms.map_or(ms, |prev| prev.max(ms)));
         }
         if step["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE" {
             if let Some(sender) = step["systemMessage"]["agentMessage"]["sender"]
@@ -247,7 +299,32 @@ fn has_unsettled_background_work(id: &str, summary_trajectory_id: &str, steps: &
         let args = step_tool_args(step);
         if let Some(task_id) = step["taskDetails"]["id"].as_str().filter(|s| !s.is_empty()) {
             if !step_is_daemon_task(step, &args) {
-                pending_tasks.insert(task_id.to_owned());
+                let duration_secs = args["DurationSeconds"]
+                    .as_i64()
+                    .or_else(|| args["durationSeconds"].as_i64())
+                    .or_else(|| step["schedule"]["durationSeconds"].as_i64())
+                    .filter(|&d| d > 0);
+                let spawn_ms = native_probe::timestamp(&step["taskDetails"]["movedToBackgroundAt"])
+                    .or(step_ms);
+                let expected_deadline_ms = match (spawn_ms, duration_secs) {
+                    (Some(start), Some(secs)) => {
+                        Some(start.saturating_add(secs.saturating_mul(1000)))
+                    }
+                    _ => None,
+                };
+                let log_uri = step["taskDetails"]["logUri"]
+                    .as_str()
+                    .or_else(|| step["taskDetails"]["logAbsoluteUri"].as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                pending_tasks.insert(
+                    task_id.to_owned(),
+                    PendingTaskRecord {
+                        spawn_ms,
+                        expected_deadline_ms,
+                        log_uri,
+                    },
+                );
             }
         }
         if tool_name == "manage_task" && settled(step) {
@@ -263,15 +340,19 @@ fn has_unsettled_background_work(id: &str, summary_trajectory_id: &str, steps: &
         } else if (tool_name == "invoke_subagent" || !step["invokeSubagent"].is_null())
             && settled(step)
         {
-            collect_spawned_subagent_ids(&step["generic"]["result"], &mut pending_subagents);
-            collect_spawned_subagent_ids(&step["invokeSubagent"], &mut pending_subagents);
+            let mut spawned = BTreeSet::new();
+            collect_spawned_subagent_ids(&step["generic"]["result"], &mut spawned);
+            collect_spawned_subagent_ids(&step["invokeSubagent"], &mut spawned);
+            for cid in spawned {
+                pending_subagents.insert(cid, step_ms);
+            }
         } else if tool_name == "send_message" && settled(step) {
             if let Some(recipient) = args["Recipient"]
                 .as_str()
                 .or_else(|| args["recipient"].as_str())
                 .filter(|cid| uuid::Uuid::parse_str(cid).is_ok())
             {
-                pending_subagents.insert(recipient.to_owned());
+                pending_subagents.insert(recipient.to_owned(), step_ms);
             }
         } else if tool_name == "manage_subagents" && settled(step) {
             let action = args["Action"]
@@ -293,11 +374,103 @@ fn has_unsettled_background_work(id: &str, summary_trajectory_id: &str, steps: &
         }
     }
 
-    !pending_tasks.is_empty() || !pending_subagents.is_empty()
+    TurnPendingWork {
+        last_root_step_ms,
+        pending_tasks,
+        pending_subagents,
+    }
+}
+
+pub fn collect_pending_task_logs(
+    id: &str,
+    summary_trajectory_id: &str,
+    steps: &[Value],
+) -> BTreeMap<String, String> {
+    let work = collect_turn_pending_work(id, summary_trajectory_id, steps);
+    work.pending_tasks
+        .into_iter()
+        .filter_map(|(task_id, rec)| rec.log_uri.map(|uri| (task_id, uri)))
+        .collect()
+}
+
+fn has_unsettled_background_work(
+    id: &str,
+    summary_trajectory_id: &str,
+    steps: &[Value],
+    ctx: &TrajectoryLivenessContext,
+) -> bool {
+    let TurnPendingWork {
+        last_root_step_ms,
+        pending_tasks,
+        pending_subagents,
+    } = collect_turn_pending_work(id, summary_trajectory_id, steps);
+
+    if pending_tasks.is_empty() && pending_subagents.is_empty() {
+        return false;
+    }
+    let Some(now_ms) = ctx.now_ms else {
+        return true;
+    };
+
+    for (cid, spawn_ms) in &pending_subagents {
+        let sub = ctx.subagents.get(cid);
+        if sub.is_some_and(|s| s.active) {
+            return true;
+        }
+        let anchor_ms = [
+            last_root_step_ms,
+            *spawn_ms,
+            sub.and_then(|s| s.last_modified_ms),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(now_ms);
+        if now_ms.saturating_sub(anchor_ms) < BACKGROUND_HANDOFF_GRACE_MS {
+            return true;
+        }
+    }
+
+    for (task_id, rec) in &pending_tasks {
+        if let Some(task) = ctx.tasks.get(task_id) {
+            if task.active {
+                return true;
+            }
+            let anchor_ms = [
+                last_root_step_ms,
+                rec.spawn_ms,
+                rec.expected_deadline_ms,
+                task.last_activity_ms,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(now_ms);
+            if now_ms.saturating_sub(anchor_ms) < BACKGROUND_HANDOFF_GRACE_MS {
+                return true;
+            }
+        } else {
+            let grace = if rec.expected_deadline_ms.is_some() {
+                BACKGROUND_HANDOFF_GRACE_MS
+            } else {
+                UNTRACKED_TASK_QUIESCENCE_MS
+            };
+            let anchor_ms = [last_root_step_ms, rec.spawn_ms, rec.expected_deadline_ms]
+                .into_iter()
+                .flatten()
+                .max()
+                .unwrap_or(now_ms);
+            if now_ms.saturating_sub(anchor_ms) < grace {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 pub fn snapshot(id: &str, summary: &Value, response: &Value) -> Result<NativeStreamSnapshot> {
-    snapshot_with_subagents(id, summary, response, false)
+    snapshot_with_context(id, summary, response, &TrajectoryLivenessContext::default())
 }
 
 pub fn snapshot_with_subagents(
@@ -306,20 +479,37 @@ pub fn snapshot_with_subagents(
     response: &Value,
     has_active_subagents: bool,
 ) -> Result<NativeStreamSnapshot> {
+    snapshot_with_context(
+        id,
+        summary,
+        response,
+        &TrajectoryLivenessContext {
+            has_active_subagents,
+            ..Default::default()
+        },
+    )
+}
+
+pub fn snapshot_with_context(
+    id: &str,
+    summary: &Value,
+    response: &Value,
+    ctx: &TrajectoryLivenessContext,
+) -> Result<NativeStreamSnapshot> {
     let identity = identity(id, summary)?;
     let trajectory = &response["trajectory"];
     ensure!(
         trajectory["cascadeId"] == id && trajectory["trajectoryId"] == summary["trajectoryId"],
         "Antigravity source identity changed"
     );
+    let step_offset = response["stepOffset"].as_u64().unwrap_or(0) as usize;
     let steps = trajectory["steps"]
         .as_array()
         .context("missing Antigravity steps")?;
-    let count = response["numTotalSteps"]
-        .as_u64()
-        .unwrap_or(steps.len() as u64);
+    let total_steps = step_offset.saturating_add(steps.len()) as u64;
+    let count = response["numTotalSteps"].as_u64().unwrap_or(total_steps);
     ensure!(
-        count == steps.len() as u64 && count <= 200_000,
+        count == total_steps && count <= 200_000,
         "incomplete Antigravity trajectory"
     );
     let executors = trajectory["executorMetadatas"]
@@ -330,7 +520,8 @@ pub fn snapshot_with_subagents(
         .and_then(|e| e["executionId"].as_str())
         .unwrap_or("");
     let summary_trajectory_id = summary["trajectoryId"].as_str().unwrap_or("");
-    let cascade_active = has_active_subagents
+    let cascade_active = ctx.has_active_subagents
+        || ctx.subagents.values().any(|s| s.active)
         || cascade_status_is_active(summary["status"].as_str())
         || cascade_status_is_active(response["status"].as_str())
         || summary["notFullyIdle"].as_bool() == Some(true)
@@ -338,29 +529,26 @@ pub fn snapshot_with_subagents(
         || summary["waitingSteps"]
             .as_array()
             .is_some_and(|arr| !arr.is_empty());
-    let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps);
+    let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps, ctx);
     let mut by_execution: BTreeMap<&str, Vec<(usize, &Value)>> = BTreeMap::new();
     let mut events = Vec::new();
     let mut settled_count = count;
-    for (index, step) in steps.iter().enumerate() {
-        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
-        if source["trajectoryId"]
-            .as_str()
-            .is_some_and(|original| original != summary_trajectory_id)
-            || source["cascadeId"]
-                .as_str()
-                .is_some_and(|original| original != id)
-        {
+    for (local_index, step) in steps.iter().enumerate() {
+        let global_index = step_offset + local_index;
+        if step_is_foreign(id, summary_trajectory_id, step) {
             continue; // Forked / inherited steps belong to the original conversation.
         }
         let exec = execution(step);
         if !exec.is_empty() {
-            by_execution.entry(exec).or_default().push((index, step));
+            by_execution
+                .entry(exec)
+                .or_default()
+                .push((global_index, step));
         }
         if !settled(step) {
-            settled_count = settled_count.min(index as u64);
+            settled_count = settled_count.min(global_index as u64);
         }
-        if let Some(event) = interaction(step, index)? {
+        if let Some(event) = interaction(step, global_index)? {
             events.push(event);
         }
     }
@@ -384,10 +572,10 @@ pub fn snapshot_with_subagents(
             }
             continue;
         }
-        let Some((last_index, last)) = group.last() else {
+        let Some((last_global_index, last)) = group.last() else {
             continue;
         };
-        if end != Some(*last_index as u64) {
+        if end != Some(*last_global_index as u64) {
             if exec == latest {
                 settled_count = settled_count.min(group[0].0 as u64);
             }
@@ -411,14 +599,17 @@ pub fn snapshot_with_subagents(
             _ => continue,
         };
         if kind == "completion"
-            && (*last_index + 1 < steps.len() || cascade_active || unsettled_background)
+            && ((*last_global_index as u64 + 1) < count || cascade_active || unsettled_background)
         {
             settled_count = settled_count.min(group[0].0 as u64);
             continue;
         }
+        let local_after = last_global_index
+            .saturating_sub(step_offset)
+            .saturating_add(1);
         // User cancellation or a new execution invalidates a previous failure.
         if kind == "failure"
-            && (steps.iter().skip(last_index + 1).any(|s| {
+            && (steps.iter().skip(local_after).any(|s| {
                 s["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
                     || s["type"] == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
                     || (!execution(s).is_empty() && execution(s) != exec)
@@ -444,7 +635,7 @@ pub fn snapshot_with_subagents(
         };
         events.push(NativeTurnEvent {
             prompt_id: None,
-            position: *last_index as u64 + 1,
+            position: *last_global_index as u64 + 1,
             turn_id: exec.into(),
             kind: kind.into(),
             body,

@@ -788,6 +788,15 @@ fn native_history_fallback_preserves_messages_tools_and_paging_without_system_co
 #[test]
 fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_turn() {
     let (paths, id, path) = fixture();
+    // 0. Empty 0B updates.jsonl must not shadow a non-empty events.jsonl handoff file
+    fs::write(path.join("updates.jsonl"), "").unwrap();
+    fs::write(path.join("events.jsonl"), "{\"type\":\"turn_started\"}\n").unwrap();
+    assert_eq!(
+        crate::grok::grok_handoff_path(&path),
+        path.join("events.jsonl")
+    );
+    fs::remove_file(path.join("events.jsonl")).unwrap();
+
     // 1. Only updates.jsonl exists -> handoff_path is updates.jsonl
     let s1 = resolve_session(&paths, &id).unwrap();
     let canonical_dir = s1.path.clone();

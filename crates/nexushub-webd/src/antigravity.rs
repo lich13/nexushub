@@ -12,7 +12,7 @@ use std::{
 };
 
 const SERVICE: &str = "/exa.language_server_pb.LanguageServerService/";
-const LIMIT: usize = nexushub_core::resource_limits::REMOTE_RESPONSE_BYTES;
+const LIMIT: usize = nexushub_core::resource_limits::ANTIGRAVITY_LOCAL_RPC_BYTES;
 static CACHE: tokio::sync::Mutex<VecDeque<(String, String, NativeStreamSnapshot)>> =
     tokio::sync::Mutex::const_new(VecDeque::new());
 struct Endpoint {
@@ -225,7 +225,9 @@ fn summary_is_active(item: &Value) -> bool {
         || item["hasRunningSubagents"].as_bool() == Some(true)
 }
 
-fn active_subagent_roots(summaries: &serde_json::Map<String, Value>) -> BTreeSet<String> {
+fn collect_subagents_by_root(
+    summaries: &serde_json::Map<String, Value>,
+) -> BTreeMap<String, BTreeMap<String, antigravity::SubagentLiveness>> {
     let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
     for (cid, item) in summaries {
         if let Some(pid) = item["parentConversationId"]
@@ -236,30 +238,216 @@ fn active_subagent_roots(summaries: &serde_json::Map<String, Value>) -> BTreeSet
             parents.insert(cid.as_str(), pid);
         }
     }
-    let mut active_roots = BTreeSet::new();
+    let mut by_root: BTreeMap<String, BTreeMap<String, antigravity::SubagentLiveness>> =
+        BTreeMap::new();
     for (cid, item) in summaries {
-        if !is_subtrajectory(cid, item) || !summary_is_active(item) {
+        if !is_subtrajectory(cid, item) {
             continue;
         }
+        let liveness = antigravity::SubagentLiveness {
+            active: summary_is_active(item),
+            last_modified_ms: nexushub_core::native_probe::timestamp(&item["lastModifiedTime"])
+                .or_else(|| nexushub_core::native_probe::timestamp(&item["createdTime"])),
+        };
+        let mut target_roots = BTreeSet::new();
         if let Some(root) = item["rootConversationId"]
             .as_str()
             .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
             .filter(|s| !s.is_empty() && *s != cid)
         {
-            active_roots.insert(root.to_owned());
+            target_roots.insert(root.to_owned());
         }
         let mut curr = cid.as_str();
         let mut hops = 0usize;
         while let Some(&pid) = parents.get(curr) {
-            active_roots.insert(pid.to_owned());
+            target_roots.insert(pid.to_owned());
             curr = pid;
             hops += 1;
             if hops >= 16 {
                 break;
             }
         }
+        for root in target_roots {
+            by_root
+                .entry(root)
+                .or_default()
+                .insert(cid.clone(), liveness.clone());
+        }
     }
-    active_roots
+    by_root
+}
+
+fn decode_local_file_uri(uri: &str) -> Option<std::path::PathBuf> {
+    let raw = uri.trim();
+    let stripped = raw.strip_prefix("file://").unwrap_or(raw);
+    let bytes = stripped.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(hex);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let path = std::path::PathBuf::from(String::from_utf8_lossy(&out).into_owned());
+    path.is_absolute().then_some(path)
+}
+
+fn has_open_file_handle(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        let bin = if std::path::Path::new("/usr/sbin/lsof").is_file() {
+            "/usr/sbin/lsof"
+        } else {
+            "lsof"
+        };
+        std::process::Command::new(bin)
+            .args(["-Fp", "--"])
+            .arg(path)
+            .output()
+            .is_ok_and(|out| out.status.success() && out.stdout.contains(&b'p'))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn inspect_task_log(log_uri: &str) -> Option<antigravity::TaskLiveness> {
+    let path = decode_local_file_uri(log_uri)?;
+    let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file())?;
+    let last_activity_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+    Some(antigravity::TaskLiveness {
+        active: has_open_file_handle(&path),
+        last_activity_ms,
+    })
+}
+
+async fn fetch_incremental_turn_trajectory(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    id: &str,
+    summary: &Value,
+) -> Result<Option<Value>> {
+    let Some(total) = summary["stepCount"]
+        .as_u64()
+        .filter(|&n| n > 0 && n <= 200_000)
+    else {
+        return Ok(None);
+    };
+    let Some(turn_offset) = summary["lastUserInputStepIndex"]
+        .as_u64()
+        .filter(|&off| off < total)
+    else {
+        return Ok(None);
+    };
+    let Some(latest_reason) = summary["latestExecutorTerminationReason"].as_str() else {
+        return Ok(None);
+    };
+    let total_usize = total as usize;
+    let offset_usize = turn_offset as usize;
+    let mut steps = Vec::new();
+    while offset_usize + steps.len() < total_usize && steps.len() < 50_000 {
+        let more = query(
+            client,
+            port,
+            token,
+            "GetCascadeTrajectorySteps",
+            json!({"cascadeId": id, "stepOffset": offset_usize + steps.len()}),
+        )
+        .await?;
+        let Some(batch) = more["steps"].as_array().filter(|b| !b.is_empty()) else {
+            break;
+        };
+        steps.extend(batch.iter().cloned());
+    }
+    if offset_usize + steps.len() != total_usize {
+        return Ok(None);
+    }
+    let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
+    let mut exec_order: Vec<String> = Vec::new();
+    let mut last_idx_by_exec: BTreeMap<String, usize> = BTreeMap::new();
+    for (local_idx, step) in steps.iter().enumerate() {
+        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
+        let foreign = source["trajectoryId"]
+            .as_str()
+            .is_some_and(|orig| !summary_traj_id.is_empty() && orig != summary_traj_id)
+            || source["cascadeId"]
+                .as_str()
+                .is_some_and(|orig| !orig.is_empty() && orig != id);
+        if foreign {
+            continue;
+        }
+        if let Some(exec_id) = step["metadata"]["executionId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+        {
+            if !last_idx_by_exec.contains_key(exec_id) {
+                exec_order.push(exec_id.to_owned());
+            }
+            last_idx_by_exec.insert(exec_id.to_owned(), offset_usize + local_idx);
+        }
+    }
+    if exec_order.is_empty() {
+        return Ok(None);
+    }
+    let last_pos = exec_order.len() - 1;
+    let metas: Vec<Value> = exec_order
+        .into_iter()
+        .enumerate()
+        .map(|(pos, exec_id)| {
+            let last_step_idx = last_idx_by_exec.get(&exec_id).copied().unwrap_or(0);
+            let reason = if pos == last_pos {
+                latest_reason
+            } else {
+                "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+            };
+            json!({
+                "executionId": exec_id,
+                "lastStepIdx": last_step_idx,
+                "terminationReason": reason,
+            })
+        })
+        .collect();
+    Ok(Some(json!({
+        "status": summary["status"],
+        "stepOffset": turn_offset,
+        "numTotalSteps": total,
+        "trajectory": {
+            "cascadeId": id,
+            "trajectoryId": summary["trajectoryId"],
+            "steps": steps,
+            "executorMetadatas": metas,
+        }
+    })))
+}
+
+async fn fetch_probe_trajectory(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    id: &str,
+    summary: &Value,
+) -> Result<Value> {
+    if let Ok(Some(incremental)) =
+        fetch_incremental_turn_trajectory(client, port, token, id, summary).await
+    {
+        return Ok(incremental);
+    }
+    fetch_complete_trajectory(client, port, token, id).await
 }
 
 async fn fetch_complete_trajectory(
@@ -345,7 +533,8 @@ async fn scan_at(
         summaries.len() <= 5000,
         "Antigravity source inventory exceeds limit"
     );
-    let active_roots = active_subagent_roots(summaries);
+    let subagents_by_root = collect_subagents_by_root(summaries);
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let mut scan = NativeScan::default();
     for (id, summary) in summaries {
         if is_subtrajectory(id, summary) {
@@ -354,7 +543,8 @@ async fn scan_at(
         if only.is_some_and(|target| target != id) {
             continue;
         }
-        let has_active_subagents = active_roots.contains(id);
+        let subagents = subagents_by_root.get(id).cloned().unwrap_or_default();
+        let has_active_subagents = subagents.values().any(|s| s.active);
         let signature = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
             pid,
             summary,
@@ -387,11 +577,38 @@ async fn scan_at(
             scan.errors += 1;
             continue;
         }
-        let result = fetch_complete_trajectory(client, port, token, id)
-            .await
-            .and_then(|response| {
-                antigravity::snapshot_with_subagents(id, summary, &response, has_active_subagents)
-            });
+        let result = match fetch_probe_trajectory(client, port, token, id, summary).await {
+            Ok(response) => {
+                let mut tasks = BTreeMap::new();
+                if !summary_is_active(summary) && !has_active_subagents {
+                    if let Some(steps) = response["trajectory"]["steps"].as_array() {
+                        let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
+                        let pending_logs =
+                            antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
+                        if !pending_logs.is_empty() {
+                            tasks = tokio::task::spawn_blocking(move || {
+                                pending_logs
+                                    .into_iter()
+                                    .filter_map(|(tid, uri)| {
+                                        inspect_task_log(&uri).map(|l| (tid, l))
+                                    })
+                                    .collect()
+                            })
+                            .await
+                            .unwrap_or_default();
+                        }
+                    }
+                }
+                let ctx = antigravity::TrajectoryLivenessContext {
+                    has_active_subagents,
+                    now_ms: Some(now_ms),
+                    subagents,
+                    tasks,
+                };
+                antigravity::snapshot_with_context(id, summary, &response, &ctx)
+            }
+            Err(err) => Err(err),
+        };
         match result {
             Ok(snapshot) => {
                 let mut cache = CACHE.lock().await;

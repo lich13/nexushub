@@ -55,13 +55,24 @@ pub struct GrokSessionSummary {
 }
 
 pub fn grok_handoff_path(session_dir: &Path) -> PathBuf {
-    let chat = session_dir.join("chat_history.jsonl");
-    if chat.is_file() {
-        return chat;
+    let candidates = [
+        session_dir.join("chat_history.jsonl"),
+        session_dir.join("updates.jsonl"),
+        session_dir.join("events.jsonl"),
+    ];
+    for candidate in &candidates {
+        if fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+            return candidate.clone();
+        }
     }
-    let updates = session_dir.join("updates.jsonl");
-    if updates.is_file() {
-        return updates;
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return candidate.clone();
+        }
+    }
+    let summary = session_dir.join("summary.json");
+    if summary.is_file() {
+        return summary;
     }
     session_dir.to_path_buf()
 }

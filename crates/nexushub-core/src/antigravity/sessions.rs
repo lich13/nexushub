@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     env,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
@@ -26,7 +26,7 @@ use crate::{
 };
 
 const SERVICE_PREFIX: &str = "/exa.language_server_pb.LanguageServerService/";
-const RESPONSE_LIMIT: usize = crate::resource_limits::REMOTE_RESPONSE_BYTES;
+const RESPONSE_LIMIT: usize = crate::resource_limits::ANTIGRAVITY_LOCAL_RPC_BYTES;
 const TRANSCRIPT_LINE_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
 
@@ -369,7 +369,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                 *port,
                 token,
                 "GetAllCascadeTrajectories",
-                &json!({"excludeSubtrajectories": true}),
+                &json!({"excludeSubtrajectories": false}),
             )
             .ok()?;
             value["trajectorySummaries"].is_object().then_some((
@@ -387,7 +387,7 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                         port,
                         &token,
                         "GetAllCascadeTrajectories",
-                        &json!({"excludeSubtrajectories": true}),
+                        &json!({"excludeSubtrajectories": false}),
                     ) {
                         if value["trajectorySummaries"].is_object() {
                             return Some((LiveRpc { port, token }, value));
@@ -667,10 +667,59 @@ fn attach_storage_size(paths: &AntigravityPaths, summary: &mut ProviderSessionSu
     summary.storage_size = Some(size);
 }
 
+fn active_subagent_roots_from_summaries(
+    summaries: &serde_json::Map<String, Value>,
+) -> BTreeSet<String> {
+    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+    for (cid, item) in summaries {
+        if let Some(pid) = item["parentConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+            .filter(|s| !s.is_empty())
+        {
+            parents.insert(cid.as_str(), pid);
+        }
+    }
+    let mut active_roots = BTreeSet::new();
+    for (cid, item) in summaries {
+        let parent = item["parentConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+            .unwrap_or("");
+        let depth = item["nestingDepth"]
+            .as_i64()
+            .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
+            .unwrap_or(0);
+        let root = item["rootConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+            .unwrap_or("");
+        let is_sub = !parent.is_empty() || depth > 0 || (!root.is_empty() && root != cid);
+        if !is_sub || !live_item_is_running(item) {
+            continue;
+        }
+        if !root.is_empty() && root != cid {
+            active_roots.insert(root.to_owned());
+        }
+        let mut curr = cid.as_str();
+        let mut hops = 0usize;
+        while let Some(&pid) = parents.get(curr) {
+            active_roots.insert(pid.to_owned());
+            curr = pid;
+            hops += 1;
+            if hops >= 16 {
+                break;
+            }
+        }
+    }
+    active_roots
+}
+
 fn summary_from_live_json(
     paths: &AntigravityPaths,
     id: &str,
     item: &Value,
+    has_active_subagents: bool,
 ) -> Option<ProviderSessionSummary> {
     if uuid::Uuid::parse_str(id).is_err() {
         return None;
@@ -727,7 +776,7 @@ fn summary_from_live_json(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
     let step_count = item["stepCount"].as_u64().unwrap_or(0) as usize;
-    let running = !archived && (live_item_is_running(item) || is_presence_locked(paths, id));
+    let running = !archived && (live_item_is_running(item) || has_active_subagents);
     let status = if archived {
         "archived"
     } else if running {
@@ -836,7 +885,6 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             .and_then(|uris| uris.into_iter().next())
                             .map(|uri| decode_file_uri(&uri))
                             .unwrap_or_default();
-                        let running = !archived && is_presence_locked(paths, &id);
                         let mut summary = ProviderSessionSummary {
                             storage_size: None,
                             id: id.clone(),
@@ -848,22 +896,14 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             updated_at: (!modified.trim().is_empty()).then_some(modified),
                             message_count: steps.max(0) as usize,
                             last_message: (!preview.trim().is_empty()).then_some(preview),
-                            status: if archived {
-                                "archived"
-                            } else if running {
-                                "running"
-                            } else {
-                                "idle"
-                            }
-                            .into(),
+                            status: if archived { "archived" } else { "idle" }.into(),
                             format_version: "sqlite-offline".into(),
                             can_rename: true,
                             rename_block_reason: None,
                             can_archive: true,
                             archive_block_reason: None,
-                            can_delete: !running,
-                            delete_block_reason: running
-                                .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
+                            can_delete: true,
+                            delete_block_reason: None,
                             read_error: None,
                             read_warning: None,
                         };
@@ -885,7 +925,6 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                 }
                 let overlay = read_annotation_overlay(paths, &id);
                 let archived = overlay.archived.unwrap_or(false);
-                let running = !archived && is_presence_locked(paths, &id);
                 let updated_at = entry
                     .metadata()
                     .ok()
@@ -902,22 +941,14 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                     updated_at,
                     message_count: 0,
                     last_message: None,
-                    status: if archived {
-                        "archived"
-                    } else if running {
-                        "running"
-                    } else {
-                        "idle"
-                    }
-                    .into(),
+                    status: if archived { "archived" } else { "idle" }.into(),
                     format_version: "brain-offline".into(),
                     can_rename: true,
                     rename_block_reason: None,
                     can_archive: true,
                     archive_block_reason: None,
-                    can_delete: !running,
-                    delete_block_reason: running
-                        .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
+                    can_delete: true,
+                    delete_block_reason: None,
                     read_error: None,
                     read_warning: None,
                 };
@@ -946,11 +977,15 @@ impl rusqlite::types::FromSql for ValueOrString {
 
 fn list_all_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessionSummary>> {
     let mut items = if let Some((_, payload)) = connect_endpoint(paths) {
-        payload["trajectorySummaries"]
-            .as_object()
-            .into_iter()
+        let map = payload["trajectorySummaries"].as_object();
+        let active_roots = map
+            .map(active_subagent_roots_from_summaries)
+            .unwrap_or_default();
+        map.into_iter()
             .flatten()
-            .filter_map(|(id, item)| summary_from_live_json(paths, id, item))
+            .filter_map(|(id, item)| {
+                summary_from_live_json(paths, id, item, active_roots.contains(id))
+            })
             .collect::<Vec<_>>()
     } else {
         list_offline_summaries(paths)?
@@ -1094,7 +1129,30 @@ fn format_artifact_comment(entry: &Value) -> Option<String> {
 }
 
 fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEvent> {
+    let mut has_later_planner = vec![false; steps.len()];
+    let mut seen_planner_in_turn = false;
+    for (idx, step) in steps.iter().enumerate().rev() {
+        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
+        if source["cascadeId"]
+            .as_str()
+            .is_some_and(|orig| !orig.is_empty() && orig != id)
+        {
+            continue;
+        }
+        match step["type"].as_str().unwrap_or("") {
+            "CORTEX_STEP_TYPE_USER_INPUT" => {
+                seen_planner_in_turn = false;
+            }
+            "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
+                has_later_planner[idx] = seen_planner_in_turn;
+                seen_planner_in_turn = true;
+            }
+            _ => {}
+        }
+    }
+
     let mut events = Vec::new();
+    let mut turn_seq = 0usize;
     for (index, step) in steps.iter().enumerate() {
         let source = &step["metadata"]["sourceTrajectoryStepInfo"];
         if source["cascadeId"]
@@ -1107,10 +1165,6 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
         let timestamp = step["metadata"]["createdAt"]
             .as_str()
             .or_else(|| step["metadata"]["completedAt"].as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        let turn_id = step["metadata"]["executionId"]
-            .as_str()
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
         let status = map_cortex_status(step["status"].as_str().unwrap_or(""));
@@ -1174,6 +1228,8 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                 if user_msg.text.trim().is_empty() && user_msg.attachments.is_empty() {
                     continue;
                 }
+                turn_seq = turn_seq.saturating_add(1);
+                let turn_id = Some(format!("turn-{turn_seq}"));
                 events.push(ProviderHistoryEvent {
                     id: event_id,
                     timestamp,
@@ -1189,6 +1245,7 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                 });
             }
             "CORTEX_STEP_TYPE_PLANNER_RESPONSE" => {
+                let turn_id = Some(format!("turn-{turn_seq}"));
                 let pr = &step["plannerResponse"];
                 if let Some(thinking) = pr["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
                     events.push(ProviderHistoryEvent {
@@ -1204,6 +1261,28 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                         result: None,
                         user_message: None,
                     });
+                }
+                let reply = pr["modifiedResponse"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| pr["response"].as_str().filter(|s| !s.trim().is_empty()));
+                let is_intermediate = has_later_planner[index];
+                if is_intermediate {
+                    if let Some(text) = reply {
+                        events.push(ProviderHistoryEvent {
+                            id: format!("step-{index}-commentary"),
+                            timestamp: timestamp.clone(),
+                            kind: "thinking".into(),
+                            role: Some("assistant".into()),
+                            text: Some(text.to_owned()),
+                            call_id: None,
+                            turn_id: turn_id.clone(),
+                            status: Some(status.into()),
+                            detail: None,
+                            result: None,
+                            user_message: None,
+                        });
+                    }
                 }
                 if let Some(calls) = pr["toolCalls"].as_array() {
                     for (ci, call) in calls.iter().enumerate() {
@@ -1235,31 +1314,31 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                         });
                     }
                 }
-                let reply = pr["modifiedResponse"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| pr["response"].as_str().filter(|s| !s.trim().is_empty()));
-                if let Some(text) = reply {
-                    events.push(ProviderHistoryEvent {
-                        id: format!("step-{index}-assistant"),
-                        timestamp,
-                        kind: "assistant_message".into(),
-                        role: Some("assistant".into()),
-                        text: Some(text.to_owned()),
-                        call_id: None,
-                        turn_id,
-                        status: Some(status.into()),
-                        detail: None,
-                        result: None,
-                        user_message: None,
-                    });
+                if !is_intermediate {
+                    if let Some(text) = reply {
+                        events.push(ProviderHistoryEvent {
+                            id: format!("step-{index}-assistant"),
+                            timestamp,
+                            kind: "assistant_message".into(),
+                            role: Some("assistant".into()),
+                            text: Some(text.to_owned()),
+                            call_id: None,
+                            turn_id,
+                            status: Some(status.into()),
+                            detail: None,
+                            result: None,
+                            user_message: None,
+                        });
+                    }
                 }
             }
             "CORTEX_STEP_TYPE_FINISH"
             | "CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE"
             | "CORTEX_STEP_TYPE_CHECKPOINT"
+            | "CORTEX_STEP_TYPE_SYSTEM_MESSAGE"
             | "" => {}
             other => {
+                let turn_id = Some(format!("turn-{turn_seq}"));
                 let tool_name = step["metadata"]["toolCall"]["name"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -1380,8 +1459,7 @@ fn read_offline_transcript_events(
         let file = fs::File::open(&path)?;
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
-        let mut events = Vec::new();
-        let mut idx = 0usize;
+        let mut rows = Vec::new();
         loop {
             line.clear();
             let read = (&mut reader)
@@ -1393,11 +1471,29 @@ fn read_offline_transcript_events(
             if line.len() > TRANSCRIPT_LINE_LIMIT || line.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            let Ok(row) = serde_json::from_slice::<Value>(&line) else {
-                continue;
-            };
+            if let Ok(row) = serde_json::from_slice::<Value>(&line) {
+                rows.push(row);
+            }
+        }
+
+        let mut has_later_planner = vec![false; rows.len()];
+        let mut seen_planner_in_turn = false;
+        for (pos, row) in rows.iter().enumerate().rev() {
+            let st = row["type"].as_str().unwrap_or("");
+            let src = row["source"].as_str().unwrap_or("");
+            if st == "USER_INPUT" || src == "USER_EXPLICIT" {
+                seen_planner_in_turn = false;
+            } else if st == "PLANNER_RESPONSE" {
+                has_later_planner[pos] = seen_planner_in_turn;
+                seen_planner_in_turn = true;
+            }
+        }
+
+        let mut events = Vec::new();
+        let mut turn_seq = 0usize;
+        let mut pending_calls: VecDeque<(String, String)> = VecDeque::new();
+        for (idx, row) in rows.into_iter().enumerate() {
             let step_index = row["step_index"].as_u64().unwrap_or(idx as u64);
-            idx += 1;
             let step_type = row["type"].as_str().unwrap_or("");
             let source = row["source"].as_str().unwrap_or("");
             let timestamp = row["created_at"].as_str().map(str::to_owned);
@@ -1418,7 +1514,9 @@ fn read_offline_transcript_events(
                     for item in media {
                         if let Some(uri) = item["uri"].as_str() {
                             let decoded = decode_file_uri(uri);
-                            parts.push(json!({"type": "text", "text": format!("<image path=\"{decoded}\">")}));
+                            parts.push(
+                                json!({"type": "text", "text": format!("<image path=\"{decoded}\">")}),
+                            );
                             parts.push(json!({
                                 "type": "image",
                                 "url": decoded,
@@ -1431,6 +1529,9 @@ fn read_offline_transcript_events(
                 if parts.is_empty() {
                     continue;
                 }
+                turn_seq = turn_seq.saturating_add(1);
+                pending_calls.clear();
+                let turn_id = Some(format!("turn-{turn_seq}"));
                 let event_id = format!("transcript-{step_index}-user");
                 let user_msg =
                     crate::user_message::parse_user_message(&event_id, &Value::Array(parts));
@@ -1441,13 +1542,14 @@ fn read_offline_transcript_events(
                     role: Some("user".into()),
                     text: Some(user_msg.text.clone()),
                     call_id: None,
-                    turn_id: None,
+                    turn_id,
                     status: Some(status.into()),
                     detail: None,
                     result: None,
                     user_message: Some(user_msg),
                 });
-            } else if step_type == "PLANNER_RESPONSE" || source == "MODEL" {
+            } else if step_type == "PLANNER_RESPONSE" {
+                let turn_id = Some(format!("turn-{turn_seq}"));
                 if let Some(thinking) = row["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
                     events.push(ProviderHistoryEvent {
                         id: format!("transcript-{step_index}-thinking"),
@@ -1456,12 +1558,31 @@ fn read_offline_transcript_events(
                         role: Some("assistant".into()),
                         text: Some(thinking.to_owned()),
                         call_id: None,
-                        turn_id: None,
+                        turn_id: turn_id.clone(),
                         status: Some(status.into()),
                         detail: None,
                         result: None,
                         user_message: None,
                     });
+                }
+                let is_intermediate = has_later_planner[idx];
+                if is_intermediate {
+                    if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
+                    {
+                        events.push(ProviderHistoryEvent {
+                            id: format!("transcript-{step_index}-commentary"),
+                            timestamp: timestamp.clone(),
+                            kind: "thinking".into(),
+                            role: Some("assistant".into()),
+                            text: Some(content.to_owned()),
+                            call_id: None,
+                            turn_id: turn_id.clone(),
+                            status: Some(status.into()),
+                            detail: None,
+                            result: None,
+                            user_message: None,
+                        });
+                    }
                 }
                 if let Some(calls) = row["tool_calls"].as_array() {
                     for (ci, call) in calls.iter().enumerate() {
@@ -1484,14 +1605,22 @@ fn read_offline_transcript_events(
                             .and_then(Value::as_str)
                             .filter(|s| !s.trim().is_empty())
                             .map(str::to_owned);
+                        let call_id = call["id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("transcript-{step_index}-call-{ci}"));
+                        if result.is_none() {
+                            pending_calls.push_back((call_id.clone(), name.to_owned()));
+                        }
                         events.push(ProviderHistoryEvent {
                             id: format!("transcript-{step_index}-tool-{ci}"),
                             timestamp: timestamp.clone(),
                             kind: "tool_call".into(),
                             role: Some(name.to_owned()),
                             text: Some(name.to_owned()),
-                            call_id: call["id"].as_str().map(str::to_owned),
-                            turn_id: None,
+                            call_id: Some(call_id),
+                            turn_id: turn_id.clone(),
                             status: Some(status.into()),
                             detail: args,
                             result,
@@ -1499,40 +1628,65 @@ fn read_offline_transcript_events(
                         });
                     }
                 }
-                if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty()) {
+                if !is_intermediate {
+                    if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty())
+                    {
+                        events.push(ProviderHistoryEvent {
+                            id: format!("transcript-{step_index}-assistant"),
+                            timestamp,
+                            kind: "assistant_message".into(),
+                            role: Some("assistant".into()),
+                            text: Some(content.to_owned()),
+                            call_id: None,
+                            turn_id,
+                            status: Some(status.into()),
+                            detail: None,
+                            result: None,
+                            user_message: None,
+                        });
+                    }
+                }
+            } else if matches!(
+                step_type,
+                "SYSTEM_MESSAGE" | "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "FINISH" | ""
+            ) {
+                continue;
+            } else {
+                let turn_id = Some(format!("turn-{turn_seq}"));
+                let content = row["content"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned);
+                if let Some((call_id, tool_name)) = pending_calls.pop_front() {
                     events.push(ProviderHistoryEvent {
-                        id: format!("transcript-{step_index}-assistant"),
+                        id: format!("transcript-{step_index}-toolresult"),
                         timestamp,
-                        kind: "assistant_message".into(),
-                        role: Some("assistant".into()),
-                        text: Some(content.to_owned()),
-                        call_id: None,
-                        turn_id: None,
+                        kind: "tool_result".into(),
+                        role: Some(tool_name.clone()),
+                        text: Some(tool_name),
+                        call_id: Some(call_id),
+                        turn_id,
                         status: Some(status.into()),
                         detail: None,
-                        result: None,
+                        result: content,
+                        user_message: None,
+                    });
+                } else if let Some(content) = content {
+                    let name = step_type.to_ascii_lowercase();
+                    events.push(ProviderHistoryEvent {
+                        id: format!("transcript-{step_index}-step"),
+                        timestamp,
+                        kind: "tool_call".into(),
+                        role: Some(name.clone()),
+                        text: Some(name),
+                        call_id: None,
+                        turn_id,
+                        status: Some(status.into()),
+                        detail: None,
+                        result: Some(content),
                         user_message: None,
                     });
                 }
-            } else if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty()) {
-                let name = if step_type.is_empty() {
-                    "tool"
-                } else {
-                    step_type
-                };
-                events.push(ProviderHistoryEvent {
-                    id: format!("transcript-{step_index}-step"),
-                    timestamp,
-                    kind: "tool_call".into(),
-                    role: Some(name.to_ascii_lowercase()),
-                    text: Some(name.to_ascii_lowercase()),
-                    call_id: None,
-                    turn_id: None,
-                    status: Some(status.into()),
-                    detail: None,
-                    result: Some(content.to_owned()),
-                    user_message: None,
-                });
             }
         }
         if !events.is_empty() {
@@ -1840,7 +1994,7 @@ pub fn set_archived(
     session_summary(paths, key)
 }
 
-fn is_presence_locked(paths: &AntigravityPaths, id: &str) -> bool {
+fn is_presence_locked_shared(paths: &AntigravityPaths, id: &str) -> bool {
     let lock_path = paths.presence_dir().join(format!("{id}.lock"));
     if !lock_path.is_file() {
         return false;
@@ -1856,7 +2010,7 @@ fn is_presence_locked(paths: &AntigravityPaths, id: &str) -> bool {
         else {
             return false;
         };
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
         if rc == 0 {
             unsafe {
                 let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
@@ -1907,10 +2061,7 @@ fn live_all_trajectories(rpc: &LiveRpc) -> Result<Value> {
     Ok(value)
 }
 
-fn is_cascade_running(paths: &AntigravityPaths, all_live: Option<&Value>, id: &str) -> bool {
-    if is_presence_locked(paths, id) {
-        return true;
-    }
+fn is_cascade_running(all_live: Option<&Value>, id: &str) -> bool {
     all_live
         .and_then(|v| v["trajectorySummaries"].get(id))
         .is_some_and(live_item_is_running)
@@ -1920,26 +2071,29 @@ fn find_descendant_ids_with_live(
     paths: &AntigravityPaths,
     all_live: Option<&Value>,
     root_id: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let db_path = paths.summaries_db();
     if db_path.is_file() {
-        if let Ok(conn) = Connection::open_with_flags(
+        let conn = Connection::open_with_flags(
             &db_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) {
-            if let Ok(mut stmt) = conn.prepare(
+        )
+        .context("无法打开 Antigravity 索引数据库校验子会话")?;
+        let mut stmt = conn
+            .prepare(
                 "SELECT conversation_id, COALESCE(parent_conversation_id, '') FROM conversation_summaries",
-            ) {
-                if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                }) {
-                    for (cid, pid) in rows.flatten() {
-                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
-                            children_map.entry(pid).or_default().push(cid);
-                        }
-                    }
-                }
+            )
+            .context("无法读取 Antigravity 索引数据库子会话表")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("无法查询 Antigravity 子会话关系")?;
+        for row in rows {
+            let (cid, pid) = row.context("解码 Antigravity 子会话索引行失败")?;
+            if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                children_map.entry(pid).or_default().push(cid);
             }
         }
     }
@@ -1981,7 +2135,7 @@ fn find_descendant_ids_with_live(
             }
         }
     }
-    result.into_iter().collect()
+    Ok(result.into_iter().collect())
 }
 
 fn owned_disk_paths(paths: &AntigravityPaths, id: &str) -> Vec<PathBuf> {
@@ -2029,8 +2183,7 @@ pub fn preview_batch_item(
         None
     };
     if operation == SessionOperation::Delete
-        && (summary.status == "running"
-            || is_cascade_running(paths, all_live.as_ref(), &summary.id))
+        && (summary.status == "running" || is_cascade_running(all_live.as_ref(), &summary.id))
     {
         bail!(
             "{}",
@@ -2040,17 +2193,29 @@ pub fn preview_batch_item(
                 .unwrap_or("会话正在运行，无法删除")
         );
     }
+    if operation == SessionOperation::Delete
+        && live_rpc.is_none()
+        && is_presence_locked_shared(paths, &summary.id)
+    {
+        bail!("会话当前已在 Antigravity 中打开，离线模式下无法安全删除");
+    }
     let all_descendants = if operation == SessionOperation::Delete {
-        find_descendant_ids_with_live(paths, all_live.as_ref(), &summary.id)
+        find_descendant_ids_with_live(paths, all_live.as_ref(), &summary.id)?
     } else {
         Vec::new()
     };
     if operation == SessionOperation::Delete {
         for child in &all_descendants {
             ensure!(
-                !is_cascade_running(paths, all_live.as_ref(), child),
+                !is_cascade_running(all_live.as_ref(), child),
                 "子会话正在运行，请先在 Antigravity 中停止后再删除"
             );
+            if live_rpc.is_none() {
+                ensure!(
+                    !is_presence_locked_shared(paths, child),
+                    "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
+                );
+            }
         }
     }
     let descendants = if operation == SessionOperation::Delete && include_descendants {
@@ -2123,7 +2288,8 @@ pub fn execute_batch_item(
                 Some(rpc) => Some(live_all_trajectories(rpc)?),
                 None => None,
             };
-            let verified_descendants = find_descendant_ids_with_live(paths, all_live.as_ref(), key);
+            let verified_descendants =
+                find_descendant_ids_with_live(paths, all_live.as_ref(), key)?;
             let verified_set: BTreeSet<&str> =
                 verified_descendants.iter().map(String::as_str).collect();
             for child in descendants {
@@ -2134,14 +2300,26 @@ pub fn execute_batch_item(
                 );
             }
             ensure!(
-                summary.status != "running" && !is_cascade_running(paths, all_live.as_ref(), key),
+                summary.status != "running" && !is_cascade_running(all_live.as_ref(), key),
                 "会话正在运行，请先在 Antigravity 中停止后再删除"
             );
+            if live_rpc.is_none() {
+                ensure!(
+                    !is_presence_locked_shared(paths, key),
+                    "会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
+                );
+            }
             for child in &verified_descendants {
                 ensure!(
-                    !is_cascade_running(paths, all_live.as_ref(), child),
+                    !is_cascade_running(all_live.as_ref(), child),
                     "子会话正在运行，请先在 Antigravity 中停止后再删除"
                 );
+                if live_rpc.is_none() {
+                    ensure!(
+                        !is_presence_locked_shared(paths, child),
+                        "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
+                    );
+                }
             }
 
             let mut ordered_ids: Vec<String> = if include_descendants {
@@ -2951,5 +3129,298 @@ mod tests {
             events[1].text.as_deref(),
             Some("批准文档：implementation_plan.md")
         );
+    }
+
+    #[test]
+    fn idle_open_session_with_presence_lock_reports_idle_deletes_online_and_blocks_offline() {
+        let root = env::temp_dir().join(format!("nexushub-ag-presence-{}", uuid::Uuid::new_v4()));
+        for dir in ["conversations", "presence"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        let logs = root.join("brain").join(&id).join(".system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            root.join("conversations").join(format!("{id}.db")),
+            b"sqlite-fixture",
+        )
+        .unwrap();
+        fs::write(
+            logs.join("transcript_full.jsonl"),
+            r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-29T01:00:00Z","content":"已完成会话"}"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        let _held_lock = {
+            use std::os::unix::io::AsRawFd;
+            let lock_path = root.join("presence").join(format!("{id}.lock"));
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&lock_path)
+                .unwrap();
+            assert_eq!(
+                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            file
+        };
+
+        // 1. Offline list/detail reports "idle" even when presence/<id>.lock is held,
+        //    while offline delete is blocked by the non-blocking shared lock probe.
+        let offline_paths = AntigravityPaths::offline(root.clone());
+        let offline_list = list_sessions(&offline_paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(offline_list.len(), 1);
+        assert_eq!(offline_list[0].status, "idle");
+        assert!(offline_list[0].delete_block_reason.is_none());
+
+        #[cfg(unix)]
+        {
+            let err = preview_batch_item(&offline_paths, &id, SessionOperation::Delete, true)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("会话当前已在 Antigravity 中打开"), "{err}");
+            assert!(
+                execute_batch_item(&offline_paths, &id, SessionOperation::Delete, &[], true)
+                    .is_err()
+            );
+            assert!(root.join("conversations").join(format!("{id}.db")).exists());
+        }
+
+        // 2. Online mode marks root "running" iff root or a subagent is active in RPC;
+        //    once RPC is IDLE, open presence lock does NOT mark it "running" and online delete succeeds.
+        let sub_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let deleted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_shutdown = shutdown.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let s_root = id.clone();
+        let s_sub = sub_id.clone();
+        let s_sub_running = sub_running.clone();
+        let s_deleted = deleted.clone();
+        let handle = std::thread::spawn(move || {
+            while !server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                if server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                let resp = if req_line.contains("GetAllCascadeTrajectories") {
+                    if s_deleted.load(std::sync::atomic::Ordering::Relaxed) {
+                        json!({ "trajectorySummaries": {} })
+                    } else {
+                        let sub_status = if s_sub_running.load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            "CASCADE_RUN_STATUS_RUNNING"
+                        } else {
+                            "CASCADE_RUN_STATUS_IDLE"
+                        };
+                        json!({
+                            "trajectorySummaries": {
+                                (&s_root): {
+                                    "summary": "打开但已完成的会话",
+                                    "stepCount": 4,
+                                    "status": "CASCADE_RUN_STATUS_IDLE"
+                                },
+                                (&s_sub): {
+                                    "summary": "子代理",
+                                    "stepCount": 2,
+                                    "parentConversationId": s_root,
+                                    "status": sub_status
+                                }
+                            }
+                        })
+                    }
+                } else if req_line.contains("DeleteCascadeTrajectory") {
+                    s_deleted.store(true, std::sync::atomic::Ordering::Relaxed);
+                    json!({})
+                } else {
+                    json!({})
+                };
+                let bytes = serde_json::to_vec(&resp).unwrap();
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&bytes);
+            }
+        });
+
+        let online_paths = AntigravityPaths::with_fixed_rpc(root.clone(), port, "tok");
+        let while_sub_active =
+            list_sessions(&online_paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(while_sub_active[0].status, "running");
+
+        sub_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        let once_idle = list_sessions(&online_paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(once_idle[0].status, "idle");
+
+        let preview =
+            preview_batch_item(&online_paths, &id, SessionOperation::Delete, true).unwrap();
+        assert!(preview.allowed);
+        let res =
+            execute_batch_item(&online_paths, &id, SessionOperation::Delete, &[], true).unwrap();
+        assert_eq!(res.status, "succeeded");
+        assert!(!root.join("conversations").join(format!("{id}.db")).exists());
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", port));
+        let _ = handle.join();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn offline_and_live_multi_step_turns_pair_generic_tool_outputs_and_unify_turn_ids() {
+        let root = env::temp_dir().join(format!("nexushub-ag-fold-{}", uuid::Uuid::new_v4()));
+        let id = uuid::Uuid::new_v4().to_string();
+        let logs = root.join("brain").join(&id).join(".system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            logs.join("transcript_full.jsonl"),
+            concat!(
+                r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-29T01:00:00Z","content":"跑检查并提交"}"#,
+                "\n",
+                r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-29T01:00:02Z","thinking":"先编辑再运行命令","content":"正在应用修改并运行测试","tool_calls":[{"name":"edit_file","arguments":{"Path":"/workspace/demo.rs"}},{"name":"run_command","arguments":{"CommandLine":"cargo test"}}]}"#,
+                "\n",
+                r#"{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-10-29T01:00:03Z","content":"Created At: 2026-10-29T01:00:03Z Completed At: 2026-10-29T01:00:03Z Made 1 replacement in /workspace/demo.rs."}"#,
+                "\n",
+                r#"{"step_index":3,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-10-29T01:00:05Z","content":"Created At: 2026-10-29T01:00:03Z Completed At: 2026-10-29T01:00:05Z Command exited with code 0.\n\ntest result: ok."}"#,
+                "\n",
+                r#"{"step_index":4,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-10-29T01:00:06Z","content":"Background task finished"}"#,
+                "\n",
+                r#"{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-29T01:00:08Z","thinking":"确认通过","content":"全部检查已通过。"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let events = read_offline_transcript_events(&paths, &id).unwrap();
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "user_message",
+                "thinking",
+                "thinking",
+                "tool_call",
+                "tool_call",
+                "tool_result",
+                "tool_result",
+                "thinking",
+                "assistant_message"
+            ]
+        );
+        assert_eq!(events[3].call_id, events[5].call_id);
+        assert_eq!(events[4].call_id, events[6].call_id);
+        for ev in &events {
+            assert_eq!(ev.turn_id.as_deref(), Some("turn-1"));
+        }
+
+        // Live multi-executor steps within one user turn also share turn-1 and fold intermediate commentary
+        let live_steps = vec![
+            json!({
+                "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-a" },
+                "userInput": { "items": [{ "text": "继续推进" }] }
+            }),
+            json!({
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-a" },
+                "plannerResponse": {
+                    "thinking": "派发任务",
+                    "response": "等待任务完成",
+                    "toolCalls": [{ "id": "call-1", "name": "run_command", "argumentsJson": "{}" }]
+                }
+            }),
+            json!({
+                "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-b" }
+            }),
+            json!({
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-b" },
+                "plannerResponse": {
+                    "thinking": "收到唤醒",
+                    "response": "任务已完成。"
+                }
+            }),
+        ];
+        let live_events = extract_live_step_events(&id, &live_steps);
+        let live_kinds: Vec<&str> = live_events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(
+            live_kinds,
+            vec![
+                "user_message",
+                "thinking",
+                "thinking",
+                "tool_call",
+                "thinking",
+                "assistant_message"
+            ]
+        );
+        for ev in &live_events {
+            assert_eq!(ev.turn_id.as_deref(), Some("turn-1"));
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_conversation_summaries_db_aborts_delete_preview_and_execute() {
+        let root = env::temp_dir().join(format!("nexushub-ag-corrupt-db-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let logs = root.join("brain").join(&id).join(".system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            root.join("conversations").join(format!("{id}.db")),
+            b"sqlite-fixture",
+        )
+        .unwrap();
+        fs::write(
+            logs.join("transcript_full.jsonl"),
+            r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-29T01:00:00Z","content":"测试损坏索引"}"#,
+        )
+        .unwrap();
+        fs::write(root.join("conversation_summaries.db"), b"not-a-sqlite-db").unwrap();
+
+        let paths = AntigravityPaths::offline(root.clone());
+        assert!(preview_batch_item(&paths, &id, SessionOperation::Delete, true).is_err());
+        assert!(execute_batch_item(&paths, &id, SessionOperation::Delete, &[], true).is_err());
+        assert!(root.join("conversations").join(format!("{id}.db")).exists());
+        assert!(root.join("brain").join(&id).exists());
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
