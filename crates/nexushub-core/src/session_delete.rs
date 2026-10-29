@@ -116,6 +116,50 @@ impl Outcome {
         }
     }
 
+    pub fn remove_strict(&mut self, path: &Path) -> bool {
+        if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            return true;
+        }
+        for entry in walkdir::WalkDir::new(path)
+            .follow_links(false)
+            .follow_root_links(false)
+            .contents_first(true)
+        {
+            match entry {
+                Ok(entry) => {
+                    let bytes = fs::symlink_metadata(entry.path()).map_or(0, |m| m.len());
+                    let directory = entry.file_type().is_dir();
+                    let result = if directory {
+                        fs::remove_dir(entry.path())
+                    } else {
+                        fs::remove_file(entry.path())
+                    };
+                    match result {
+                        Ok(()) if !directory => {
+                            self.files += 1;
+                            self.bytes = self.bytes.saturating_add(bytes);
+                        }
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            self.residuals
+                                .push(format!("{}: {e}", entry.path().display()));
+                            return false;
+                        }
+                    }
+                }
+                Err(e)
+                    if e.io_error()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {}
+                Err(e) => {
+                    self.residuals.push(e.to_string());
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn finish(&mut self) {
         self.residuals.sort();
         self.residuals.dedup();

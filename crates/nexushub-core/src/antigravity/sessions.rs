@@ -10,7 +10,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -214,10 +214,7 @@ fn discover_host_endpoints() -> Vec<(Vec<u16>, String)> {
             }
             let mut ports: Vec<u16> = String::from_utf8_lossy(&lsof.stdout)
                 .lines()
-                .filter_map(|line| {
-                    line.strip_prefix("n127.0.0.1:")
-                        .and_then(|port| port.parse::<u16>().ok())
-                })
+                .filter_map(parse_loopback_listener_port)
                 .collect();
             ports.sort_unstable();
             ports.dedup();
@@ -231,6 +228,13 @@ fn discover_host_endpoints() -> Vec<(Vec<u16>, String)> {
     {
         Vec::new()
     }
+}
+
+fn parse_loopback_listener_port(line: &str) -> Option<u16> {
+    let (host, port) = line.strip_prefix('n')?.split_once(':')?;
+    (host.parse::<Ipv4Addr>().ok() == Some(Ipv4Addr::LOCALHOST))
+        .then(|| port.parse::<u16>().ok())
+        .flatten()
 }
 
 fn connect_rpc_post(port: u16, token: &str, method: &str, body: &Value) -> Result<Value> {
@@ -714,18 +718,7 @@ fn summary_from_live_json(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
     let step_count = item["stepCount"].as_u64().unwrap_or(0) as usize;
-    let waiting = item["waitingSteps"]
-        .as_array()
-        .is_some_and(|arr| !arr.is_empty());
-    let run_status = item["status"].as_str().unwrap_or("");
-    let running = !archived
-        && (waiting
-            || matches!(
-                run_status,
-                "CASCADE_RUN_STATUS_RUNNING" | "CASCADE_RUN_STATUS_CANCELING"
-            )
-            || item["notFullyIdle"].as_bool() == Some(true)
-            || item["hasRunningSubagents"].as_bool() == Some(true));
+    let running = !archived && (live_item_is_running(item) || is_presence_locked(paths, id));
     let status = if archived {
         "archived"
     } else if running {
@@ -834,6 +827,7 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             .and_then(|uris| uris.into_iter().next())
                             .map(|uri| decode_file_uri(&uri))
                             .unwrap_or_default();
+                        let running = !archived && is_presence_locked(paths, &id);
                         let mut summary = ProviderSessionSummary {
                             storage_size: None,
                             id: id.clone(),
@@ -845,14 +839,23 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             updated_at: (!modified.trim().is_empty()).then_some(modified),
                             message_count: steps.max(0) as usize,
                             last_message: (!preview.trim().is_empty()).then_some(preview),
-                            status: if archived { "archived" } else { "idle" }.into(),
+                            status: if archived {
+                                "archived"
+                            } else if running {
+                                "running"
+                            } else {
+                                "idle"
+                            }
+                            .into(),
                             format_version: "sqlite-offline".into(),
                             can_rename: true,
                             rename_block_reason: None,
                             can_archive: true,
                             archive_block_reason: None,
-                            can_delete: true,
-                            delete_block_reason: None,
+                            can_delete: !running,
+                            delete_block_reason: running.then(|| {
+                                "会话正在运行，请先在 Antigravity 中停止后再删除".into()
+                            }),
                             read_error: None,
                             read_warning: None,
                         };
@@ -874,6 +877,7 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                 }
                 let overlay = read_annotation_overlay(paths, &id);
                 let archived = overlay.archived.unwrap_or(false);
+                let running = !archived && is_presence_locked(paths, &id);
                 let updated_at = entry
                     .metadata()
                     .ok()
@@ -890,14 +894,22 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                     updated_at,
                     message_count: 0,
                     last_message: None,
-                    status: if archived { "archived" } else { "idle" }.into(),
+                    status: if archived {
+                        "archived"
+                    } else if running {
+                        "running"
+                    } else {
+                        "idle"
+                    }
+                    .into(),
                     format_version: "brain-offline".into(),
                     can_rename: true,
                     rename_block_reason: None,
                     can_archive: true,
                     archive_block_reason: None,
-                    can_delete: true,
-                    delete_block_reason: None,
+                    can_delete: !running,
+                    delete_block_reason: running
+                        .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
                     read_error: None,
                     read_warning: None,
                 };
@@ -1717,31 +1729,134 @@ pub fn set_archived(
     session_summary(paths, key)
 }
 
-fn find_descendant_ids(paths: &AntigravityPaths, root_id: &str) -> Vec<String> {
-    let db_path = paths.summaries_db();
-    if !db_path.is_file() {
-        return Vec::new();
+fn is_presence_locked(paths: &AntigravityPaths, id: &str) -> bool {
+    let lock_path = paths.presence_dir().join(format!("{id}.lock"));
+    if !lock_path.is_file() {
+        return false;
     }
-    let Ok(conn) = Connection::open_with_flags(
-        &db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        return Vec::new();
-    };
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT conversation_id, COALESCE(parent_conversation_id, '') FROM conversation_summaries",
-    ) else {
-        return Vec::new();
-    };
-    let Ok(rows) = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }) else {
-        return Vec::new();
-    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+        let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lock_path)
+        else {
+            return false;
+        };
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            unsafe {
+                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
+            false
+        } else {
+            let err = std::io::Error::last_os_error();
+            matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            )
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn live_item_is_running(item: &Value) -> bool {
+    let waiting = item["waitingSteps"]
+        .as_array()
+        .is_some_and(|arr| !arr.is_empty());
+    let run_status = item["status"].as_str().unwrap_or("");
+    waiting
+        || matches!(
+            run_status,
+            "CASCADE_RUN_STATUS_RUNNING"
+                | "CASCADE_RUN_STATUS_BUSY"
+                | "CASCADE_RUN_STATUS_WAITING"
+                | "CASCADE_RUN_STATUS_CANCELING"
+        )
+        || item["notFullyIdle"].as_bool() == Some(true)
+        || item["hasRunningSubagents"].as_bool() == Some(true)
+}
+
+fn live_all_trajectories(rpc: &LiveRpc) -> Result<Value> {
+    let value = connect_rpc_post(
+        rpc.port,
+        &rpc.token,
+        "GetAllCascadeTrajectories",
+        &json!({ "excludeSubtrajectories": false }),
+    )?;
+    ensure!(
+        value["trajectorySummaries"].is_object(),
+        "Antigravity 返回了无效的轨迹摘要列表"
+    );
+    Ok(value)
+}
+
+fn is_cascade_running(paths: &AntigravityPaths, all_live: Option<&Value>, id: &str) -> bool {
+    if is_presence_locked(paths, id) {
+        return true;
+    }
+    all_live
+        .and_then(|v| v["trajectorySummaries"].get(id))
+        .is_some_and(live_item_is_running)
+}
+
+fn find_descendant_ids_with_live(
+    paths: &AntigravityPaths,
+    all_live: Option<&Value>,
+    root_id: &str,
+) -> Vec<String> {
     let mut children_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (cid, pid) in rows.flatten() {
-        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
-            children_map.entry(pid).or_default().push(cid);
+    let db_path = paths.summaries_db();
+    if db_path.is_file() {
+        if let Ok(conn) = Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT conversation_id, COALESCE(parent_conversation_id, '') FROM conversation_summaries",
+            ) {
+                if let Ok(rows) = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                }) {
+                    for (cid, pid) in rows.flatten() {
+                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
+                            children_map.entry(pid).or_default().push(cid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(map) = all_live.and_then(|v| v["trajectorySummaries"].as_object()) {
+        for (cid, item) in map {
+            if uuid::Uuid::parse_str(cid).is_err() {
+                continue;
+            }
+            let parent = item["parentConversationId"]
+                .as_str()
+                .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+                .unwrap_or("");
+            if !parent.is_empty() {
+                children_map
+                    .entry(parent.to_owned())
+                    .or_default()
+                    .push(cid.clone());
+            }
+            let root = item["rootConversationId"]
+                .as_str()
+                .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+                .unwrap_or("");
+            if !root.is_empty() && root != cid {
+                children_map
+                    .entry(root.to_owned())
+                    .or_default()
+                    .push(cid.clone());
+            }
         }
     }
     let mut result = BTreeSet::new();
@@ -1774,6 +1889,18 @@ fn owned_disk_paths(paths: &AntigravityPaths, id: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn record_remaining_antigravity_residuals(
+    paths: &AntigravityPaths,
+    remaining_ids: &[String],
+    outcome: &mut Outcome,
+) {
+    for rem_id in remaining_ids {
+        for path in owned_disk_paths(paths, rem_id) {
+            outcome.residuals.push(path.display().to_string());
+        }
+    }
+}
+
 pub fn preview_batch_item(
     paths: &AntigravityPaths,
     key: &str,
@@ -1781,7 +1908,18 @@ pub fn preview_batch_item(
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
     let summary = session_summary(paths, key)?;
-    if operation == SessionOperation::Delete && summary.status == "running" {
+    let live_rpc = connect_endpoint(paths).map(|(rpc, _)| rpc);
+    let all_live = if operation == SessionOperation::Delete {
+        match &live_rpc {
+            Some(rpc) => Some(live_all_trajectories(rpc)?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    if operation == SessionOperation::Delete
+        && (summary.status == "running" || is_cascade_running(paths, all_live.as_ref(), &summary.id))
+    {
         bail!(
             "{}",
             summary
@@ -1790,8 +1928,21 @@ pub fn preview_batch_item(
                 .unwrap_or("会话正在运行，无法删除")
         );
     }
+    let all_descendants = if operation == SessionOperation::Delete {
+        find_descendant_ids_with_live(paths, all_live.as_ref(), &summary.id)
+    } else {
+        Vec::new()
+    };
+    if operation == SessionOperation::Delete {
+        for child in &all_descendants {
+            ensure!(
+                !is_cascade_running(paths, all_live.as_ref(), child),
+                "子会话正在运行，请先在 Antigravity 中停止后再删除"
+            );
+        }
+    }
     let descendants = if operation == SessionOperation::Delete && include_descendants {
-        find_descendant_ids(paths, &summary.id)
+        all_descendants
     } else {
         Vec::new()
     };
@@ -1855,60 +2006,111 @@ pub fn execute_batch_item(
         }
         SessionOperation::Delete => {
             let summary = session_summary(paths, key)?;
+            let live_rpc = connect_endpoint(paths).map(|(rpc, _)| rpc);
+            let all_live = match &live_rpc {
+                Some(rpc) => Some(live_all_trajectories(rpc)?),
+                None => None,
+            };
+            let verified_descendants =
+                find_descendant_ids_with_live(paths, all_live.as_ref(), key);
+            let verified_set: BTreeSet<&str> =
+                verified_descendants.iter().map(String::as_str).collect();
+            for child in descendants {
+                valid_cascade_id(child)?;
+                ensure!(
+                    include_descendants && verified_set.contains(child.as_str()),
+                    "子会话 {child} 不属于当前主会话，拒绝删除"
+                );
+            }
             ensure!(
-                summary.status != "running",
+                summary.status != "running" && !is_cascade_running(paths, all_live.as_ref(), key),
                 "会话正在运行，请先在 Antigravity 中停止后再删除"
             );
-            let mut all_ids = vec![key.to_owned()];
-            if include_descendants {
-                let discovered = if descendants.is_empty() {
-                    find_descendant_ids(paths, key)
-                } else {
-                    descendants.to_vec()
-                };
-                for child in discovered {
-                    valid_cascade_id(&child)?;
-                    if !all_ids.contains(&child) {
-                        all_ids.push(child);
-                    }
-                }
+            for child in &verified_descendants {
+                ensure!(
+                    !is_cascade_running(paths, all_live.as_ref(), child),
+                    "子会话正在运行，请先在 Antigravity 中停止后再删除"
+                );
             }
-            if let Some((rpc, _)) = connect_endpoint(paths) {
-                for id in all_ids.iter().rev() {
-                    let res = connect_rpc_post(
+
+            let mut ordered_ids: Vec<String> = if include_descendants {
+                verified_descendants.into_iter().rev().collect()
+            } else {
+                Vec::new()
+            };
+            ordered_ids.push(key.to_owned());
+
+            let db_path = paths.summaries_db();
+            let offline_conn = if live_rpc.is_none() && db_path.is_file() {
+                Some(
+                    Connection::open(&db_path)
+                        .context("无法打开 Antigravity 索引数据库执行删除")?,
+                )
+            } else {
+                None
+            };
+
+            let mut outcome = Outcome::default();
+            let mut deleted_ids = Vec::new();
+            for (idx, id) in ordered_ids.iter().enumerate() {
+                if let Some(rpc) = &live_rpc {
+                    if let Err(err) = connect_rpc_post(
                         rpc.port,
                         &rpc.token,
                         "DeleteCascadeTrajectory",
                         &json!({ "cascadeId": id }),
-                    );
-                    if id == key {
-                        res?;
-                    }
-                }
-            } else {
-                let db_path = paths.summaries_db();
-                if db_path.is_file() {
-                    let conn = Connection::open(&db_path)
-                        .context("无法打开 Antigravity 索引数据库执行删除")?;
-                    for id in &all_ids {
-                        conn.execute(
-                            "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
-                            params![id],
-                        )?;
-                        let _ = conn.execute(
-                            "DELETE FROM conversations_fts WHERE conversation_id = ?1",
-                            params![id],
+                    ) {
+                        outcome.residuals.push(format!("{id}: {err}"));
+                        record_remaining_antigravity_residuals(
+                            paths,
+                            &ordered_ids[idx..],
+                            &mut outcome,
                         );
+                        break;
                     }
                 }
-                invalidate_proto_cache(paths);
+
+                let mut disk_failed = false;
+                for path in owned_disk_paths(paths, id) {
+                    if !outcome.remove_strict(&path) {
+                        disk_failed = true;
+                        break;
+                    }
+                }
+                if disk_failed {
+                    record_remaining_antigravity_residuals(
+                        paths,
+                        &ordered_ids[idx..],
+                        &mut outcome,
+                    );
+                    break;
+                }
+
+                if let Some(conn) = &offline_conn {
+                    if let Err(err) = conn.execute(
+                        "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
+                        params![id],
+                    ) {
+                        outcome
+                            .residuals
+                            .push(format!("{}: {err}", db_path.display()));
+                        record_remaining_antigravity_residuals(
+                            paths,
+                            &ordered_ids[idx + 1..],
+                            &mut outcome,
+                        );
+                        break;
+                    }
+                    let _ = conn.execute(
+                        "DELETE FROM conversations_fts WHERE conversation_id = ?1",
+                        params![id],
+                    );
+                }
+                deleted_ids.push(id.clone());
             }
 
-            let mut outcome = Outcome::default();
-            for id in &all_ids {
-                for path in owned_disk_paths(paths, id) {
-                    outcome.remove(&path);
-                }
+            if live_rpc.is_none() && !deleted_ids.is_empty() {
+                invalidate_proto_cache(paths);
             }
             outcome.finish();
             Ok(SessionBatchItemResult {
@@ -1920,8 +2122,8 @@ pub fn execute_batch_item(
                 }
                 .into(),
                 message: (!outcome.residuals.is_empty())
-                    .then(|| "部分 Antigravity 会话文件未清理，请重试".into()),
-                deleted_ids: all_ids,
+                    .then(|| "部分 Antigravity 会话未完成删除，已停止后续删除".into()),
+                deleted_ids,
                 residuals: outcome.residuals,
             })
         }
@@ -2241,6 +2443,294 @@ mod tests {
             .join(format!("{id}.pbtxt"))
             .exists());
         drop(paths);
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", port));
+        let _ = handle.join();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parse_loopback_listener_port_accepts_loopback_only() {
+        assert_eq!(parse_loopback_listener_port("n127.0.0.1:51234"), Some(51234));
+        assert_eq!(parse_loopback_listener_port("n0.0.0.0:51234"), None);
+        assert_eq!(parse_loopback_listener_port("n192.0.2.10:51234"), None);
+        assert_eq!(parse_loopback_listener_port("n[::1]:51234"), None);
+    }
+
+    #[test]
+    fn delete_rejects_forged_cross_root_descendants_locked_targets_and_halts_on_partial_failure() {
+        let root = env::temp_dir().join(format!("nexushub-ag-guard-{}", uuid::Uuid::new_v4()));
+        for dir in ["conversations", "annotations", "presence"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let root_a = uuid::Uuid::new_v4().to_string();
+        let sub_a = uuid::Uuid::new_v4().to_string();
+        let root_b = uuid::Uuid::new_v4().to_string();
+        let sub_b = uuid::Uuid::new_v4().to_string();
+        for id in [&root_a, &sub_a, &root_b, &sub_b] {
+            fs::create_dir_all(root.join("brain").join(id)).unwrap();
+            fs::write(root.join("brain").join(id).join("note.md"), b"fixture").unwrap();
+            fs::write(
+                root.join("conversations").join(format!("{id}.db")),
+                b"sqlite-fixture",
+            )
+            .unwrap();
+        }
+        let conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT,
+                preview TEXT,
+                step_count INTEGER,
+                last_modified_time TEXT,
+                workspace_uris TEXT,
+                parent_conversation_id TEXT,
+                nesting_depth INTEGER
+            );
+            CREATE TABLE conversations_fts (
+                conversation_id TEXT,
+                chunk_index INTEGER,
+                archived TEXT,
+                title TEXT
+            );",
+        )
+        .unwrap();
+        for (cid, title, parent, depth) in [
+            (&root_a, "主会话 A", "", 0),
+            (&sub_a, "子代理 A", root_a.as_str(), 1),
+            (&root_b, "主会话 B", "", 0),
+            (&sub_b, "子代理 B", root_b.as_str(), 1),
+        ] {
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, ?2, 'p', 1, '2026-10-28T01:00:00Z', '', ?3, ?4)",
+                params![cid, title, parent, depth],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let paths = AntigravityPaths::offline(root.clone());
+
+        // 1. Forged other-root UUID in descendants is rejected
+        assert!(execute_batch_item(
+            &paths,
+            &root_a,
+            SessionOperation::Delete,
+            std::slice::from_ref(&root_b),
+            true,
+        )
+        .is_err());
+        assert!(root.join("conversations").join(format!("{root_b}.db")).exists());
+
+        // 2. Cross-root subagent UUID in descendants is rejected
+        assert!(execute_batch_item(
+            &paths,
+            &root_a,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_b),
+            true,
+        )
+        .is_err());
+        assert!(root.join("conversations").join(format!("{sub_b}.db")).exists());
+
+        // 3. Descendants supplied when include_descendants == false is rejected
+        assert!(execute_batch_item(
+            &paths,
+            &root_a,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_a),
+            false,
+        )
+        .is_err());
+
+        // 4. Presence flock on descendant blocks preview & execute
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let lock_path = root.join("presence").join(format!("{sub_a}.lock"));
+            let lock_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&lock_path)
+                .unwrap();
+            assert_eq!(
+                unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            assert!(preview_batch_item(&paths, &root_a, SessionOperation::Delete, true).is_err());
+            assert!(
+                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).is_err()
+            );
+            assert!(root.join("conversations").join(format!("{root_a}.db")).exists());
+            assert!(root.join("conversations").join(format!("{sub_a}.db")).exists());
+            unsafe {
+                let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+
+        // 5. Partial filesystem failure on sub_a halts immediately before touching root_a
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let sub_brain = root.join("brain").join(&sub_a);
+            fs::set_permissions(&sub_brain, fs::Permissions::from_mode(0o500)).unwrap();
+            let partial =
+                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).unwrap();
+            assert_eq!(partial.status, "failed");
+            assert!(partial.deleted_ids.is_empty());
+            assert!(!partial.residuals.is_empty());
+            assert!(root.join("conversations").join(format!("{root_a}.db")).exists());
+            assert!(root.join("brain").join(&root_a).exists());
+            // root_a remains visible in list_sessions for retry!
+            assert!(list_sessions(&paths, &ProviderListRequest::default())
+                .unwrap()
+                .iter()
+                .any(|s| s.id == root_a));
+
+            fs::set_permissions(&sub_brain, fs::Permissions::from_mode(0o700)).unwrap();
+            let retried =
+                execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).unwrap();
+            assert_eq!(retried.status, "succeeded");
+            assert!(!root.join("brain").join(&root_a).exists());
+            assert!(!root.join("brain").join(&sub_a).exists());
+            assert!(root.join("brain").join(&root_b).exists());
+            assert!(root.join("brain").join(&sub_b).exists());
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn online_delete_blocks_running_subtrajectory_and_halts_on_subagent_rpc_error() {
+        let root = env::temp_dir().join(format!("nexushub-ag-rpc-guard-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        for id in [&root_id, &sub_id] {
+            fs::create_dir_all(root.join("brain").join(id)).unwrap();
+            fs::write(
+                root.join("conversations").join(format!("{id}.db")),
+                b"sqlite-fixture",
+            )
+            .unwrap();
+        }
+
+        // (sub_busy, fail_sub_delete)
+        let mode = Arc::new(Mutex::new((true, true)));
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_shutdown = shutdown.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_mode = mode.clone();
+        let s_root = root_id.clone();
+        let s_sub = sub_id.clone();
+        let handle = std::thread::spawn(move || {
+            while !server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                if server_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                let json_body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let (sub_busy, fail_sub_delete) = *server_mode.lock().unwrap();
+                let (status_code, resp) = if req_line.contains("GetAllCascadeTrajectories") {
+                    let exclude_sub = json_body["excludeSubtrajectories"].as_bool().unwrap_or(true);
+                    let mut summaries = serde_json::Map::new();
+                    summaries.insert(
+                        s_root.clone(),
+                        json!({
+                            "summary": "主会话",
+                            "stepCount": 2,
+                            "status": "CASCADE_RUN_STATUS_IDLE"
+                        }),
+                    );
+                    if !exclude_sub {
+                        summaries.insert(
+                            s_sub.clone(),
+                            json!({
+                                "summary": "子代理",
+                                "stepCount": 1,
+                                "parentConversationId": s_root,
+                                "trajectoryMetadata": { "rootConversationId": s_root, "nestingDepth": 1 },
+                                "status": if sub_busy { "CASCADE_RUN_STATUS_BUSY" } else { "CASCADE_RUN_STATUS_IDLE" }
+                            }),
+                        );
+                    }
+                    (200, json!({ "trajectorySummaries": summaries }))
+                } else if req_line.contains("DeleteCascadeTrajectory") {
+                    if json_body["cascadeId"].as_str() == Some(s_sub.as_str()) && fail_sub_delete {
+                        (500, json!({ "message": "subagent busy in runtime" }))
+                    } else {
+                        (200, json!({}))
+                    }
+                } else {
+                    (200, json!({}))
+                };
+                let bytes = serde_json::to_vec(&resp).unwrap();
+                let status_text = if status_code == 200 {
+                    "200 OK"
+                } else {
+                    "500 Internal Server Error"
+                };
+                let header = format!(
+                    "HTTP/1.1 {status_text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&bytes);
+            }
+        });
+
+        let paths = AntigravityPaths::with_fixed_rpc(root.clone(), port, "test_token_123");
+
+        // 1. Subagent BUSY blocks both preview and execute even though root summary is IDLE
+        assert!(preview_batch_item(&paths, &root_id, SessionOperation::Delete, true).is_err());
+        assert!(execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).is_err());
+        assert!(root.join("conversations").join(format!("{sub_id}.db")).exists());
+
+        // 2. Subagent IDLE, but DeleteCascadeTrajectory on sub_id returns HTTP 500 -> must NOT delete disk files!
+        *mode.lock().unwrap() = (false, true);
+        let failed =
+            execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).unwrap();
+        assert_eq!(failed.status, "failed");
+        assert!(failed.deleted_ids.is_empty());
+        assert!(!failed.residuals.is_empty());
+        assert!(root.join("conversations").join(format!("{sub_id}.db")).exists());
+        assert!(root.join("brain").join(&sub_id).exists());
+        assert!(root.join("conversations").join(format!("{root_id}.db")).exists());
+        assert!(root.join("brain").join(&root_id).exists());
+
+        // 3. Once RPC succeeds, both sub_id and root_id are cleanly deleted
+        *mode.lock().unwrap() = (false, false);
+        let ok = execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).unwrap();
+        assert_eq!(ok.status, "succeeded");
+        assert!(ok.residuals.is_empty());
+        assert!(!root.join("conversations").join(format!("{sub_id}.db")).exists());
+        assert!(!root.join("conversations").join(format!("{root_id}.db")).exists());
+
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = TcpStream::connect(("127.0.0.1", port));
         let _ = handle.join();

@@ -84,10 +84,7 @@ fn discover() -> Result<Endpoint> {
     ensure!(output.status.success(), "Antigravity listener unavailable");
     let mut ports = String::from_utf8(output.stdout)?
         .lines()
-        .filter_map(|line| {
-            line.strip_prefix("n127.0.0.1:")
-                .and_then(|p| p.parse::<u16>().ok())
-        })
+        .filter_map(parse_loopback_listener_port)
         .collect::<Vec<_>>();
     ports.sort_unstable();
     ports.dedup();
@@ -111,6 +108,15 @@ unsafe fn libc_uid() -> u32 {
 #[cfg(not(target_os = "macos"))]
 fn discover() -> Result<Endpoint> {
     anyhow::bail!("Antigravity notifications require the local Mac App")
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_loopback_listener_port(line: &str) -> Option<u16> {
+    use std::net::Ipv4Addr;
+    let (host, port) = line.strip_prefix('n')?.split_once(':')?;
+    (host.parse::<Ipv4Addr>().ok() == Some(Ipv4Addr::LOCALHOST))
+        .then(|| port.parse::<u16>().ok())
+        .flatten()
 }
 
 fn client() -> Result<reqwest::Client> {

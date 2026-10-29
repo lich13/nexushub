@@ -400,6 +400,7 @@ impl SessionUseCases {
                         )?,
                         _ => unreachable!(),
                     };
+                    result.status = outcome.status;
                     result.deleted_ids = outcome.deleted_ids;
                     result.residuals = outcome.residuals;
                     result.message = outcome.message;
@@ -415,9 +416,28 @@ impl SessionUseCases {
                 }
                 match request.provider {
                     SessionProvider::Codex => {
+                        let verified: std::collections::BTreeSet<String> = if request
+                            .include_descendants
+                        {
+                            selected_codex::tree::descendants(
+                                &self.codex,
+                                std::slice::from_ref(&item.session_key),
+                            )?
+                            .into_iter()
+                            .filter(|id| id != &item.session_key)
+                            .collect()
+                        } else {
+                            std::collections::BTreeSet::new()
+                        };
+                        for child in &item.descendants {
+                            ensure!(
+                                request.include_descendants && verified.contains(child),
+                                "子线程 {child} 不在当前主线程名下，请重新预览"
+                            );
+                        }
                         let mut ids = vec![item.session_key.clone()];
                         if request.include_descendants {
-                            ids.extend(item.descendants.iter().cloned());
+                            ids.extend(verified);
                         }
                         let outcome = selected_codex::tree::execute_ids(&self.codex, &ids)?;
                         result.deleted_ids = outcome.deleted_ids;
@@ -523,6 +543,69 @@ mod tests {
         assert!(result.items.iter().all(|item| item.status == "succeeded"));
         assert_eq!(std::fs::read_dir(root_session).unwrap().count(), 0);
         assert!(validate(SessionProvider::Codex, SessionOperation::Archive, &keys).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bulk_execute_rejects_forged_descendants_across_codex_and_antigravity() {
+        let root =
+            std::env::temp_dir().join(format!("nexushub-forged-desc-{}", uuid::Uuid::new_v4()));
+        let service = SessionUseCases {
+            platform: crate::platform::PlatformPaths::desktop_current(),
+            codex: CodexPaths::new(root.join("codex")),
+            grok: GrokPaths {
+                home: root.join("grok"),
+            },
+            claude: crate::claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(
+                root.join("antigravity"),
+            ),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
+            },
+        };
+        let codex_a = uuid::Uuid::new_v4().to_string();
+        let codex_b = uuid::Uuid::new_v4().to_string();
+        let codex_dir = service.codex.sessions_dir().join("2026/10/29");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let file_a = codex_dir.join(format!("rollout-2026-10-29T00-00-00-{codex_a}.jsonl"));
+        let file_b = codex_dir.join(format!("rollout-2026-10-29T00-00-00-{codex_b}.jsonl"));
+        std::fs::write(&file_a, "{}\n").unwrap();
+        std::fs::write(&file_b, "{}\n").unwrap();
+
+        let forged_codex: SessionBatchExecuteRequest = serde_json::from_value(serde_json::json!({
+            "provider": "codex",
+            "operation": "delete",
+            "confirmed": true,
+            "includeDescendants": true,
+            "items": [{ "sessionKey": codex_a, "descendants": [codex_b] }]
+        }))
+        .unwrap();
+        let codex_res = service.bulk_execute(forged_codex).unwrap();
+        assert_eq!(codex_res.items[0].status, "failed");
+        assert!(file_a.exists());
+        assert!(file_b.exists());
+
+        let ag_a = uuid::Uuid::new_v4().to_string();
+        let ag_b = uuid::Uuid::new_v4().to_string();
+        std::fs::create_dir_all(service.antigravity.brain_dir().join(&ag_a)).unwrap();
+        std::fs::create_dir_all(service.antigravity.brain_dir().join(&ag_b)).unwrap();
+        let forged_ag: SessionBatchExecuteRequest = serde_json::from_value(serde_json::json!({
+            "provider": "antigravity",
+            "operation": "delete",
+            "confirmed": true,
+            "includeDescendants": true,
+            "items": [{ "sessionKey": ag_a, "descendants": [ag_b] }]
+        }))
+        .unwrap();
+        let ag_res = service.bulk_execute(forged_ag).unwrap();
+        assert_eq!(ag_res.items[0].status, "failed");
+        assert!(service.antigravity.brain_dir().join(&ag_a).exists());
+        assert!(service.antigravity.brain_dir().join(&ag_b).exists());
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

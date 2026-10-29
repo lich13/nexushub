@@ -14,8 +14,7 @@ use std::{
 
 use super::{
     directory, dsh_command, file_stamp, read_bounded, registry, regular_file, remove_cache,
-    remove_references, remove_session, save_registry, standard_layout, valid_id, DshPaths,
-    HEADER_LIMIT,
+    remove_references, save_registry, standard_layout, valid_id, DshPaths, HEADER_LIMIT,
 };
 use crate::{
     provider_sessions::{
@@ -1293,6 +1292,114 @@ pub fn preview_batch_item(
     })
 }
 
+fn remove_dsh_cache_strict(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> bool {
+    let root = paths.home.join("storages/session_projcache");
+    match directory(&root) {
+        Ok(true) => {}
+        Ok(false) => return true,
+        Err(err) => {
+            outcome.residuals.push(format!("{}: {err}", root.display()));
+            return false;
+        }
+    }
+    let rows = root.join("sessions");
+    match directory(&rows) {
+        Ok(true) => {}
+        Ok(false) => return true,
+        Err(err) => {
+            outcome.residuals.push(format!("{}: {err}", rows.display()));
+            return false;
+        }
+    }
+    let entries = match fs::read_dir(&rows) {
+        Ok(entries) => entries,
+        Err(err) => {
+            outcome.residuals.push(format!("{}: {err}", rows.display()));
+            return false;
+        }
+    };
+    let name = format!("{id}.json");
+    let backup = format!("{name}.bak.");
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                outcome.residuals.push(format!("{}: {err}", rows.display()));
+                return false;
+            }
+        };
+        let filename = entry.file_name();
+        let filename = filename.to_string_lossy();
+        if filename == name
+            || filename
+                .strip_prefix(&backup)
+                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
+        {
+            if !outcome.remove_strict(&entry.path()) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn remove_dsh_session_strict(path: &Path, outcome: &mut Outcome) -> bool {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(err) => {
+            outcome.residuals.push(format!("{}: {err}", path.display()));
+            return false;
+        }
+    };
+    if meta.file_type().is_symlink() {
+        return outcome.remove_strict(path);
+    }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            outcome.residuals.push(format!("{}: {err}", path.display()));
+            return false;
+        }
+    };
+    let mut headers = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                outcome.residuals.push(format!("{}: {err}", path.display()));
+                return false;
+            }
+        };
+        if entry.file_name().to_string_lossy().starts_with("session.v") {
+            headers.push(entry.path());
+        } else if !outcome.remove_strict(&entry.path()) {
+            return false;
+        }
+    }
+    for header in headers {
+        if !outcome.remove_strict(&header) {
+            return false;
+        }
+    }
+    let before = outcome.residuals.len();
+    outcome.attempt(path, || Ok(fs::remove_dir(path)?));
+    outcome.residuals.len() == before
+}
+
+fn record_remaining_dsh_residuals(
+    paths: &DshPaths,
+    all: &[DiscoveredSession],
+    remaining_ids: &[String],
+    outcome: &mut Outcome,
+) {
+    for path in collect_owned_paths_for_ids(paths, all, remaining_ids) {
+        if path.exists() {
+            outcome.residuals.push(path.display().to_string());
+        }
+    }
+}
+
 pub fn preview_batch_item_checked(
     paths: &DshPaths,
     key: &str,
@@ -1313,8 +1420,23 @@ pub fn preview_batch_item_checked(
                 .unwrap_or("该会话正在运行，无法删除")
         );
     }
-    let descendants = if operation == SessionOperation::Delete && include_descendants {
+    let all_descendants = if operation == SessionOperation::Delete {
         find_subagent_descendants(&all, &summary.id)
+    } else {
+        Vec::new()
+    };
+    if operation == SessionOperation::Delete {
+        for child_id in &all_descendants {
+            for child in all.iter().filter(|s| &s.id == child_id) {
+                ensure!(
+                    !is_session_locked_readonly(&child.dir),
+                    "子会话正在 DeepSeek Harness 中运行，请先退出后再删除"
+                );
+            }
+        }
+    }
+    let descendants = if operation == SessionOperation::Delete && include_descendants {
+        all_descendants
     } else {
         Vec::new()
     };
@@ -1402,61 +1524,96 @@ pub fn execute_batch_item_checked(
                 .iter()
                 .find(|s| s.id == key && !s.is_subagent())
                 .with_context(|| format!("未找到 DeepSeek Harness 会话：{key}"))?;
+            let verified_descendants = find_subagent_descendants(&all, key);
+            let verified_set: BTreeSet<&str> =
+                verified_descendants.iter().map(String::as_str).collect();
+            for child in descendants {
+                valid_id(child)?;
+                ensure!(
+                    include_descendants && verified_set.contains(child.as_str()),
+                    "子会话 {child} 不属于当前主会话，拒绝删除"
+                );
+            }
             ensure!(
                 !is_session_locked_readonly(&root.dir),
                 "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
             );
+            for child_id in &verified_descendants {
+                for child in all.iter().filter(|s| &s.id == child_id) {
+                    ensure!(
+                        !is_session_locked_readonly(&child.dir),
+                        "子会话正在 DeepSeek Harness 中运行，请先退出后再删除"
+                    );
+                }
+            }
 
-            let mut delete_ids = BTreeSet::new();
-            delete_ids.insert(key.to_owned());
-            if include_descendants {
-                let discovered = if descendants.is_empty() {
-                    find_subagent_descendants(&all, key)
-                } else {
-                    descendants.to_vec()
-                };
-                for child in discovered {
-                    valid_id(&child)?;
-                    // Never allow a non-subagent user session (e.g. a fork) into descendant deletion
-                    if all.iter().any(|s| s.id == child && s.is_subagent()) {
-                        delete_ids.insert(child);
-                    }
+            let mut ordered_ids: Vec<String> = if include_descendants {
+                verified_descendants.into_iter().rev().collect()
+            } else {
+                Vec::new()
+            };
+            ordered_ids.push(key.to_owned());
+
+            let mut leases = Vec::new();
+            for id in &ordered_ids {
+                for s in all.iter().filter(|s| &s.id == id) {
+                    let Some(lease) = try_acquire_session_lease(&s.dir)? else {
+                        bail!("会话或子会话正在 DeepSeek Harness 中运行，请先退出后再删除");
+                    };
+                    leases.push(lease);
                 }
             }
 
             let mut outcome = Outcome::default();
+            let mut deleted_ids = Vec::new();
             let mut parent_project_dirs = BTreeSet::new();
-            for id in &delete_ids {
-                if let Err(err) = remove_cache(paths, id, &mut outcome) {
-                    outcome.residuals.push(format!("投影缓存：{err}"));
+            let pins_dir = paths.home.join("sessions/resume-pins");
+            for (idx, id) in ordered_ids.iter().enumerate() {
+                if !remove_dsh_cache_strict(paths, id, &mut outcome) {
+                    record_remaining_dsh_residuals(paths, &all, &ordered_ids[idx..], &mut outcome);
+                    break;
                 }
+                let mut dir_failed = false;
                 for s in all.iter().filter(|s| &s.id == id) {
                     if let Some(p) = s.dir.parent() {
                         parent_project_dirs.insert(p.to_path_buf());
                     }
-                    if let Err(err) = remove_session(&s.dir, &mut outcome) {
-                        outcome.residuals.push(format!("会话目录：{err}"));
+                    if !remove_dsh_session_strict(&s.dir, &mut outcome) {
+                        dir_failed = true;
+                        break;
                     }
                 }
-            }
-
-            // Clean optional resume-pins matching deleted IDs
-            let pins_dir = paths.home.join("sessions/resume-pins");
-            if pins_dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(&pins_dir) {
-                    for entry in entries.flatten() {
-                        let fname = entry.file_name().to_string_lossy().into_owned();
-                        if delete_ids
-                            .iter()
-                            .any(|id| fname == *id || fname.starts_with(&format!("{id}.")))
-                        {
-                            outcome.remove(&entry.path());
+                if dir_failed {
+                    record_remaining_dsh_residuals(paths, &all, &ordered_ids[idx..], &mut outcome);
+                    break;
+                }
+                if pins_dir.is_dir() {
+                    if let Ok(entries) = fs::read_dir(&pins_dir) {
+                        let mut pin_failed = false;
+                        for entry in entries.flatten() {
+                            let fname = entry.file_name().to_string_lossy().into_owned();
+                            if fname == *id || fname.starts_with(&format!("{id}.")) {
+                                if !outcome.remove_strict(&entry.path()) {
+                                    pin_failed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if pin_failed {
+                            record_remaining_dsh_residuals(
+                                paths,
+                                &all,
+                                &ordered_ids[idx + 1..],
+                                &mut outcome,
+                            );
+                            break;
                         }
                     }
                 }
+                deleted_ids.push(id.clone());
             }
+            drop(leases);
 
-            // Prune empty project directories under sessions/
             for pdir in parent_project_dirs {
                 if pdir.is_dir()
                     && fs::read_dir(&pdir)
@@ -1467,10 +1624,11 @@ pub fn execute_batch_item_checked(
                 }
             }
 
-            if outcome.residuals.is_empty() {
+            if !deleted_ids.is_empty() {
                 if let Some(reg) = index {
+                    let deleted_set: BTreeSet<String> = deleted_ids.iter().cloned().collect();
                     let mut value = reg.value.clone();
-                    remove_references(&mut value, &delete_ids);
+                    remove_references(&mut value, &deleted_set);
                     if let Err(err) = save_registry(&reg, &value, &check_stopped) {
                         outcome.residuals.push(format!("工作区索引：{err}"));
                     }
@@ -1486,8 +1644,8 @@ pub fn execute_batch_item_checked(
                 }
                 .into(),
                 message: (!outcome.residuals.is_empty())
-                    .then(|| "部分 DSH 会话数据未清理，请重试".into()),
-                deleted_ids: delete_ids.into_iter().collect(),
+                    .then(|| "部分 DSH 会话未完成删除，已停止后续删除".into()),
+                deleted_ids,
                 residuals: outcome.residuals,
             })
         }
@@ -1681,6 +1839,185 @@ mod tests {
         let remaining = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, fork_id);
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn dsh_delete_rejects_forged_cross_root_subagents_and_locked_descendants() {
+        let home =
+            std::env::temp_dir().join(format!("nexushub-dsh-guard-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/--workspace-demo--");
+        let root_a = "session-aaaa1111";
+        let sub_a = "session-aaaa2222";
+        let root_b = "session-bbbb1111";
+        let sub_b = "session-bbbb2222";
+        for id in [root_a, sub_a, root_b, sub_b] {
+            fs::create_dir_all(proj.join(id)).unwrap();
+        }
+        fs::create_dir_all(home.join("storages/session_projcache/sessions")).unwrap();
+        fs::write(
+            home.join("storages/workspace.json"),
+            serde_json::to_vec(&json!({
+                "unit": { "name": "workspace", "version": 2 },
+                "global": {
+                    "initialized": true,
+                    "workspaceIds": ["ws-1"],
+                    "defaultWorkspaceId": "ws-1",
+                    "archivedSessionIds": [],
+                    "pinnedSessionIds": []
+                },
+                "tables": {
+                    "workspaces": {
+                        "ws-1": {
+                            "path": "/workspace/demo",
+                            "title": "Demo",
+                            "sessionIds": [root_a, root_b]
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        write_zstd_frames(
+            &proj.join(root_a).join("session.v4.jsonl.zstd"),
+            &[json!({"type":"session","version":4,"id":root_a,"createdAt":1,"cwd":"/workspace/demo","isSeeded":false})],
+        );
+        write_zstd_frames(
+            &proj.join(sub_a).join("session.v4.jsonl.zstd"),
+            &[json!({"type":"session","version":4,"id":sub_a,"createdAt":2,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_a,"delegationDepth":1})],
+        );
+        write_zstd_frames(
+            &proj.join(root_b).join("session.v4.jsonl.zstd"),
+            &[json!({"type":"session","version":4,"id":root_b,"createdAt":3,"cwd":"/workspace/demo","isSeeded":false})],
+        );
+        write_zstd_frames(
+            &proj.join(sub_b).join("session.v4.jsonl.zstd"),
+            &[json!({"type":"session","version":4,"id":sub_b,"createdAt":4,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_b,"delegationDepth":1})],
+        );
+
+        let paths = DshPaths { home: home.clone() };
+
+        // 1. Forged root session ID in descendants is rejected
+        assert!(execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[root_b.to_string()],
+            true,
+            || Ok(()),
+        )
+        .is_err());
+        assert!(proj.join(root_b).exists());
+
+        // 2. Cross-root subagent ID (is_subagent == true, but parent is root_b) is rejected
+        assert!(execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[sub_b.to_string()],
+            true,
+            || Ok(()),
+        )
+        .is_err());
+        assert!(proj.join(sub_b).exists());
+
+        // 3. Passing descendants when include_descendants == false is rejected
+        assert!(execute_batch_item_checked(
+            &paths,
+            root_a,
+            SessionOperation::Delete,
+            &[sub_a.to_string()],
+            false,
+            || Ok(()),
+        )
+        .is_err());
+
+        // 4. Locked descendant blocks both preview and execute before any deletion
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let lock_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(proj.join(sub_a).join("session.lock"))
+                .unwrap();
+            assert_eq!(
+                unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            assert!(preview_batch_item_checked(
+                &paths,
+                root_a,
+                SessionOperation::Delete,
+                true,
+                || Ok(()),
+            )
+            .is_err());
+            assert!(execute_batch_item_checked(
+                &paths,
+                root_a,
+                SessionOperation::Delete,
+                &[],
+                true,
+                || Ok(()),
+            )
+            .is_err());
+            assert!(proj.join(root_a).exists());
+            assert!(proj.join(sub_a).exists());
+            unsafe {
+                let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+
+        // 5. Partial filesystem failure stops on sub_a before touching root_a or workspace.json
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Pre-create session.lock so lease acquisition succeeds while directory unlink fails
+            fs::write(proj.join(sub_a).join("session.lock"), b"").unwrap();
+            fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o500)).unwrap();
+            let partial = execute_batch_item_checked(
+                &paths,
+                root_a,
+                SessionOperation::Delete,
+                &[],
+                true,
+                || Ok(()),
+            )
+            .unwrap();
+            assert_eq!(partial.status, "failed");
+            assert!(partial.deleted_ids.is_empty());
+            assert!(!partial.residuals.is_empty());
+            assert!(proj.join(root_a).exists());
+            let ws_mid: Value =
+                serde_json::from_slice(&fs::read(home.join("storages/workspace.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                ws_mid["tables"]["workspaces"]["ws-1"]["sessionIds"],
+                json!([root_a, root_b])
+            );
+
+            fs::set_permissions(proj.join(sub_a), fs::Permissions::from_mode(0o700)).unwrap();
+            let retried = execute_batch_item_checked(
+                &paths,
+                root_a,
+                SessionOperation::Delete,
+                &[],
+                true,
+                || Ok(()),
+            )
+            .unwrap();
+            assert_eq!(retried.status, "succeeded");
+            assert!(!proj.join(root_a).exists());
+            assert!(!proj.join(sub_a).exists());
+            assert!(proj.join(root_b).exists());
+            assert!(proj.join(sub_b).exists());
+        }
 
         fs::remove_dir_all(home).unwrap();
     }

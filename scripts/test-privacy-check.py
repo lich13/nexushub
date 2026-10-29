@@ -31,6 +31,12 @@ class PrivacyChecks(unittest.TestCase):
         data = b"\x7fELF\01.4.0.1\0http://concatenatedliteral\0fixture-private-value\0/Users/" + b"synthetic-person/source"
         self.assertEqual(privacy.problems(data, ["fixture-private-value"]), ["private_home", "private_value"])
 
+    def test_native_payload_rejects_public_ipv4_while_allowing_loopback(self):
+        loopback_elf = b"\x7fELF\0" + b"127.0.0.1:8080\0"
+        self.assertEqual(privacy.problems(loopback_elf, []), [])
+        public_ip_elf = b"\x7fELF\0" + b".".join([b"7", b"0", b"0", b"1"]) + b":80\0"
+        self.assertEqual(privacy.problems(public_ip_elf, []), ["public_ip"])
+
     def test_generated_frontend_skips_lexical_url_false_positives(self):
         bundle = b'"ht' + b'tps://www.css";const source="https://service.example.invalid";'
         self.assertIn("unreviewed_endpoint", privacy.problems(bundle, []))
