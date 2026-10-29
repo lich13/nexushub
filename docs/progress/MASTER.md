@@ -2,14 +2,17 @@
 
 ## 当前版本
 
-当前维护源码版本为 1.5.0，基线为 `2c3cb22 / v1.4.0`。本版恢复原生二进制公网 IP 隐私门禁，收紧 Antigravity 与 DeepSeek Harness（DSH）子会话删除的执行端闭包重算、运行态／锁占用拦截与首错即停残留报告；统一五类 Agent「复制路径」最优交接文件（补齐 Grok Build 行菜单与顶栏复制路径）；前后端移除顶部五类状态筛选栏并改为底部按需加载的轻量折叠「已归档」抽屉；将「多选线程」按钮与行首复选框切换为访达风格 `⌘`／`Shift` 多选与多选右键／快捷键批处理；统一五类 Agent 连续中间过程的单框折叠，修复左侧用户时间线（横线）刷新丢失与折叠跳转，并消除 Antigravity 在后台任务、定时器或子代理尚未收敛时提前发送完成 Bark 提醒的问题；同时深度重写前端视觉细节。API 协议保持 2；macOS App 仍是唯一界面。
+当前维护源码版本为 1.6.0，基线为 `8dbd11d / v1.5.0`。本版加固五类 Agent「复制路径」最优交接文件边界（Codex 真实在盘明文／归档／压缩 rollout 解析、Grok 零字节占位过滤与多级回退）；彻底移除 Antigravity 读路径 `presence.lock` 探测（消除已结束但仍在窗口打开会话常亮「运行中」与转圈问题，离线删除改用非阻塞共享锁 `LOCK_SH`），显式上抛子会话索引库读取错误以阻断孤儿子会话遗留；将本机 Antigravity 环回 RPC 限额提升至 256 MiB 并改用当前轮增量步扫描，结合子代理运行态、后台任务日志句柄／mtime 与 15 秒有界交接宽限期实现 Bark 完成通知「不抢发且最终必达」；修复 Antigravity 在线／离线转录 `GENERIC` 工具输出、多轮唤醒回合归属与过渡说明打断折叠的问题，以及 Claude Code 穿插自动记账／上下文记录与错误结尾加尾部记账导致的整轮未折叠问题；将整体前端深度重写为三层冷暖空气感表面与七大工作区专属宝石色调体系；并将标签发布流水线升级为自包含并行门禁（支持 `main` 与发布标签同推）。API 协议保持 2；macOS App 仍是唯一界面。
 
-历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 为准。
+历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/nexushub/actions/workflows/release.yml) 为准。
 
 ## 已实现范围
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| 交接路径加固与 Antigravity 状态／折叠／通知收敛 | Codex 交接路径优先解析在盘明文、归档或 `.jsonl.zst` rollout，Grok 过滤零字节占位并回退非空日志／摘要；Antigravity 读路径零 `flock`、在线状态严格对齐活跃轨迹与子代理、离线删除改用 `LOCK_SH` 且索引库错误显式阻断；本机环回 RPC 256 MiB + 增量步扫描 + 子代理／后台任务有界宽限期保障 Bark 不抢发且最终必达；在线／离线 `GENERIC` 工具结果与过渡旁白统一归入单轮折叠。 | `26e53fd` |
+| Claude 复杂回合折叠与多色调宝石视觉重写 | Claude Code 识别尾部仅含自动记账的终态／网关错误边界，跨 `atis-latch`／`attachment`／`native_context` 合并同轮命令执行组并将过程相邻自动元数据并入单框折叠；全局升级为三层冷暖表面层次与七工作区专属宝石主色（常驻七色导航图标、专属色选中条、云青用户胶囊、深海蓝代码胶囊与多色顶栏仪表盘卡片），浅／深色全表面满足 WCAG `>= 4.5:1`。 | `23d937a` |
+| 自包含并行标签发布门禁 | `ci.yml` 支持 `workflow_call` 复用；`release.yml` 在 `guard` 前置校验六节中文发布说明后，并行执行完整前后端／Tauri CI 门禁与 Linux／macOS 签名打包，支持 `main` 与标签一次同推。 | `cf85a02` |
 | 隐私门禁与子会话删除加固 | 消除 x86_64 端口解析跨字面量立即数片段并恢复原生二进制公网 IP 隐私扫描；Antigravity 与 DSH 删除执行端重新核验真实子代理闭包，逐项检查根与子会话运行／锁状态，在线 RPC 或文件系统首错即停并返回 residuals。 | `13d7de2` |
 | 五类 Agent 最优交接路径与筛选收敛 | Antigravity 优先复制完整纯文本转录日志，Grok 新增 `handoff_path`（优先 `chat_history.jsonl`）与复制路径菜单，Codex 覆盖活跃／归档 rollout，Claude 与 DSH 保持明文优先；移除顶部状态筛选栏，提供底部轻量折叠「已归档」抽屉并支持打开归档详情。 | `9847927`, `6170acf` |
 | 访达多选、过程折叠、时间线与通知收敛 | 移除多选按钮与复选框，统一访达风格 `⌘`／`Shift` 多选、右键批处理菜单与 `⌘A`／`Escape`／`⌘⌫`；同回合交替思考与工具折叠为单条摘要（单执行组零 DOM 膨胀）；分页轮询保留首页 `timeline` 并补全在线批注与首轮提示；Antigravity 完成 Bark 等待根与子轨迹、后台任务及子代理全部收敛。 | `9847927`, `6170acf` |
@@ -31,6 +34,8 @@
 实现、安全边界、旧字段与旧队列兼容见[架构说明](../ARCHITECTURE.md)。删除按确认目标逐项执行，失败返回 residuals 并继续其他目标；归档、恢复和改名仍沿用各自规则。Claude 删除不触碰工作目录或共享文件中的非目标记录。
 
 ## 必要验证
+
+1.6.0 本机与主／标签 CI 已通过 `nexushub-core`／`nexushub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（含 Codex 明文／归档／压缩交接路径解析、Grok 零字节占位过滤、Antigravity `presence.lock` 闲置不误判与离线 `LOCK_SH` 拦截、损坏 `conversation_summaries.db` 阻断删除、超长会话当前轮增量步扫描、子代理／后台任务无 `SYSTEM_MESSAGE` 退出有界宽限期最终必达与活跃期抑制双向断言、在线／离线 `GENERIC` 工具与过渡说明折叠）、Rust／TypeScript 线协议契约锁、WebUI 65 文件 835 项 Vitest（含 Claude 穿插自动元数据与网关错误结尾折叠）与类型检查、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 一次全绿通过七工作区浅／深色 × 八视口多色调界面零溢出与对比度 E2E 及 macOS 有头 WebKit 交互帧预算检查。未使用真实用户会话执行写操作或删除测试。
 
 1.5.0 本机与主 CI 已通过 `nexushub-core`／`nexushub-webd`／`src-tauri` 全量测试及两端 Clippy（含子会话越界注入、运行／锁拦截、在线 RPC 失败零误删与部分文件失败残留报告、五大 Agent 交接路径优先级、Antigravity 后台任务／定时器／子代理未收敛抑制 Bark 完成提醒）、Rust／TypeScript 线协议契约锁、WebUI 65 文件 833 项 Vitest 与类型检查、安装脚本及恢复原生二进制 `ipv4` 公网 IP 检查后的发布载荷隐私扫描；GitHub Actions 三项主 CI 已通过七工作区浅／深色 × 八视口零溢出与对比度 E2E、底部「已归档」抽屉与访达 `⌘`／`Shift` 多选批处理 E2E、五类 Agent 上下文菜单（含 Grok 复制路径）E2E 以及 macOS 有头 WebKit 交互帧预算检查。未使用真实用户会话执行写操作或删除测试。
 
@@ -54,6 +59,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 正式交付
 
+1.6.0 按主题拆分的三个独立提交 [`26e53fd`](https://github.com/lich13/nexushub/commit/26e53fdeb7efc521258d446787c5036a6ca84d88)、[`23d937a`](https://github.com/lich13/nexushub/commit/23d937acecc96e3cdc2a01c422548bab3886a692) 与 [`cf85a02`](https://github.com/lich13/nexushub/commit/cf85a026c1fcb16e614b25f0c50f85db039c03f0) 已与 `v1.6.0` 标签同推，[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40865327483) 与自包含并行 [`v1.6.0` Release CI](https://github.com/lich13/nexushub/actions/runs/40865327712) 均一次全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.6.0)。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `nexushub-webd 1.6.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `NexusHub-1.6.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地覆盖安装本机 macOS App，bundle 版本及本机监控守护进程均为 1.6.0 且启动运行，没有保留旧副本。真实用户会话未执行删除，待用户验收。
+
 1.5.0 核心提交 [`13d7de2`](https://github.com/lich13/nexushub/commit/13d7de25ff8cbc1625736b306c7cfad5d88f7431)、[`9847927`](https://github.com/lich13/nexushub/commit/9847927ffc20406ba71718dc9871c6ee6a346880)、[`6170acf`](https://github.com/lich13/nexushub/commit/6170acf393622c9bbb9f1d002ce147d2820ac166) 与发版提交 [`016db18`](https://github.com/lich13/nexushub/commit/016db18c08b9bc91d68b661d6248b538b500c3cb) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40815957745)（macOS WebKit 性能作业重跑后）与 [`v1.5.0` Release CI](https://github.com/lich13/nexushub/actions/runs/40817452620) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.5.0)（Linux 与 macOS 原生二进制均通过恢复后的公网 IP 隐私门禁）。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `nexushub-webd 1.5.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `NexusHub-1.5.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地覆盖安装本机 macOS App，bundle 版本及本机监控进程均为 1.5.0 且启动运行，没有保留旧副本。真实用户会话未执行删除，待用户验收。
 
 1.4.0 发布提交 [`04dcb98`](https://github.com/lich13/nexushub/commit/04dcb98b1e7d452dda5ffe28ba6f9dfd5aba065e) 的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/40648048212)与 [`v1.4.0` Release CI](https://github.com/lich13/nexushub/actions/runs/40648932371) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.4.0)。已按先云端后本机顺序，先使用正式 Linux 服务包升级远端节点 `nexushub-webd 1.4.0`，service 为 `active`、health 为 `{"ok":true}`；再使用正式 `NexusHub-1.4.0-darwin-arm64.dmg`（SHA-256 与签名校验通过）原地覆盖安装本机 macOS App，bundle 版本为 1.4.0 且启动运行，没有保留旧副本。真实用户会话未执行删除，待用户验收。
@@ -73,6 +80,8 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 1.3.7 核心实现由 [`6ca0716`](https://github.com/lich13/nexushub/commit/6ca0716)、[`e363069`](https://github.com/lich13/nexushub/commit/e363069)、[`d73b2d4`](https://github.com/lich13/nexushub/commit/d73b2d4)、[`0d7afea`](https://github.com/lich13/nexushub/commit/0d7afea) 和 [`70602df`](https://github.com/lich13/nexushub/commit/70602df) 完成；版本、文档和发布说明收尾提交为 [`cffb3e9`](https://github.com/lich13/nexushub/commit/cffb3e9)。该提交对应的[三项主 CI](https://github.com/lich13/nexushub/actions/runs/39727312472) 与 [`v1.3.7` Release CI](https://github.com/lich13/nexushub/actions/runs/39728000909) 全绿，已发布[八项正式资产](https://github.com/lich13/nexushub/releases/tag/v1.3.7)。已使用正式 Linux 服务包升级远端 API，服务版本为 1.3.7、systemd 为 active、回环 healthz 成功；已安装正式 macOS ARM64 App，bundle 版本为 1.3.7 且启动成功，并保留 1.3.6 回退 App。安装和部署临时文件已清理，未自动启用 Claude hooks。
 
 ## 待用户验收
+
+打开新版 `NexusHub.app`（`1.6.0`），在本机与远端切换下依次核验：① 五类 Agent 的「复制路径」均复制出真实在盘最优交接文件；② Claude Code 复杂长会话（含穿插系统／上下文记录及错误收尾回合）与 Antigravity 超长会话的中间命令、思考与工具结果均收敛为单条折叠摘要；③ 已结束但在 Antigravity 窗口中保持打开的会话不再一直转圈或常亮「运行中」，新回合彻底完成后正常收到一次 Bark 完成通知；④ 七大工作区浅／深色三层冷暖表面与专属宝石色调视觉层次。
 
 在本机与远端机器切换下打开五类 Agent 工作区，核验：顶部状态筛选栏与“多选线程”按钮已移除，列表底部可按需展开「已归档」抽屉并打开或恢复归档会话；五类 Agent 的「复制路径」（含 Grok Build 行菜单与顶栏更多菜单）均复制出最优纯文本／主交接文件；按住 `⌘` 单击、`Shift` 连选、右键批量菜单及 `⌘A`／`Escape`／`⌘⌫` 快捷键符合访达多选习惯；同一回合内交替的思考与工具执行折叠为单条摘要行，左侧横线时间线在五类 Agent 下均可悬停预览并准确跳转定位；在 Antigravity 发起包含后台命令或子代理的真实长任务，确认仅在整个线程彻底收敛后才收到一次完成 Bark 提醒。
 
