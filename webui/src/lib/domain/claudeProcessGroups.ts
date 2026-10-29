@@ -38,8 +38,30 @@ function foldAutomatic(entries: ExecutionRenderItem<ClaudeHistoryEvent>[]): Clau
     pending = [];
   };
   for (const entry of entries) {
-    if (entry.kind === "item" && isAutomatic(entry.item)) pending.push(entry);
-    else { flush(); result.push(entry); }
+    if (entry.kind === "item" && isAutomatic(entry.item)) {
+      pending.push(entry);
+      continue;
+    }
+    if (
+      entry.kind === "group" &&
+      pending.length > 0 &&
+      pending.every(item => !["compaction", "branch_summary"].includes(item.item.kind))
+    ) {
+      const prev = result[result.length - 1];
+      if (
+        prev?.kind === "group" &&
+        (!prev.group.turnId || !entry.group.turnId || prev.group.turnId === entry.group.turnId)
+      ) {
+        prev.group.commands.push(...entry.group.commands);
+        if (entry.group.kind === "tool") prev.group.kind = "tool";
+        if (!prev.group.turnId && entry.group.turnId) prev.group.turnId = entry.group.turnId;
+        prev.group.running = prev.group.commands.some(command => command.status === "running");
+        prev.group.failedCount = prev.group.commands.filter(command => command.status === "failed").length;
+        continue;
+      }
+    }
+    flush();
+    result.push(entry);
   }
   flush();
   return result;
@@ -55,9 +77,17 @@ function groupTurn(events: ClaudeHistoryEvent[], turnId: string, context: string
   if (events.every(isAutomatic)) return foldAutomatic(groupClaudeEvents(events));
   const first = events.findIndex(isProcess);
   const final = events.findIndex((event, index) => index > first && event.assistantPhase === "final");
-  // A native final answer closes the process. Later bookkeeping stays in its
-  // original position rather than pulling the final answer into the disclosure.
-  let last = final >= 0 ? final - 1 : events.length - 1;
+  // A native final answer (or a terminal non-process reply/API error followed
+  // only by automatic turn-duration/cost-state bookkeeping) closes the process.
+  const closing = final >= 0
+    ? final
+    : events.findIndex(
+        (event, index) =>
+          index > first &&
+          !isProcess(event) &&
+          events.slice(index + 1).every(later => !isProcess(later) || isAutomatic(later)),
+      );
+  let last = closing >= 0 ? closing - 1 : events.length - 1;
   while (last >= 0 && !isProcess(events[last])) last--;
   // Unknown-phase prose stays at its native position. If it interrupts the
   // process, retain the existing presentation instead of reordering or hiding it.

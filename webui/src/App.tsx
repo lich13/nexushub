@@ -81,7 +81,7 @@ export default function App() {
     });
   };
 
-  return <SearchWorkspaceProvider><div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+  return <SearchWorkspaceProvider><div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`} data-workspace={view}>
       <SideNav view={view} setView={setView} collapsed={navCollapsed} capabilities={capabilities} onCollapse={toggleNavCollapsed} onConfigure={() => { setView("ops"); setSettingsSection("remote"); }} />
         <main className="main-workspace">
           {(connection.error || systemCapabilities.error) && <div role="alert" className="form-error">{connection.error || systemCapabilities.error?.message}</div>}
@@ -165,7 +165,7 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
       <MachineButton collapsed={collapsed} onConfigure={onConfigure} />
       <nav>
         {items.map((item) => (
-          <NavButton key={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
+          <NavButton key={item.id} navId={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
             {item.label}
           </NavButton>
         ))}
@@ -174,8 +174,8 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
   );
 }
 
-function NavButton({ icon, active, onClick, children }: { icon: ReactNode; active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button className={`nav-button ${active ? "active" : ""}`} title={String(children)} aria-label={String(children)} aria-current={active ? "page" : undefined} onClick={onClick}>{icon}<span>{children}</span></button>;
+function NavButton({ navId, icon, active, onClick, children }: { navId: View; icon: ReactNode; active: boolean; onClick: () => void; children: ReactNode }) {
+  return <button data-nav-id={navId} className={`nav-button ${active ? "active" : ""}`} title={String(children)} aria-label={String(children)} aria-current={active ? "page" : undefined} onClick={onClick}>{icon}<span>{children}</span></button>;
 }
 
 function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {
@@ -197,7 +197,7 @@ function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {
       </div>
       <div className="mobile-tabs">
         {items.map((item) => (
-          <button key={item.id} title={item.label} aria-label={item.label} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
+          <button key={item.id} data-nav-id={item.id} title={item.label} aria-label={item.label} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
             {item.icon}
             <span>{item.label}</span>
           </button>

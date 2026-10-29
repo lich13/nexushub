@@ -141,3 +141,28 @@ test("automatic preamble and summaries fold without bubbles and keep search and 
   expect(found.html).toContain("Snapshot fixture");
   expect(found.html).not.toContain("Compaction fixture");
 });
+
+test("interleaved commands, atis-latch, native_context and trailing turn_duration/cost-state after API error fold cleanly", () => {
+  const events = [
+    event("u1", "user_message", { text: "Inspect pipeline" }),
+    event("t1", "thinking", { text: "Hidden step 1" }),
+    event("c1", "tool_call", { callId: "b1", role: "Bash", status: "completed", detail: "secret-cmd-1" }),
+    event("l1", "atis-latch", { text: "会话设置", detail: "latch-detail" }),
+    event("r1", "tool_result", { callId: "b1", status: "completed", result: "secret-out-1" }),
+    event("n1", "system", { role: "native_context", text: "上下文", detail: "ctx-detail" }),
+    event("c2", "tool_call", { callId: "b2", role: "Bash", status: "completed", detail: "secret-cmd-2" }),
+    event("r2", "tool_result", { callId: "b2", status: "completed", result: "secret-out-2" }),
+    event("err", "assistant_message", { text: "API Error: 502 Upstream request failed (https://example.invalid)." }),
+    event("dur", "system", { role: "turn_duration", detail: "12s" }),
+    event("cost", "cost-state", { text: "用量状态", detail: "tokens" }),
+  ];
+  const closed = render(events, "d3678-regression");
+  expect(closed.html).toContain("已思考");
+  expect(closed.html).toContain("2 项工具");
+  expect(closed.html).toContain("API Error: 502 Upstream request failed");
+  expect(closed.html).not.toContain("Hidden step 1");
+  expect(closed.html).not.toContain("secret-cmd-1");
+  expect(closed.html).not.toContain("secret-out-1");
+  expect(closed.html).not.toContain("secret-cmd-2");
+  expect(closed.html).not.toContain("ctx-detail");
+});

@@ -83,3 +83,34 @@ test("headers retain failure, plan, reply and authorization evidence while conte
   expect(process(groupClaudeProcesses([{ ...permission, status: "completed" }]))).toMatchObject({ needsPermission: false, hasPermission: true });
   expect(process(groupClaudeProcesses([permission, event("failure", "failure", { status: "failed" })]))).toMatchObject({ needsPermission: false, failedCount: 1, running: false });
 });
+
+test("API error reply followed by trailing turn_duration and cost-state still folds preceding commands and coalesces across atis-latch", () => {
+  const result = groupClaudeProcesses([
+    event("user", "user_message", { text: "Run CI checks" }),
+    event("think-1", "thinking", { text: "Checking build" }),
+    event("explain-1", "assistant_message", { assistantPhase: "intermediate", text: "Running first command" }),
+    event("bash-1", "tool_call", { callId: "b1", role: "Bash", status: "in_progress", detail: "{\"command\":\"cargo test\"}" }),
+    event("latch-1", "atis-latch", { text: "会话设置", detail: "{}" }),
+    event("bash-1-out", "tool_result", { callId: "b1", status: "completed", result: "ok" }),
+    event("ctx-1", "system", { role: "native_context", detail: "context" }),
+    event("bash-2", "tool_call", { callId: "b2", role: "Bash", status: "in_progress", detail: "{\"command\":\"cargo clippy\"}" }),
+    event("attach-1", "attachment", { text: "附件记录", detail: "{}" }),
+    event("bash-2-out", "tool_result", { callId: "b2", status: "completed", result: "ok" }),
+    event("api-err", "assistant_message", { text: "API Error: 502 Upstream request failed (https://example.invalid)." }),
+    event("duration", "system", { role: "turn_duration" }),
+    event("cost", "cost-state", { text: "用量状态", detail: "{}" }),
+  ]);
+  expect(result.map(entry => entry.kind)).toEqual(["item", "process", "item", "metadata"]);
+  const group = process(result);
+  expect(group.toolCount).toBe(2);
+  expect(group.completed).toBe(false);
+  const execGroups = group.entries.filter(entry => entry.kind === "group");
+  expect(execGroups).toHaveLength(1);
+  if (execGroups[0].kind === "group") {
+    expect(execGroups[0].group.commands).toHaveLength(2);
+    expect(execGroups[0].group.commands.map(cmd => cmd.sourceIds)).toEqual([
+      ["bash-1", "bash-1-out"],
+      ["bash-2", "bash-2-out"],
+    ]);
+  }
+});
