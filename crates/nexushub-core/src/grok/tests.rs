@@ -784,3 +784,50 @@ fn native_history_fallback_preserves_messages_tools_and_paging_without_system_co
     );
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_turn() {
+    let (paths, id, path) = fixture();
+    // 1. Only updates.jsonl exists -> handoff_path is updates.jsonl
+    let s1 = resolve_session(&paths, &id).unwrap();
+    let canonical_dir = s1.path.clone();
+    assert_eq!(s1.handoff_path, Some(canonical_dir.join("updates.jsonl")));
+
+    // 2. chat_history.jsonl added -> handoff_path prefers chat_history.jsonl
+    fs::write(
+        path.join("chat_history.jsonl"),
+        concat!(
+            "{\"type\":\"system\",\"content\":\"sys\"}\n",
+            "{\"type\":\"user\",\"synthetic_reason\":\"system_reminder\",\"content\":\"reminder\"}\n",
+            "{\"type\":\"user\",\"timestamp\":\"2026-10-29T01:00:00Z\",\"content\":\"Analyze repo structure\"}\n",
+            "{\"type\":\"assistant\",\"timestamp\":\"2026-10-29T01:00:05Z\",\"content\":\"Done.\"}\n"
+        ),
+    )
+    .unwrap();
+    let s2 = resolve_session(&paths, &id).unwrap();
+    assert_eq!(
+        s2.handoff_path,
+        Some(canonical_dir.join("chat_history.jsonl"))
+    );
+
+    // 3. updates.jsonl begins directly with assistant + follow-up user turn -> turn 1 is prepended to events & timeline
+    fs::write(
+        path.join("updates.jsonl"),
+        concat!(
+            "{\"timestamp\":\"2026-10-29T01:00:05Z\",\"sessionUpdate\":\"agent_message_chunk\",\"messageId\":\"a1\",\"content\":{\"text\":\"Done.\"}}\n",
+            "{\"timestamp\":\"2026-10-29T01:01:00Z\",\"sessionUpdate\":\"user_message_chunk\",\"messageId\":\"u2\",\"content\":{\"type\":\"text\",\"text\":\"Follow-up question\"}}\n",
+            "{\"timestamp\":\"2026-10-29T01:01:05Z\",\"sessionUpdate\":\"agent_message_chunk\",\"messageId\":\"a2\",\"content\":{\"text\":\"Second answer.\"}}\n"
+        ),
+    )
+    .unwrap();
+    let detail = grok_session_detail(&paths, &id, None).unwrap();
+    assert_eq!(detail.events.len(), 4);
+    assert_eq!(detail.events[0].kind, "user_message_chunk");
+    assert_eq!(detail.events[0].text.as_deref(), Some("Analyze repo structure"));
+    let timeline = detail.timeline.expect("timeline must be present on page 0");
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0].title, "Analyze repo structure");
+    assert_eq!(timeline[1].title, "Follow-up question");
+
+    fs::remove_dir_all(paths.home).unwrap();
+}

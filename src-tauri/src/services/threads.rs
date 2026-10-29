@@ -45,7 +45,7 @@ pub(crate) fn thread_summaries_with_query(
     };
     let raw_threads = list_threads(
         &paths,
-        plan.list.query.status.as_deref(),
+        plan.list.query.archived.unwrap_or(false),
         plan.list.query.q.as_deref(),
         plan.list.fetch_limit,
     )?;
@@ -69,7 +69,7 @@ pub(crate) fn threads_with_state(
     thread_summaries_with_query(
         state,
         ThreadsQuery {
-            status: request.status,
+            archived: request.archived,
             q: request.query,
             limit: request.limit,
         },

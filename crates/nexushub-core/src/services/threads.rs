@@ -21,7 +21,8 @@ pub const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadsQuery {
-    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
     pub q: Option<String>,
     pub limit: Option<usize>,
 }
@@ -134,7 +135,7 @@ pub fn build_threads_overview(
     archived_thread_ids: &HashSet<String>,
 ) -> ThreadsOverview {
     let response_limit = requested_thread_limit(query.limit);
-    let fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    let fetch_limit = thread_list_fetch_limit(query.limit);
     let threads = apply_thread_list_runtime_state(
         threads,
         ThreadListRuntimeState {
@@ -145,7 +146,7 @@ pub fn build_threads_overview(
     );
     let threads = filter_thread_summaries(
         threads,
-        query.status.as_deref(),
+        query.archived.unwrap_or(false),
         query.q.as_deref(),
         response_limit,
     );
@@ -191,12 +192,6 @@ pub fn plan_threads_list_request(
     mut query: ThreadsQuery,
 ) -> anyhow::Result<ThreadListPlan> {
     require_capability(platform, Capability::Threads)?;
-    query.status = query
-        .status
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
     query.q = query
         .q
         .as_deref()
@@ -204,7 +199,7 @@ pub fn plan_threads_list_request(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let response_limit = requested_thread_limit(query.limit);
-    let fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    let fetch_limit = thread_list_fetch_limit(query.limit);
     Ok(ThreadListPlan {
         required_capability: Capability::Threads,
         query,
@@ -370,17 +365,13 @@ pub fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord
     }
 }
 
-pub fn thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
-    if thread_status_filter_needs_full_scan(status) {
-        usize::MAX
-    } else {
-        requested_thread_limit(limit)
-    }
+pub fn thread_list_fetch_limit(limit: Option<usize>) -> usize {
+    requested_thread_limit(limit)
 }
 
 pub fn filter_thread_summaries(
     mut rows: Vec<ThreadSummary>,
-    status: Option<&str>,
+    archived: bool,
     q: Option<&str>,
     limit: usize,
 ) -> Vec<ThreadSummary> {
@@ -389,12 +380,7 @@ pub fn filter_thread_summaries(
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
     rows.retain(|row| {
-        if let Some(status) = status {
-            if status != "all" && !thread_matches_status(row, status) {
-                return false;
-            }
-        }
-        if !matches!(status, Some("archived")) && matches!(row.status, ThreadStatus::Archived) {
+        if matches!(row.status, ThreadStatus::Archived) != archived {
             return false;
         }
         if let Some(needle) = &needle {
@@ -413,14 +399,6 @@ pub fn filter_thread_summaries(
     ThreadSummary::sort_by_message_time(&mut rows);
     rows.truncate(limit.max(1));
     rows
-}
-
-pub fn thread_summaries_for_status(
-    rows: Vec<ThreadSummary>,
-    status: &str,
-    limit: usize,
-) -> Vec<ThreadSummary> {
-    filter_thread_summaries(rows, Some(status), None, limit)
 }
 
 pub fn prune_hidden_thread_summaries(
@@ -508,21 +486,6 @@ fn block_page_limit(limit: Option<usize>) -> usize {
     normalize_thread_block_limit(limit)
 }
 
-fn thread_status_filter_needs_full_scan(status: Option<&str>) -> bool {
-    matches!(status, Some("running" | "reply-needed" | "recoverable"))
-}
-
-fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
-    matches!(
-        (status, &row.status),
-        ("running", ThreadStatus::Running)
-            | ("reply-needed", ThreadStatus::ReplyNeeded)
-            | ("recoverable", ThreadStatus::Recoverable)
-            | ("archived", ThreadStatus::Archived)
-            | ("recent", ThreadStatus::Recent)
-    )
-}
-
 fn timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
     Local
         .timestamp_opt(timestamp, 0)
@@ -539,15 +502,15 @@ mod tests {
         db::JobRecord,
         platform::{PlatformKind, PlatformPaths},
         services::threads::{
-            apply_thread_detail_runtime_state, build_threads_overview, merge_running_jobs,
-            plan_thread_blocks_read, plan_thread_detail_read, plan_thread_list_read,
-            thread_list_fetch_limit, thread_summaries_for_status, ThreadDetailResponseKind,
+            apply_thread_detail_runtime_state, build_threads_overview, filter_thread_summaries,
+            merge_running_jobs, plan_thread_blocks_read, plan_thread_detail_read,
+            plan_thread_list_read, thread_list_fetch_limit, ThreadDetailResponseKind,
             ThreadsQuery,
         },
     };
 
     #[test]
-    fn overview_filters_hidden_threads_and_merges_running_jobs() {
+    fn overview_filters_hidden_and_archived_threads_and_merges_running_jobs() {
         let threads = vec![
             thread(
                 "visible",
@@ -571,10 +534,10 @@ mod tests {
         let archived = HashSet::from(["archived".to_string()]);
 
         let overview = build_threads_overview(
-            threads,
-            jobs,
+            threads.clone(),
+            jobs.clone(),
             ThreadsQuery {
-                status: Some("running".to_string()),
+                archived: Some(false),
                 q: None,
                 limit: Some(10),
             },
@@ -582,8 +545,8 @@ mod tests {
             &archived,
         );
 
-        assert_eq!(overview.query.status.as_deref(), Some("running"));
-        assert_eq!(overview.fetch_limit, usize::MAX);
+        assert_eq!(overview.query.archived, Some(false));
+        assert_eq!(overview.fetch_limit, 10);
         assert_eq!(
             overview
                 .threads
@@ -605,6 +568,26 @@ mod tests {
             .threads
             .iter()
             .any(|thread| thread.id == "archived"));
+
+        let archived_overview = build_threads_overview(
+            threads,
+            jobs,
+            ThreadsQuery {
+                archived: Some(true),
+                q: None,
+                limit: Some(10),
+            },
+            &hidden,
+            &archived,
+        );
+        assert_eq!(
+            archived_overview
+                .threads
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["archived"]
+        );
     }
 
     #[test]
@@ -639,7 +622,7 @@ mod tests {
                 archived_thread_ids: &archived,
             },
         );
-        let filtered = thread_summaries_for_status(rows, "running", 10);
+        let filtered = filter_thread_summaries(rows, false, None, 10);
 
         assert_eq!(
             filtered
@@ -672,43 +655,9 @@ mod tests {
     }
 
     #[test]
-    fn full_scan_statuses_fetch_all_threads() {
-        assert_eq!(
-            thread_list_fetch_limit(Some("running"), Some(25)),
-            usize::MAX
-        );
-        assert_eq!(
-            thread_list_fetch_limit(Some("reply-needed"), Some(25)),
-            usize::MAX
-        );
-        assert_eq!(
-            thread_list_fetch_limit(Some("recoverable"), Some(25)),
-            usize::MAX
-        );
-        assert_eq!(thread_list_fetch_limit(None, Some(25)), 25);
-        assert_eq!(thread_list_fetch_limit(Some("recent"), None), 80);
-    }
-
-    #[test]
-    fn shared_status_filter_keeps_archived_out_of_probe_style_running_lists() {
-        let rows = vec![
-            thread("recent", ThreadStatus::Recent, Some("2026-06-18T10:00:00Z")),
-            thread(
-                "archived",
-                ThreadStatus::Archived,
-                Some("2026-06-18T12:00:00Z"),
-            ),
-            thread(
-                "running",
-                ThreadStatus::Running,
-                Some("2026-06-18T11:00:00Z"),
-            ),
-        ];
-
-        let filtered = thread_summaries_for_status(rows, "running", 10);
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, "running");
+    fn fetch_limit_clamps_to_requested_page_size() {
+        assert_eq!(thread_list_fetch_limit(Some(25)), 25);
+        assert_eq!(thread_list_fetch_limit(None), 80);
     }
 
     #[test]
@@ -720,7 +669,7 @@ mod tests {
         let list = plan_thread_list_read(
             &linux,
             ThreadsQuery {
-                status: Some(" running ".to_string()),
+                archived: Some(true),
                 q: Some("  task  ".to_string()),
                 limit: Some(25),
             },
@@ -730,9 +679,9 @@ mod tests {
         assert!(list.include_hidden_thread_ids);
         assert!(list.include_archived_thread_ids);
         assert!(list.include_running_jobs);
-        assert_eq!(list.list.query.status.as_deref(), Some("running"));
+        assert_eq!(list.list.query.archived, Some(true));
         assert_eq!(list.list.query.q.as_deref(), Some("task"));
-        assert_eq!(list.list.fetch_limit, usize::MAX);
+        assert_eq!(list.list.fetch_limit, 25);
         assert_eq!(list.list.response_limit, 25);
 
         let detail = plan_thread_detail_read(

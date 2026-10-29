@@ -659,7 +659,7 @@ fn codex_summary_requires_a_validated_rollout_identity() {
         &[(valid_id, valid_id, 1), (invalid_id, "other-id", 2)],
     );
     let paths = CodexPaths::new(temp.path());
-    let summaries = list_threads(&paths, None, None, 10).unwrap();
+    let summaries = list_threads(&paths, false, None, 10).unwrap();
     assert_eq!(summaries.len(), 2);
     let valid = summaries
         .iter()
@@ -699,7 +699,7 @@ fn archived_codex_summary_keeps_validated_file_size() {
         .unwrap();
     drop(conn);
 
-    let rows = list_threads(&CodexPaths::new(temp.path()), Some("archived"), None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(temp.path()), true, None, 10).unwrap();
     assert_eq!(rows.len(), 1);
     let size = rows[0].storage_size.as_ref().unwrap();
     assert_eq!(size.scope, StorageScope::File);

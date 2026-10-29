@@ -329,10 +329,9 @@ pub fn probe_threads_for_status_with_paths(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let local_fetch_limit = threads::thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(paths).unwrap_or_default();
     let archived_thread_ids = codex::archived_thread_ids(paths).unwrap_or_default();
-    let threads = codex::list_threads(paths, None, None, local_fetch_limit)?;
+    let threads = codex::list_threads(paths, false, None, usize::MAX)?;
     let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
     let mut threads = threads::apply_thread_list_runtime_state(
         threads,
@@ -345,7 +344,18 @@ pub fn probe_threads_for_status_with_paths(
     if status == "reply-needed" {
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
-    Ok(threads::thread_summaries_for_status(threads, status, limit))
+    threads.retain(|row| {
+        matches!(
+            (status, &row.status),
+            ("running", ThreadStatus::Running)
+                | ("reply-needed", ThreadStatus::ReplyNeeded)
+                | ("recoverable", ThreadStatus::Recoverable)
+                | ("recent", ThreadStatus::Recent)
+        )
+    });
+    ThreadSummary::sort_by_message_time(&mut threads);
+    threads.truncate(limit);
+    Ok(threads)
 }
 
 pub fn probe_passive_thread_notification_plan(

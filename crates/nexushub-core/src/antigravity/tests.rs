@@ -12,10 +12,23 @@ fn fixture() -> (Value, Value) {
 #[test]
 fn main_completion_uses_explicit_execution_terminal_and_visible_response() {
     let (s, mut r) = fixture();
-    r["status"] = json!("CASCADE_RUN_STATUS_BUSY");
     let scan = snapshot(ID, &s, &r).unwrap();
     assert_eq!(scan.events.len(), 1);
     assert_eq!(scan.events[0].body, "Fixture completed");
+    assert_eq!(scan.settled_count, 2);
+
+    // Active cascade status suppresses premature completion and holds settled_count
+    r["status"] = json!("CASCADE_RUN_STATUS_BUSY");
+    let busy = snapshot(ID, &s, &r).unwrap();
+    assert!(busy.events.is_empty());
+    assert_eq!(busy.settled_count, 0);
+    r["status"] = json!("CASCADE_RUN_STATUS_IDLE");
+
+    // Active child subtrajectory suppresses premature completion
+    let sub_busy = snapshot_with_subagents(ID, &s, &r, true).unwrap();
+    assert!(sub_busy.events.is_empty());
+    assert_eq!(sub_busy.settled_count, 0);
+
     for reason in [
         "EXECUTOR_TERMINATION_REASON_USER_CANCELED",
         "EXECUTOR_TERMINATION_REASON_EARLY_CONTINUE",
@@ -25,6 +38,129 @@ fn main_completion_uses_explicit_execution_terminal_and_visible_response() {
         r["trajectory"]["executorMetadatas"][0]["terminationReason"] = json!(reason);
         assert!(snapshot(ID, &s, &r).unwrap().events.is_empty());
     }
+}
+
+#[test]
+fn background_tasks_and_subagents_delay_completion_until_reactive_wakeup_finishes() {
+    let sub_id = "22222222-2222-4222-8222-222222222222";
+    let task_id = format!("{ID}/task-101");
+    let summary = json!({
+        "trajectoryId": "fixture-trajectory",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "summary": "Long background workflow",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+
+    // Phase 1: Executor 1 launched a background task + subagent and ended with NO_TOOL_CALL while waiting
+    let mut response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "numTotalSteps": 4,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "taskDetails": { "id": task_id, "movedToBackgroundAt": "2026-01-01T00:00:01Z" },
+                    "generic": { "name": "run_command", "arguments": "{\"IsDaemon\":false}" },
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:01Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": {
+                        "name": "invoke_subagent",
+                        "result": { "payload": { "results": [{ "conversationId": sub_id }] } }
+                    },
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:01Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-1",
+                        "createdAt": "2026-01-01T00:00:02Z",
+                        "completedAt": "2026-01-01T00:00:03Z"
+                    },
+                    "plannerResponse": { "response": "Waiting for background command and subagent..." }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "exec-1",
+                    "lastStepIdx": 3,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+    let mid = snapshot(ID, &summary, &response).unwrap();
+    assert!(mid.events.is_empty(), "must not notify while waiting on background task/subagent");
+    assert_eq!(mid.settled_count, 0);
+
+    // Phase 2: Background task woke up via SYSTEM_MESSAGE, but subagent is still unsettled
+    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
+        "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "systemMessage": { "agentMessage": { "sender": task_id } },
+        "metadata": { "executionId": "exec-2", "createdAt": "2026-01-01T00:00:10Z" }
+    }));
+    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {
+            "executionId": "exec-2",
+            "createdAt": "2026-01-01T00:00:11Z",
+            "completedAt": "2026-01-01T00:00:12Z"
+        },
+        "plannerResponse": { "response": "Command done, still waiting for subagent..." }
+    }));
+    response["trajectory"]["executorMetadatas"].as_array_mut().unwrap().push(json!({
+        "executionId": "exec-2",
+        "lastStepIdx": 5,
+        "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+    }));
+    response["numTotalSteps"] = json!(6);
+    let mid2 = snapshot(ID, &summary, &response).unwrap();
+    assert!(mid2.events.is_empty(), "must not notify while subagent wakeup is still pending");
+    assert_eq!(mid2.settled_count, 4);
+
+    // Phase 3: Subagent delivers SYSTEM_MESSAGE and final executor completes cleanly
+    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
+        "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "systemMessage": { "agentMessage": { "sender": sub_id } },
+        "metadata": { "executionId": "exec-3", "createdAt": "2026-01-01T00:00:20Z" }
+    }));
+    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {
+            "executionId": "exec-3",
+            "createdAt": "2026-01-01T00:00:21Z",
+            "completedAt": "2026-01-01T00:00:22Z"
+        },
+        "plannerResponse": { "response": "All tasks and subagents finished!" }
+    }));
+    response["trajectory"]["executorMetadatas"].as_array_mut().unwrap().push(json!({
+        "executionId": "exec-3",
+        "lastStepIdx": 7,
+        "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+    }));
+    response["numTotalSteps"] = json!(8);
+    let done = snapshot(ID, &summary, &response).unwrap();
+    assert_eq!(done.events.len(), 1, "must emit exactly one final completion event");
+    assert_eq!(done.events[0].turn_id, "exec-3");
+    assert_eq!(done.events[0].position, 8);
+    assert_eq!(done.events[0].body, "All tasks and subagents finished!");
+    assert_eq!(done.settled_count, 8);
 }
 #[test]
 fn failure_is_obsolete_after_resume_and_tool_errors_are_not_terminal() {

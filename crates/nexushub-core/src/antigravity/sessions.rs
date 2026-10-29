@@ -106,6 +106,15 @@ impl AntigravityPaths {
     }
 
     pub fn canonical_path(&self, id: &str) -> PathBuf {
+        let logs = self.brain_dir().join(id).join(".system_generated/logs");
+        let full = logs.join("transcript_full.jsonl");
+        if full.is_file() {
+            return full;
+        }
+        let compact = logs.join("transcript.jsonl");
+        if compact.is_file() {
+            return compact;
+        }
         let db = self.conversations_dir().join(format!("{id}.db"));
         if db.exists() {
             return db;
@@ -995,6 +1004,99 @@ fn map_cortex_status(status: &str) -> &'static str {
     }
 }
 
+fn extract_user_input_item_text(item: &Value) -> Option<String> {
+    if let Some(text) = item["text"].as_str().filter(|t| !t.is_empty()) {
+        return Some(text.to_owned());
+    }
+    let scope = &item["item"];
+    if scope.is_null() {
+        return None;
+    }
+    if let Some(raw) = scope.as_str().filter(|s| !s.trim().is_empty()) {
+        return Some(format!("@{}", decode_file_uri(raw)));
+    }
+    if let Some(obj) = scope.as_object() {
+        for key in ["label", "title", "name", "absolutePathUri", "uri", "path"] {
+            if let Some(val) = obj.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty())
+            {
+                return Some(format!("@{}", decode_file_uri(val)));
+            }
+        }
+        for nested in obj.values() {
+            if let Some(inner) = nested.as_object() {
+                for key in ["label", "title", "name", "absolutePathUri", "uri", "path"] {
+                    if let Some(val) = inner
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        return Some(format!("@{}", decode_file_uri(val)));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn format_artifact_comment(entry: &Value) -> Option<String> {
+    let basename = entry["artifactUri"]
+        .as_str()
+        .map(decode_file_uri)
+        .and_then(|p| {
+            p.rsplit('/')
+                .find(|seg| !seg.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
+    let comment = [
+        &entry["comment"],
+        &entry["commentText"],
+        &entry["text"],
+        &entry["fullFile"]["comment"],
+        &entry["lineRange"]["comment"],
+        &entry["selection"]["comment"],
+    ]
+    .into_iter()
+    .find_map(|v| v.as_str().map(str::trim).filter(|s| !s.is_empty()));
+    let approval = entry["approvalStatus"].as_str().unwrap_or("");
+
+    match (approval, !basename.is_empty(), comment) {
+        ("ARTIFACT_APPROVAL_STATUS_APPROVED", true, Some(c)) => {
+            Some(format!("批准文档（{basename}）：{c}"))
+        }
+        ("ARTIFACT_APPROVAL_STATUS_APPROVED", true, None) => {
+            Some(format!("批准文档：{basename}"))
+        }
+        ("ARTIFACT_APPROVAL_STATUS_APPROVED", false, Some(c)) => Some(format!("批准文档：{c}")),
+        ("ARTIFACT_APPROVAL_STATUS_APPROVED", false, None) => Some("批准文档".into()),
+        (
+            "ARTIFACT_APPROVAL_STATUS_REJECTED" | "ARTIFACT_APPROVAL_STATUS_CHANGES_REQUESTED",
+            true,
+            Some(c),
+        ) => Some(format!("批注文档（{basename}）：{c}")),
+        (
+            "ARTIFACT_APPROVAL_STATUS_REJECTED" | "ARTIFACT_APPROVAL_STATUS_CHANGES_REQUESTED",
+            true,
+            None,
+        ) => Some(format!("退回文档：{basename}")),
+        (
+            "ARTIFACT_APPROVAL_STATUS_REJECTED" | "ARTIFACT_APPROVAL_STATUS_CHANGES_REQUESTED",
+            false,
+            Some(c),
+        ) => Some(format!("退回文档：{c}")),
+        (
+            "ARTIFACT_APPROVAL_STATUS_REJECTED" | "ARTIFACT_APPROVAL_STATUS_CHANGES_REQUESTED",
+            false,
+            None,
+        ) => Some("退回文档".into()),
+        (_, true, Some(c)) => Some(format!("批注文档（{basename}）：{c}")),
+        (_, false, Some(c)) => Some(c.to_owned()),
+        (_, true, None) => Some(format!("审阅文档：{basename}")),
+        (_, false, None) => None,
+    }
+}
+
 fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEvent> {
     let mut events = Vec::new();
     for (index, step) in steps.iter().enumerate() {
@@ -1022,7 +1124,7 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                 let mut parts = Vec::new();
                 if let Some(items) = step["userInput"]["items"].as_array() {
                     for item in items {
-                        if let Some(text) = item["text"].as_str().filter(|t| !t.is_empty()) {
+                        if let Some(text) = extract_user_input_item_text(item) {
                             parts.push(json!({"type": "text", "text": text}));
                         }
                     }
@@ -1034,6 +1136,19 @@ fn extract_live_step_events(id: &str, steps: &[Value]) -> Vec<ProviderHistoryEve
                         .filter(|t| !t.trim().is_empty())
                     {
                         parts.push(json!({"type": "text", "text": text}));
+                    }
+                }
+                if let Some(comments) = step["userInput"]["artifactComments"].as_array() {
+                    let rendered = comments
+                        .iter()
+                        .filter_map(format_artifact_comment)
+                        .collect::<Vec<_>>();
+                    if !rendered.is_empty() {
+                        let prefix = if parts.is_empty() { "" } else { "\n" };
+                        parts.push(json!({
+                            "type": "text",
+                            "text": format!("{prefix}{}", rendered.join("\n"))
+                        }));
                     }
                 }
                 if let Some(media) = step["userInput"]["media"].as_array() {
@@ -2735,5 +2850,77 @@ mod tests {
         let _ = TcpStream::connect(("127.0.0.1", port));
         let _ = handle.join();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn canonical_path_prefers_plain_transcript_handoff_files_over_sqlite_db() {
+        let root = std::env::temp_dir().join(format!(
+            "nexushub-ag-handoff-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let id = "11111111-1111-4111-8111-111111111111";
+        let paths = AntigravityPaths::offline(root.clone());
+        let logs = paths.brain_dir().join(id).join(".system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::create_dir_all(paths.conversations_dir()).unwrap();
+
+        let db = paths.conversations_dir().join(format!("{id}.db"));
+        fs::write(&db, b"sqlite").unwrap();
+        assert_eq!(paths.canonical_path(id), db);
+
+        let compact = logs.join("transcript.jsonl");
+        fs::write(&compact, b"{}\n").unwrap();
+        assert_eq!(paths.canonical_path(id), compact);
+
+        let full = logs.join("transcript_full.jsonl");
+        fs::write(&full, b"{}\n").unwrap();
+        assert_eq!(paths.canonical_path(id), full);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extract_live_step_events_captures_artifact_approvals_and_item_mentions() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let steps = vec![
+            json!({
+                "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-1", "createdAt": "2026-10-29T01:00:00Z" },
+                "userInput": {
+                    "items": [
+                        { "item": { "file": { "absolutePathUri": "file:///workspace/demo/plan.md" } } },
+                        { "text": " 按这个推进" }
+                    ]
+                }
+            }),
+            json!({
+                "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": { "executionId": "exec-2", "createdAt": "2026-10-29T01:05:00Z" },
+                "userInput": {
+                    "artifactComments": [
+                        {
+                            "artifactUri": "file:///workspace/demo/implementation_plan.md",
+                            "approvalStatus": "ARTIFACT_APPROVAL_STATUS_APPROVED",
+                            "fullFile": {}
+                        }
+                    ]
+                }
+            }),
+        ];
+        let events = extract_live_step_events(id, &steps);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "user_message");
+        assert!(events[0]
+            .text
+            .as_deref()
+            .unwrap_or("")
+            .contains("@/workspace/demo/plan.md"));
+        assert_eq!(events[1].kind, "user_message");
+        assert_eq!(
+            events[1].text.as_deref(),
+            Some("批准文档：implementation_plan.md")
+        );
     }
 }

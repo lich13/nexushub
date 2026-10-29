@@ -3,7 +3,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ThreadListRequest {
-    pub status: Option<String>,
+    pub archived: Option<bool>,
     pub query: Option<String>,
     pub limit: Option<usize>,
 }

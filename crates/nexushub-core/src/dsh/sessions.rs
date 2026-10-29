@@ -188,7 +188,7 @@ fn pick_generation(session_dir: &Path) -> Result<Option<(u32, bool, PathBuf)>> {
             }
         }
     }
-    generations.sort_by_key(|g| g.0);
+    generations.sort_by_key(|g| (g.0, !g.1));
     Ok(generations.pop().filter(|(v, _, _)| (1..=4).contains(v)))
 }
 
@@ -2020,5 +2020,24 @@ mod tests {
         }
 
         fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn pick_generation_deterministically_prefers_highest_version_and_plain_jsonl_over_zstd() {
+        let dir = std::env::temp_dir().join(format!("nexushub-dsh-gen-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let zstd_v4 = dir.join("session.v4.jsonl.zstd");
+        let plain_v3 = dir.join("session.v3.jsonl");
+        fs::write(&zstd_v4, b"zstd").unwrap();
+        fs::write(&plain_v3, b"{}\n").unwrap();
+        let picked_zstd = pick_generation(&dir).unwrap().unwrap();
+        assert_eq!(picked_zstd, (4, true, zstd_v4));
+
+        let plain_v4 = dir.join("session.v4.jsonl");
+        fs::write(&plain_v4, b"{}\n").unwrap();
+        let picked_plain = pick_generation(&dir).unwrap().unwrap();
+        assert_eq!(picked_plain, (4, false, plain_v4));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

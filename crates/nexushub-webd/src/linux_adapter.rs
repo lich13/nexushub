@@ -105,7 +105,7 @@ pub fn list_threads_read_model(
     };
     let raw_threads = codex::list_threads(
         &paths,
-        None,
+        plan.list.query.archived.unwrap_or(false),
         plan.list.query.q.as_deref(),
         plan.list.fetch_limit,
     )?;
@@ -128,22 +128,7 @@ pub fn probe_threads_read_model(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    if thread_service::thread_list_fetch_limit(Some(status), Some(limit)) == usize::MAX {
-        return probe_service::probe_threads_for_status_with_paths(
-            &paths,
-            state.db.path(),
-            status,
-            limit,
-        );
-    }
-    list_threads_read_model(
-        state,
-        ThreadsQuery {
-            status: Some(status.to_string()),
-            q: None,
-            limit: Some(limit.clamp(1, 200)),
-        },
-    )
+    probe_service::probe_threads_for_status_with_paths(&paths, state.db.path(), status, limit)
 }
 
 pub fn load_thread_detail_read_model(

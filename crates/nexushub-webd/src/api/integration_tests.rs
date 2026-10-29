@@ -14,9 +14,8 @@ use nexushub_core::{
     platform::{PlatformKind, PlatformPaths},
     services::{
         app_server_threads::{
-            app_server_detail_from_read, app_server_thread_list_fetch_limit,
-            app_server_thread_summaries, apply_app_server_thread_detail, archived_filter,
-            merge_thread_summaries, thread_title,
+            app_server_detail_from_read, app_server_thread_summaries,
+            apply_app_server_thread_detail, merge_thread_summaries, thread_title,
         },
         probe::{probe_process_command, ProbeAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS},
         threads as thread_service,
@@ -308,7 +307,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
 
     let rows = nexushub_core::codex::list_threads(
         &nexushub_core::codex::CodexPaths::new(&home),
-        None,
+        false,
         Some("thread-a"),
         10,
     )
@@ -1636,7 +1635,7 @@ fn app_server_threads_merge_keeps_archived_fallback_out_of_default_list() {
     app_thread.status = ThreadStatus::Running;
 
     let rows = merge_thread_summaries(vec![archived], vec![app_thread]);
-    let default_rows = thread_service::filter_thread_summaries(rows, None, None, 10);
+    let default_rows = thread_service::filter_thread_summaries(rows, false, None, 10);
 
     assert!(default_rows.is_empty());
 }
@@ -1658,58 +1657,30 @@ fn hidden_state_db_thread_ids_prune_app_server_rows_after_merge() {
 }
 
 #[test]
-fn filter_thread_summaries_excludes_archived_for_default_and_all_status() {
+fn filter_thread_summaries_separates_active_and_archived_lists() {
     let recent = fallback_summary("recent-thread", "recent");
     let mut archived = fallback_summary("archived-thread", "archived");
     archived.status = ThreadStatus::Archived;
 
-    let default_rows = thread_service::filter_thread_summaries(
+    let active_rows = thread_service::filter_thread_summaries(
         vec![recent.clone(), archived.clone()],
-        None,
+        false,
         None,
         10,
     );
-    let all_rows =
-        thread_service::filter_thread_summaries(vec![recent, archived], Some("all"), None, 10);
+    let archived_rows =
+        thread_service::filter_thread_summaries(vec![recent, archived], true, None, 10);
 
-    assert_eq!(default_rows.len(), 1);
-    assert_eq!(default_rows[0].id, "recent-thread");
-    assert_eq!(all_rows.len(), 1);
-    assert_eq!(all_rows[0].id, "recent-thread");
-    assert_eq!(archived_filter(None), Some(false));
-    assert_eq!(archived_filter(Some("all")), Some(false));
+    assert_eq!(active_rows.len(), 1);
+    assert_eq!(active_rows[0].id, "recent-thread");
+    assert_eq!(archived_rows.len(), 1);
+    assert_eq!(archived_rows[0].id, "archived-thread");
 }
 
 #[test]
-fn status_filtered_thread_lists_overfetch_before_final_limit() {
-    assert_eq!(
-        thread_service::thread_list_fetch_limit(None, Some(120)),
-        120
-    );
-    assert_eq!(
-        thread_service::thread_list_fetch_limit(Some("all"), Some(120)),
-        120
-    );
-    assert_eq!(
-        thread_service::thread_list_fetch_limit(Some("running"), Some(120)),
-        usize::MAX
-    );
-    assert_eq!(
-        thread_service::thread_list_fetch_limit(Some("reply-needed"), Some(120)),
-        usize::MAX
-    );
-    assert_eq!(
-        thread_service::thread_list_fetch_limit(Some("recoverable"), Some(120)),
-        usize::MAX
-    );
-    assert_eq!(
-        app_server_thread_list_fetch_limit(Some("running"), Some(120)),
-        500
-    );
-    assert_eq!(
-        app_server_thread_list_fetch_limit(Some("all"), Some(120)),
-        120
-    );
+fn thread_list_fetch_limit_clamps_requested_page_size() {
+    assert_eq!(thread_service::thread_list_fetch_limit(Some(120)), 120);
+    assert_eq!(thread_service::thread_list_fetch_limit(None), 80);
 }
 
 #[test]
@@ -2101,11 +2072,11 @@ fn app_server_active_does_not_override_completed_rollout_wait_agent() {
         }),
         &[fallback.clone()],
     );
-    let running = thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+    let active = thread_service::filter_thread_summaries(rows.clone(), false, None, 50);
 
     assert_eq!(rows[0].status, ThreadStatus::Recent);
     assert_eq!(rows[0].active_turn_id, None);
-    assert!(running.is_empty());
+    assert_eq!(active.len(), 1);
 
     let mut detail = ThreadDetail {
         timeline: None,
@@ -2172,11 +2143,11 @@ fn app_server_not_loaded_running_item_does_not_override_completed_rollout_wait_a
         &json!({ "threads": [app_thread.clone()] }),
         &[fallback.clone()],
     );
-    let running = thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+    let active = thread_service::filter_thread_summaries(rows.clone(), false, None, 50);
 
     assert_eq!(rows[0].status, ThreadStatus::Recent);
     assert_eq!(rows[0].active_turn_id, None);
-    assert!(running.is_empty());
+    assert_eq!(active.len(), 1);
 
     let mut detail = ThreadDetail {
         timeline: None,
@@ -2604,14 +2575,12 @@ fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
             }
         }),
     );
-    let reply_needed =
-        thread_service::filter_thread_summaries(rows.clone(), Some("reply-needed"), None, 50);
-    let running = thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+    let active =
+        thread_service::filter_thread_summaries(rows.clone(), false, None, 50);
 
     assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
     assert_eq!(detail.summary.status, ThreadStatus::ReplyNeeded);
-    assert_eq!(reply_needed.len(), 1);
-    assert!(running.is_empty());
+    assert_eq!(active.len(), 1);
 }
 
 fn unique_temp_dir(label: &str) -> PathBuf {

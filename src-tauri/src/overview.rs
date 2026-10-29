@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn desktop_thread_service_passes_archive_filter_to_codex_reader() {
         let source = include_str!("services/threads.rs");
-        assert!(source.contains("plan.list.query.status.as_deref()"));
+        assert!(source.contains("plan.list.query.archived.unwrap_or(false)"));
     }
 
     #[test]

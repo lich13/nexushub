@@ -6,7 +6,10 @@ use nexushub_core::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    time::Duration,
+};
 
 const SERVICE: &str = "/exa.language_server_pb.LanguageServerService/";
 const LIMIT: usize = nexushub_core::resource_limits::REMOTE_RESPONSE_BYTES;
@@ -134,7 +137,10 @@ async fn query(
     body: Value,
 ) -> Result<Value> {
     ensure!(
-        matches!(method, "GetAllCascadeTrajectories" | "GetCascadeTrajectory"),
+        matches!(
+            method,
+            "GetAllCascadeTrajectories" | "GetCascadeTrajectory" | "GetCascadeTrajectorySteps"
+        ),
         "unsupported Antigravity read method"
     );
     let url = format!("http://127.0.0.1:{port}{SERVICE}{method}");
@@ -174,7 +180,7 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
             port,
             &endpoint.token,
             "GetAllCascadeTrajectories",
-            json!({"excludeSubtrajectories":true}),
+            json!({"excludeSubtrajectories":false}),
         )
         .await
         {
@@ -184,6 +190,122 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
         }
     }
     anyhow::bail!("Antigravity native API unavailable")
+}
+
+fn is_subtrajectory(id: &str, item: &Value) -> bool {
+    let parent = item["parentConversationId"]
+        .as_str()
+        .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+        .unwrap_or("");
+    let depth = item["nestingDepth"]
+        .as_i64()
+        .or_else(|| item["trajectoryMetadata"]["nestingDepth"].as_i64())
+        .unwrap_or(0);
+    let root = item["rootConversationId"]
+        .as_str()
+        .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+        .unwrap_or("");
+    !parent.is_empty() || depth > 0 || (!root.is_empty() && root != id)
+}
+
+fn summary_is_active(item: &Value) -> bool {
+    item["waitingSteps"]
+        .as_array()
+        .is_some_and(|arr| !arr.is_empty())
+        || matches!(
+            item["status"].as_str(),
+            Some(
+                "CASCADE_RUN_STATUS_RUNNING"
+                    | "CASCADE_RUN_STATUS_BUSY"
+                    | "CASCADE_RUN_STATUS_WAITING"
+                    | "CASCADE_RUN_STATUS_CANCELING"
+            )
+        )
+        || item["notFullyIdle"].as_bool() == Some(true)
+        || item["hasRunningSubagents"].as_bool() == Some(true)
+}
+
+fn active_subagent_roots(summaries: &serde_json::Map<String, Value>) -> BTreeSet<String> {
+    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+    for (cid, item) in summaries {
+        if let Some(pid) = item["parentConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["parentConversationId"].as_str())
+            .filter(|s| !s.is_empty())
+        {
+            parents.insert(cid.as_str(), pid);
+        }
+    }
+    let mut active_roots = BTreeSet::new();
+    for (cid, item) in summaries {
+        if !is_subtrajectory(cid, item) || !summary_is_active(item) {
+            continue;
+        }
+        if let Some(root) = item["rootConversationId"]
+            .as_str()
+            .or_else(|| item["trajectoryMetadata"]["rootConversationId"].as_str())
+            .filter(|s| !s.is_empty() && *s != cid)
+        {
+            active_roots.insert(root.to_owned());
+        }
+        let mut curr = cid.as_str();
+        let mut hops = 0usize;
+        while let Some(&pid) = parents.get(curr) {
+            active_roots.insert(pid.to_owned());
+            curr = pid;
+            hops += 1;
+            if hops >= 16 {
+                break;
+            }
+        }
+    }
+    active_roots
+}
+
+async fn fetch_complete_trajectory(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    id: &str,
+) -> Result<Value> {
+    let mut response = query(
+        client,
+        port,
+        token,
+        "GetCascadeTrajectory",
+        json!({"cascadeId": id, "disableRehydration": true}),
+    )
+    .await?;
+    let total = response["numTotalSteps"]
+        .as_u64()
+        .unwrap_or_else(|| {
+            response["trajectory"]["steps"]
+                .as_array()
+                .map_or(0, Vec::len) as u64
+        }) as usize;
+    let mut current_len = response["trajectory"]["steps"]
+        .as_array()
+        .map_or(0, Vec::len);
+    while current_len < total && current_len < 50_000 {
+        let more = query(
+            client,
+            port,
+            token,
+            "GetCascadeTrajectorySteps",
+            json!({"cascadeId": id, "stepOffset": current_len}),
+        )
+        .await?;
+        let Some(batch) = more["steps"].as_array().filter(|b| !b.is_empty()) else {
+            break;
+        };
+        if let Some(steps) = response["trajectory"]["steps"].as_array_mut() {
+            steps.extend(batch.iter().cloned());
+            current_len = steps.len();
+        } else {
+            break;
+        }
+    }
+    Ok(response)
 }
 pub async fn scan() -> Result<NativeScan> {
     let (endpoint, client, port, summaries) = connect().await?;
@@ -222,15 +344,24 @@ async fn scan_at(
         .as_object()
         .context("missing Antigravity summaries")?;
     ensure!(
-        summaries.len() <= 2000,
+        summaries.len() <= 5000,
         "Antigravity source inventory exceeds limit"
     );
+    let active_roots = active_subagent_roots(summaries);
     let mut scan = NativeScan::default();
     for (id, summary) in summaries {
+        if is_subtrajectory(id, summary) {
+            continue;
+        }
         if only.is_some_and(|target| target != id) {
             continue;
         }
-        let signature = hex::encode(Sha256::digest(serde_json::to_vec(&json!([pid, summary]))?));
+        let has_active_subagents = active_roots.contains(id);
+        let signature = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
+            pid,
+            summary,
+            has_active_subagents
+        ]))?));
         // Revalidation always obtains fresh native terminal / interaction state.
         let cached = if only.is_none() {
             CACHE
@@ -258,15 +389,11 @@ async fn scan_at(
             scan.errors += 1;
             continue;
         }
-        let result = query(
-            client,
-            port,
-            token,
-            "GetCascadeTrajectory",
-            json!({"cascadeId":id,"disableRehydration":true}),
-        )
-        .await
-        .and_then(|response| antigravity::snapshot(id, summary, &response));
+        let result = fetch_complete_trajectory(client, port, token, id)
+            .await
+            .and_then(|response| {
+                antigravity::snapshot_with_subagents(id, summary, &response, has_active_subagents)
+            });
         match result {
             Ok(snapshot) => {
                 let mut cache = CACHE.lock().await;

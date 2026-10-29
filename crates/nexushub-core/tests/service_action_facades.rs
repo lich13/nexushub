@@ -365,7 +365,7 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
     let list = plan_threads_list_request(
         &linux,
         ThreadsQuery {
-            status: Some("running".to_string()),
+            archived: Some(false),
             q: Some("  work  ".to_string()),
             limit: Some(25),
         },
@@ -373,7 +373,7 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
     .unwrap();
     assert_eq!(list.required_capability, Capability::Threads);
     assert_eq!(list.response_limit, 25);
-    assert_eq!(list.fetch_limit, usize::MAX);
+    assert_eq!(list.fetch_limit, 25);
     assert_eq!(list.query.q.as_deref(), Some("work"));
 
     let blocks = plan_thread_blocks_request(&linux, " thread-a ", Some(1), None).unwrap();

@@ -965,13 +965,14 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
     fixture.child("grandchild", CHILD, "/root/review/details", &[]);
     let before = fixture.snapshot();
 
-    for status in [None, Some("all")] {
-        let rows = list_threads(&fixture.paths, status, None, 100).unwrap();
-        assert_eq!(
-            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
-            vec![ROOT]
-        );
-    }
+    let rows = list_threads(&fixture.paths, false, None, 100).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        vec![ROOT]
+    );
+    assert!(list_threads(&fixture.paths, true, None, 100)
+        .unwrap()
+        .is_empty());
     let hidden = hidden_thread_ids(&fixture.paths).unwrap();
     assert!(hidden.contains(CHILD));
     assert!(hidden.contains("grandchild"));

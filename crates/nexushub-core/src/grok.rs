@@ -42,6 +42,8 @@ pub struct GrokSessionSummary {
     pub deletion_eligibility: Option<GrokDeletionEligibility>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_size: Option<crate::session_storage::SessionStorageSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_path: Option<PathBuf>,
     pub id: String,
     pub title: String,
     pub cwd: String,
@@ -50,6 +52,18 @@ pub struct GrokSessionSummary {
     pub message_count: usize,
     pub last_message: Option<String>,
     pub status: String,
+}
+
+pub fn grok_handoff_path(session_dir: &Path) -> PathBuf {
+    let chat = session_dir.join("chat_history.jsonl");
+    if chat.is_file() {
+        return chat;
+    }
+    let updates = session_dir.join("updates.jsonl");
+    if updates.is_file() {
+        return updates;
+    }
+    session_dir.to_path_buf()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -358,6 +372,11 @@ fn with_session_history<R>(
             if info.changed {
                 #[cfg(test)]
                 HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
+                if !native && !state.reconciled_initial_native_turns && !state.events.events.is_empty()
+                {
+                    state.reconciled_initial_native_turns = true;
+                    state.prepend_missing_initial_native_users(directory);
+                }
                 let dirty = std::mem::take(&mut state.events.dirty);
                 state.journal.record(&info, dirty.iter().cloned().collect());
                 state.timeline = crate::history_navigation::update_timeline(
@@ -406,6 +425,7 @@ thread_local! { static HISTORY_READS: std::cell::Cell<usize> = const { std::cell
 struct GrokReader {
     last_message_at: Option<String>,
     previous_count: usize,
+    reconciled_initial_native_turns: bool,
     timeline: crate::history_navigation::Timeline,
     events: GrokEvents,
     journal: crate::jsonl_cache::HistoryJournal,
@@ -422,6 +442,103 @@ struct GrokEvents {
     dirty: std::collections::BTreeSet<String>,
 }
 impl GrokReader {
+    fn prepend_missing_initial_native_users(&mut self, directory: &Path) {
+        if self
+            .events
+            .events
+            .first()
+            .is_none_or(|first| first.kind == "user_message_chunk")
+        {
+            return;
+        }
+        let chat_path = directory.join("chat_history.jsonl");
+        let Ok(meta) = fs::symlink_metadata(&chat_path) else {
+            return;
+        };
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            return;
+        }
+        use std::io::{BufRead, BufReader, Read};
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let Ok(file) = options.open(&chat_path) else {
+            return;
+        };
+        let mut reader = BufReader::new(file.take(1024 * 1024));
+        let mut line = Vec::new();
+        let mut offset = 0u64;
+        let mut prepended = Vec::new();
+        for _ in 0..64 {
+            line.clear();
+            let Ok(read) = reader.read_until(b'\n', &mut line) else {
+                break;
+            };
+            if read == 0 {
+                break;
+            }
+            let start = offset;
+            offset += read as u64;
+            let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            if value.get("synthetic_reason").and_then(Value::as_str) == Some("system_reminder") {
+                continue;
+            }
+            match value.get("type").and_then(Value::as_str).unwrap_or("") {
+                "system" => continue,
+                "user" => {
+                    let raw_content = value.get("content").cloned().unwrap_or(Value::Null);
+                    let parts = match raw_content {
+                        Value::String(text) => vec![serde_json::json!({"type": "text", "text": text})],
+                        Value::Array(arr) => arr,
+                        other => vec![other],
+                    };
+                    let id = format!("grok:init:{start}");
+                    let message =
+                        crate::user_message::parse_user_message(&id, &Value::Array(parts));
+                    if message.text.trim().is_empty() && message.attachments.is_empty() {
+                        continue;
+                    }
+                    if self.last_message_at.is_none() {
+                        self.last_message_at = value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                    prepended.push(Arc::new(GrokHistoryEvent {
+                        id: id.clone(),
+                        user_message: Some(message.clone()),
+                        timestamp: value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        kind: "user_message_chunk".into(),
+                        text: Some(message.text),
+                        method: None,
+                        call_id: None,
+                        status: None,
+                        detail: None,
+                    }));
+                    self.events.dirty.insert(id);
+                }
+                _ => break,
+            }
+        }
+        if !prepended.is_empty() {
+            let shift = prepended.len();
+            for idx in self.events.tool_indices.values_mut() {
+                *idx += shift;
+            }
+            prepended.append(&mut self.events.events);
+            self.events.events = prepended;
+        }
+    }
+
     fn push_native(&mut self, value: Value, start: u64) {
         let kind = value
             .get("type")
@@ -753,6 +870,7 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     Ok(Some(GrokSessionSummary {
         deletion_eligibility: None,
         storage_size: None,
+        handoff_path: Some(grok_handoff_path(path)),
         id,
         title,
         cwd,
@@ -849,6 +967,7 @@ fn fallback_summary(path: &Path) -> GrokSessionSummary {
         id: id.clone(),
         title: id,
         cwd: String::new(),
+        handoff_path: Some(grok_handoff_path(path)),
         path: path.into(),
         updated_at: None,
         message_count: 0,

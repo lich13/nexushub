@@ -47,7 +47,7 @@ pub async fn getSubagentDetail(
 #[tauri::command(rename = "threads.list")]
 pub async fn listThreads(
     state: tauri::State<'_, DesktopState>,
-    status: Option<String>,
+    archived: Option<bool>,
     q: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<nexushub_core::codex::ThreadSummary>, String> {
@@ -56,7 +56,7 @@ pub async fn listThreads(
         thread_service::threads_with_state(
             &state,
             ThreadListRequest {
-                status,
+                archived,
                 query: q,
                 limit,
             },

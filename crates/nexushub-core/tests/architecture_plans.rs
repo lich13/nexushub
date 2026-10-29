@@ -36,13 +36,18 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
                     ThreadStatus::Recent,
                     Some("2026-06-24T12:00:00Z"),
                 ),
+                thread(
+                    "archived-thread",
+                    ThreadStatus::Archived,
+                    Some("2026-06-24T09:00:00Z"),
+                ),
             ],
             running_jobs: vec![known_running_job, new_running_job],
             hidden_thread_ids: HashSet::from(["hidden-thread".to_string()]),
-            archived_thread_ids: HashSet::new(),
+            archived_thread_ids: HashSet::from(["archived-thread".to_string()]),
         },
         nexushub_core::services::threads::ThreadsQuery {
-            status: Some("running".to_string()),
+            archived: Some(false),
             q: None,
             limit: Some(20),
         },
@@ -54,9 +59,18 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
         .iter()
         .map(|thread| thread.id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), 3);
     assert!(ids.contains(&"new-running-thread"));
     assert!(ids.contains(&"known-thread"));
+    assert!(ids.contains(&"idle-thread"));
+    assert!(!ids.contains(&"archived-thread"));
+    assert_eq!(
+        view.threads
+            .iter()
+            .find(|thread| thread.id == "known-thread")
+            .map(|thread| &thread.status),
+        Some(&ThreadStatus::Running)
+    );
     assert!(serde_json::to_value(&view)
         .unwrap()
         .get("autosubmitEffects")
@@ -75,7 +89,7 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             archived_thread_ids: HashSet::new(),
         },
         nexushub_core::services::threads::ThreadsQuery {
-            status: Some("recent".to_string()),
+            archived: Some(false),
             q: None,
             limit: Some(20),
         },

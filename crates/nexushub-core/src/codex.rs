@@ -1,5 +1,8 @@
 use anyhow::Result;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 mod app_server_client;
 mod assistant_question;
@@ -66,7 +69,7 @@ pub use user_input::{
 
 pub fn list_threads(
     paths: &CodexPaths,
-    status: Option<&str>,
+    archived: bool,
     q: Option<&str>,
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
@@ -79,14 +82,7 @@ pub fn list_threads(
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty());
     rows.retain(|row| {
-        if let Some(status) = status {
-            if !matches_status(row, status) {
-                return false;
-            }
-            if status == "all" && matches!(row.status, ThreadStatus::Archived) {
-                return false;
-            }
-        } else if matches!(row.status, ThreadStatus::Archived) {
+        if matches!(row.status, ThreadStatus::Archived) != archived {
             return false;
         }
         if let Some(needle) = &needle {
@@ -135,11 +131,12 @@ fn enrich_local_thread_row(
     if row.summary.rollout_path.is_none() {
         row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
     }
+    let is_archived = matches!(row.summary.status, ThreadStatus::Archived);
     if row
         .summary
         .rollout_path
         .as_deref()
-        .is_some_and(|path| missing_rollout_inside_codex_home(paths, path))
+        .is_some_and(|path| missing_rollout_inside_codex_home(paths, path, is_archived))
     {
         return false;
     }
@@ -147,7 +144,7 @@ fn enrich_local_thread_row(
         .summary
         .rollout_path
         .take()
-        .filter(|path| paths.contains_path(path));
+        .and_then(|path| resolve_existing_rollout_path(paths, &path, is_archived));
     if should_repair_thread_title_from_local_metadata(
         row.db_title.as_deref(),
         row.first_user_message.as_deref(),
@@ -165,10 +162,42 @@ fn enrich_local_thread_row(
     !enrich_thread_from_rollout_with_storage(&mut row.summary, Some(&paths.home)).unwrap_or(false)
 }
 
-fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
+fn resolve_existing_rollout_path(
+    paths: &CodexPaths,
+    path: &Path,
+    archived: bool,
+) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    for candidate in [
+        rollout_file::plain_path(path),
+        path.to_path_buf(),
+        rollout_file::compressed_path(path),
+    ] {
+        if paths.contains_path(&candidate) {
+            return Some(candidate);
+        }
+    }
+    if archived && path_has_ancestor_inside_codex_home(paths, path) {
+        if let Some(name) = path.file_name() {
+            let relocated = paths.home.join("archived_sessions").join(name);
+            for candidate in [
+                rollout_file::plain_path(&relocated),
+                relocated.clone(),
+                rollout_file::compressed_path(&relocated),
+            ] {
+                if paths.contains_path(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn path_has_ancestor_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
     if path.as_os_str().is_empty()
-        || path.exists()
-        || rollout_file::compressed_path(path).is_file()
         || is_macos_network_volume_path(&paths.home)
         || is_macos_network_volume_path(path)
     {
@@ -191,6 +220,17 @@ fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
         ancestor = candidate.parent();
     }
     false
+}
+
+fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path, archived: bool) -> bool {
+    if path.as_os_str().is_empty()
+        || resolve_existing_rollout_path(paths, path, archived).is_some()
+        || is_macos_network_volume_path(&paths.home)
+        || is_macos_network_volume_path(path)
+    {
+        return false;
+    }
+    path_has_ancestor_inside_codex_home(paths, path)
 }
 
 pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
@@ -260,21 +300,8 @@ pub fn thread_detail_page(
     before: Option<&str>,
     since: Option<&str>,
 ) -> Result<Option<ThreadDetail>> {
-    let Some(summary) =
-        local_thread_summary(paths, id)?.filter(|s| !matches!(s.status, ThreadStatus::Archived))
-    else {
+    let Some(summary) = local_thread_summary(paths, id)? else {
         return Ok(None);
     };
     rollout_events::thread_detail_page_from_summary(summary, true, limit, before, since).map(Some)
-}
-
-fn matches_status(row: &ThreadSummary, status: &str) -> bool {
-    match status {
-        "recent" => matches!(row.status, ThreadStatus::Recent),
-        "running" => matches!(row.status, ThreadStatus::Running),
-        "reply-needed" | "reply_needed" => matches!(row.status, ThreadStatus::ReplyNeeded),
-        "recoverable" => matches!(row.status, ThreadStatus::Recoverable),
-        "archived" => matches!(row.status, ThreadStatus::Archived),
-        _ => true,
-    }
 }

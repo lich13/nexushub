@@ -4,22 +4,6 @@ use serde_json::{json, Value};
 
 use crate::codex::{self, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
 
-pub fn archived_filter(status: Option<&str>) -> Option<bool> {
-    match status {
-        Some("archived") => Some(true),
-        Some("all") | None => Some(false),
-        _ => Some(false),
-    }
-}
-
-pub fn app_server_thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
-    if matches!(status, Some("running" | "reply-needed" | "recoverable")) {
-        500
-    } else {
-        limit.unwrap_or(80).clamp(1, 500)
-    }
-}
-
 pub fn merge_thread_summaries(
     fallback: Vec<ThreadSummary>,
     app_threads: Vec<ThreadSummary>,

@@ -297,6 +297,24 @@ impl ScanState {
     }
 }
 pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutScan> {
+    if crate::codex::rollout_file::is_compressed(path) {
+        use std::io::{BufRead, BufReader, Read};
+        let file = fs::File::open(path)?;
+        let decoder = zstd::stream::read::Decoder::new(file)?;
+        let mut reader = BufReader::new(decoder.take(64 * 1024 * 1024));
+        let mut line = Vec::new();
+        let mut state = ScanState::default();
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                state.push(value);
+            }
+        }
+        return Ok(state.summary());
+    }
     static CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
         crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES);
     CACHE.read(

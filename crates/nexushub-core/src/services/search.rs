@@ -130,7 +130,7 @@ impl SearchUseCases {
     ) -> Result<()> {
         let summaries = codex::list_threads(
             &self.codex,
-            None,
+            false,
             request.session_key.as_deref(),
             MAX_SESSIONS,
         )?;

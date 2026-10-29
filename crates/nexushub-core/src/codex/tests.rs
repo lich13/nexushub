@@ -1548,7 +1548,7 @@ fn list_threads_preserves_db_rollout_path_when_session_index_misses_thread() {
     .unwrap();
     write_thread_db(&root, "test-thread", &rollout, 1, 0);
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     let row = rows
         .iter()
@@ -1566,7 +1566,7 @@ fn list_threads_hides_db_rows_with_missing_rollout_path() {
     let missing_rollout = root.join("sessions/2026/06/25/missing-rollout.jsonl");
     write_thread_db(&root, "dangling-thread", &missing_rollout, 1, 0);
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let detail = thread_detail(&CodexPaths::new(&root), "dangling-thread").unwrap();
 
     assert!(!rows.iter().any(|thread| thread.id == "dangling-thread"));
@@ -1586,8 +1586,15 @@ fn list_threads_keeps_rows_after_native_compression() {
     )
     .unwrap();
     write_thread_db(&root, "compressed-thread", &rollout, 1, 0);
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
-    assert!(rows.iter().any(|thread| thread.id == "compressed-thread"));
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
+    let compressed_row = rows
+        .iter()
+        .find(|thread| thread.id == "compressed-thread")
+        .expect("compressed thread in active list");
+    assert_eq!(
+        compressed_row.rollout_path,
+        Some(crate::codex::rollout_file::compressed_path(&rollout))
+    );
     assert!(thread_detail(&CodexPaths::new(&root), "compressed-thread")
         .unwrap()
         .is_some());
@@ -1609,7 +1616,7 @@ fn list_threads_does_not_read_rollout_outside_codex_home() {
     .unwrap();
     write_thread_db(&root, "external-thread", &external_rollout, 1, 0);
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     let row = rows
         .iter()
@@ -1640,7 +1647,7 @@ fn list_threads_does_not_discover_rollout_path_from_sessions_tree() {
     .unwrap();
     write_thread_db(&root, "special-thread", Path::new(""), 1, 0);
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let row = rows
         .iter()
         .find(|thread| thread.id == "special-thread")
@@ -1703,7 +1710,7 @@ fn rollout_session_meta_subagent_thread_is_hidden_from_list() {
     .unwrap();
     write_thread_db(&root, "child-thread", &rollout, 1, 0);
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     assert!(rows.iter().all(|row| row.id != "child-thread"));
     let _ = fs::remove_dir_all(root);
@@ -1772,7 +1779,7 @@ fn list_threads_title_priority_filters_placeholders_and_preview_titles() {
         1,
     );
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let by_id = rows
         .iter()
         .map(|row| (row.id.as_str(), row.title.as_str()))
@@ -1822,7 +1829,7 @@ fn db_first_user_message_titles_list_and_detail_when_db_title_is_unusable() {
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let row = rows
         .iter()
         .find(|thread| thread.id == "first-user-thread")
@@ -1881,7 +1888,7 @@ fn session_index_metadata_title_or_first_user_message_titles_db_row_without_roll
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let by_id = rows
         .iter()
         .map(|row| (row.id.as_str(), row.title.as_str()))
@@ -1925,7 +1932,7 @@ fn session_index_thread_name_titles_db_row_without_rollout_path() {
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let row = rows
         .iter()
         .find(|thread| thread.id == "thread-name-thread")
@@ -1971,7 +1978,7 @@ fn session_index_uses_latest_thread_name_for_repeated_thread_records() {
     )
     .unwrap();
 
-    let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+    let row = list_threads(&CodexPaths::new(&root), false, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "thread-name-thread")
@@ -2012,7 +2019,7 @@ fn session_index_thread_name_repairs_first_user_message_title_from_old_db() {
     )
     .unwrap();
 
-    let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+    let row = list_threads(&CodexPaths::new(&root), false, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "thread-name-thread")
@@ -2054,7 +2061,7 @@ fn session_index_thread_name_repairs_db_title_copied_from_first_user_message() {
     )
     .unwrap();
 
-    let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+    let row = list_threads(&CodexPaths::new(&root), false, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "thread-name-thread")
@@ -2104,7 +2111,7 @@ fn session_index_path_finds_rollout_title_when_filename_omits_thread_id() {
     )
     .unwrap();
 
-    let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+    let row = list_threads(&CodexPaths::new(&root), false, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "thread-id-not-in-filename")
@@ -2152,7 +2159,7 @@ fn plan_and_assistant_preview_do_not_override_real_user_title() {
     )
     .unwrap();
 
-    let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+    let row = list_threads(&CodexPaths::new(&root), false, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "plan-preview-thread")
@@ -2206,13 +2213,14 @@ fn archived_thread_is_hidden_from_default_and_all_lists_but_visible_in_archived_
     )
     .unwrap();
 
-    let default_rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
-    let all_rows = list_threads(&CodexPaths::new(&root), Some("all"), None, 10).unwrap();
-    let archived_rows = list_threads(&CodexPaths::new(&root), Some("archived"), None, 10).unwrap();
+    let default_rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
+    let archived_rows = list_threads(&CodexPaths::new(&root), true, None, 10).unwrap();
 
     assert!(default_rows.iter().all(|row| row.id != "archived-thread"));
-    assert!(all_rows.iter().all(|row| row.id != "archived-thread"));
     assert!(archived_rows.iter().any(|row| row.id == "archived-thread"));
+    assert!(thread_detail(&CodexPaths::new(&root), "archived-thread")
+        .unwrap()
+        .is_some());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2247,7 +2255,7 @@ fn list_threads_sanitizes_proposed_plan_latest_message_but_keeps_reply_needed() 
         1,
     );
 
-    let rows = list_threads(&CodexPaths::new(&root), Some("reply-needed"), None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
@@ -2290,7 +2298,7 @@ fn request_user_input_status_takes_priority_over_running_turn() {
         1,
     );
 
-    let rows = list_threads(&CodexPaths::new(&root), Some("reply-needed"), None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
@@ -2328,7 +2336,7 @@ fn db_metadata_subagent_thread_is_hidden_from_list() {
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     assert!(rows.iter().all(|row| row.id != "child-thread"));
     let _ = fs::remove_dir_all(root);
@@ -2448,7 +2456,7 @@ fn main_thread_with_interactive_source_metadata_remains_visible() {
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "main-thread");
@@ -2498,7 +2506,7 @@ fn exec_readonly_verification_threads_are_hidden_from_main_list() {
     )
     .unwrap();
 
-    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     let hidden = hidden_thread_ids(&CodexPaths::new(&root)).unwrap();
     let counts = thread_source_counts(&CodexPaths::new(&root)).unwrap();
 
@@ -2785,7 +2793,7 @@ fn archived_thread_keeps_archived_status_despite_running_rollout() {
     .unwrap();
     write_thread_db(&root, "test-thread", &rollout, 1, 1);
 
-    let row = list_threads(&CodexPaths::new(&root), Some("archived"), None, 10)
+    let row = list_threads(&CodexPaths::new(&root), true, None, 10)
         .unwrap()
         .into_iter()
         .find(|thread| thread.id == "test-thread")
@@ -2823,12 +2831,12 @@ fn lists_sort_by_last_conversation_message_before_limiting() {
     let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
     conn.execute("INSERT INTO threads SELECT 'second', ?1, created_at, 1, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview FROM threads WHERE id = 'first'", [second.to_string_lossy().as_ref()]).unwrap();
     let paths = CodexPaths::new(&root);
-    assert_eq!(list_threads(&paths, None, None, 1).unwrap()[0].id, "second");
+    assert_eq!(list_threads(&paths, false, None, 1).unwrap()[0].id, "second");
     let mut file = fs::OpenOptions::new().append(true).open(&first).unwrap();
     writeln!(file, "{}", json!({"type":"response_item","timestamp":"2026-12-01T00:00:00Z","payload":{"type":"function_call","name":"fixture_tool","call_id":"tool","arguments":"{}"}})).unwrap();
-    assert_eq!(list_threads(&paths, None, None, 1).unwrap()[0].id, "second");
+    assert_eq!(list_threads(&paths, false, None, 1).unwrap()[0].id, "second");
     writeln!(file, "{}", message("user", "2026-10-01T05:00:00Z")).unwrap();
-    let list = list_threads(&paths, None, None, 1).unwrap();
+    let list = list_threads(&paths, false, None, 1).unwrap();
     assert_eq!(list[0].id, "first");
     assert_eq!(list[0].updated_at.as_deref(), Some("2026-10-01T05:00:00Z"));
     fs::remove_dir_all(root).unwrap();
@@ -2900,9 +2908,13 @@ fn list_threads_full_fetch_keeps_running_thread_beyond_small_page() {
     )
     .unwrap();
 
-    let first_page = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let first_page = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
     assert!(!first_page.iter().any(|thread| thread.id == "running-old"));
-    let running = list_threads(&CodexPaths::new(&root), Some("running"), None, usize::MAX).unwrap();
+    let running = list_threads(&CodexPaths::new(&root), false, None, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .filter(|thread| matches!(thread.status, ThreadStatus::Running))
+        .collect::<Vec<_>>();
     assert_eq!(running.len(), 1);
     assert_eq!(running[0].id, "running-old");
     assert_eq!(running[0].active_turn_id.as_deref(), Some("turn-live"));
@@ -3367,7 +3379,7 @@ fn thread_names_follow_native_history_mode() {
         conn.execute_batch("ALTER TABLE threads ADD COLUMN name TEXT; ALTER TABLE threads ADD COLUMN history_mode TEXT;").unwrap();
         conn.execute("UPDATE threads SET title='Native legacy name', name='Native paginated name', history_mode=?1", [mode]).unwrap();
         drop(conn);
-        let rows = list_threads(&CodexPaths::new(&root), None, Some("thread-a"), 10).unwrap();
+        let rows = list_threads(&CodexPaths::new(&root), false, Some("thread-a"), 10).unwrap();
         assert_eq!(rows[0].title, expected, "{mode}");
         if mode == "legacy" {
             let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
@@ -3378,7 +3390,7 @@ fn thread_names_follow_native_history_mode() {
                 json!({"id":"thread-a","thread_name":"Canonical index name"}).to_string(),
             )
             .unwrap();
-            let rows = list_threads(&CodexPaths::new(&root), None, Some("thread-a"), 10).unwrap();
+            let rows = list_threads(&CodexPaths::new(&root), false, Some("thread-a"), 10).unwrap();
             assert_eq!(rows[0].title, "Canonical index name");
         }
         fs::remove_dir_all(root).unwrap();
