@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.6.0": [
+        "加固五类 Agent 交接文件路径，修复 Antigravity 闲置会话常亮运行态、超长会话在线／离线过程折叠、Bark 增量扫描与最终必达，以及 Claude Code 穿插元数据与错误结尾的过程折叠。",
+        "整体前端深度重写为三层冷暖空气感表面与七大工作区专属宝石色调体系，并将标签发布流水线升级为自包含并行门禁以缩短发版耗时。",
+    ],
     "1.5.0": [
         "恢复原生二进制公网 IP 隐私门禁，收紧 Antigravity 与 DSH 子会话删除归属校验、运行态拦截与残留报告，并统一五类 Agent 最优交接文件路径。",
         "移除顶部状态筛选栏并改为底部轻量折叠「已归档」，切换访达风格 ⌘ 多选与连续中间过程单框折叠，修复五类 Agent 时间线定位及 Antigravity Bark 过早提醒。",
@@ -219,6 +223,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.6.0":
+        sections = {
+            "版本概览": [
+                "加固五类 Agent 交接文件路径、Antigravity 运行状态／超长会话过程折叠／Bark 双向可靠性与 Claude Code 复杂回合过程折叠，深度重写多色调宝石视觉界面，并将标签发布流水线升级为自包含并行门禁；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "五类 Agent「复制路径」交接来源边界加固：Codex 优先解析真实在盘的明文、归档或压缩 rollout 文件；Grok Build 过滤零字节占位文件并支持回退至非空 updates.jsonl、events.jsonl 或 summary.json；Claude Code、Antigravity 与 DeepSeek Harness 保持完整无损日志优先级。",
+                "整体前端升级为三层冷暖空气感表面层次与七大工作区专属宝石色调体系：导航栏常驻七色宝石图标与激活柔光指示条，会话选中卡片、胶囊搜索框、云青色用户消息气泡、深海蓝行内代码与顶栏色带代码块、过程折叠胶囊、左侧大纲横线及多色顶栏仪表盘卡片在浅／深色双主题下均满足高对比易读性。",
+                "标签发布流水线改为自包含并行架构：Release guard 前置核验六章节发布说明，随后并行启动完整前后端／Tauri CI 门禁与 Linux／macOS 双平台签名打包，支持主分支提交与发布标签同推。",
+            ],
+            "问题修复": [
+                "Antigravity 列表与详情读路径彻底移除 presence 文件锁探测，在线状态严格对齐原生 RPC 活跃轨迹与活跃子代理（已结束但仍在窗口打开的会话不再常亮「运行中」或一直转圈），离线删除改用非阻塞只读共享锁探针避免抢写锁；子会话索引库读取失败时显式报错阻断删除，杜绝静默遗留孤儿子会话。",
+                "本机 Antigravity 环回 RPC 响应上限提升至 256 MiB（远端 HTTP 仍保持 32 MiB），Bark 监测改用当前轮增量步拉取消除超长会话超限漏报；同时结合在线子代理运行态、后台任务日志句柄／修改时间与有界交接宽限窗口，既防止提前误发，也保证子代理或后台任务无系统消息退出时最终必达。",
+                "修复 Antigravity 离线转录 GENERIC 工具输出误判为正文、多轮唤醒回合归属与过渡说明打断折叠的问题；修复 Claude Code 在工具调用间穿插自动记账／上下文记录及回合以网关错误加尾部记账收尾时整轮未折叠的问题。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；既有本地数据库、Bark 通知配置、Keychain 远端连接与五类 Agent 原生会话目录无需迁移。",
+                "远端 HTTP 响应体积上限保持不变，新增 256 MiB 限额仅作用于本机环回 Antigravity Connect-RPC。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App；随后核验五类 Agent 复制路径、Claude Code 与 Antigravity 长会话单框过程折叠、Antigravity 空闲状态与 Bark 完成提醒，以及多色调新界面。",
+                "DSH 归档、恢复与永久删除前须退出目标机器正在运行的 DSH 进程；真实用户会话删除、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.5.0":
         sections = {
