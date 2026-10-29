@@ -19,6 +19,7 @@ export type ExecutionGroup = {
   provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness";
   running: boolean;
   failedCount: number;
+  turnId?: string | null;
 };
 export type ExecutionRenderItem<T> =
   | { kind: "item"; item: T; key: string; sourceIds: string[] }
@@ -99,7 +100,9 @@ type Activity<T> = {
 };
 
 function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup["provider"]): ExecutionRenderItem<T>[] {
-  type Entry = { kind: "item"; item: T; key: string; sourceIds: string[] } | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean };
+  type Entry =
+    | { kind: "item"; item: T; key: string; sourceIds: string[] }
+    | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean; turnId?: string | null };
   const entries: Entry[] = [];
   const pending = new Map<string, ExecutionCommand>();
   const occurrences = new Map<string, number>();
@@ -136,7 +139,7 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
       sections: [...activity.sections]
     };
     if (activity.callId) pending.set(activity.callId, command);
-    entries.push({ kind: "command", command, isCommand: activity.command, newTurn });
+    entries.push({ kind: "command", command, isCommand: activity.command, newTurn, turnId: activity.turnId ?? turn });
   }
   const output: ExecutionRenderItem<T>[] = [];
   for (const entry of entries) {
@@ -149,7 +152,8 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
     if (group) {
       group.commands.push(entry.command);
       if (!entry.isCommand) group.kind = "tool";
-    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", provider, running: false, failedCount: 0 } });
+      if (!group.turnId && entry.turnId) group.turnId = entry.turnId;
+    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", provider, running: false, failedCount: 0, turnId: entry.turnId } });
   }
   for (const entry of output) {
     if (entry.kind !== "group") continue;

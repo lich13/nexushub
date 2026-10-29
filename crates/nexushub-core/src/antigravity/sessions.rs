@@ -862,9 +862,8 @@ fn list_offline_summaries(paths: &AntigravityPaths) -> Result<Vec<ProviderSessio
                             can_archive: true,
                             archive_block_reason: None,
                             can_delete: !running,
-                            delete_block_reason: running.then(|| {
-                                "会话正在运行，请先在 Antigravity 中停止后再删除".into()
-                            }),
+                            delete_block_reason: running
+                                .then(|| "会话正在运行，请先在 Antigravity 中停止后再删除".into()),
                             read_error: None,
                             read_warning: None,
                         };
@@ -1017,7 +1016,10 @@ fn extract_user_input_item_text(item: &Value) -> Option<String> {
     }
     if let Some(obj) = scope.as_object() {
         for key in ["label", "title", "name", "absolutePathUri", "uri", "path"] {
-            if let Some(val) = obj.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty())
+            if let Some(val) = obj
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
             {
                 return Some(format!("@{}", decode_file_uri(val)));
             }
@@ -1043,11 +1045,7 @@ fn format_artifact_comment(entry: &Value) -> Option<String> {
     let basename = entry["artifactUri"]
         .as_str()
         .map(decode_file_uri)
-        .and_then(|p| {
-            p.rsplit('/')
-                .find(|seg| !seg.is_empty())
-                .map(str::to_owned)
-        })
+        .and_then(|p| p.rsplit('/').find(|seg| !seg.is_empty()).map(str::to_owned))
         .unwrap_or_default();
     let comment = [
         &entry["comment"],
@@ -1065,9 +1063,7 @@ fn format_artifact_comment(entry: &Value) -> Option<String> {
         ("ARTIFACT_APPROVAL_STATUS_APPROVED", true, Some(c)) => {
             Some(format!("批准文档（{basename}）：{c}"))
         }
-        ("ARTIFACT_APPROVAL_STATUS_APPROVED", true, None) => {
-            Some(format!("批准文档：{basename}"))
-        }
+        ("ARTIFACT_APPROVAL_STATUS_APPROVED", true, None) => Some(format!("批准文档：{basename}")),
         ("ARTIFACT_APPROVAL_STATUS_APPROVED", false, Some(c)) => Some(format!("批准文档：{c}")),
         ("ARTIFACT_APPROVAL_STATUS_APPROVED", false, None) => Some("批准文档".into()),
         (
@@ -2033,7 +2029,8 @@ pub fn preview_batch_item(
         None
     };
     if operation == SessionOperation::Delete
-        && (summary.status == "running" || is_cascade_running(paths, all_live.as_ref(), &summary.id))
+        && (summary.status == "running"
+            || is_cascade_running(paths, all_live.as_ref(), &summary.id))
     {
         bail!(
             "{}",
@@ -2126,8 +2123,7 @@ pub fn execute_batch_item(
                 Some(rpc) => Some(live_all_trajectories(rpc)?),
                 None => None,
             };
-            let verified_descendants =
-                find_descendant_ids_with_live(paths, all_live.as_ref(), key);
+            let verified_descendants = find_descendant_ids_with_live(paths, all_live.as_ref(), key);
             let verified_set: BTreeSet<&str> =
                 verified_descendants.iter().map(String::as_str).collect();
             for child in descendants {
@@ -2566,7 +2562,10 @@ mod tests {
 
     #[test]
     fn parse_loopback_listener_port_accepts_loopback_only() {
-        assert_eq!(parse_loopback_listener_port("n127.0.0.1:51234"), Some(51234));
+        assert_eq!(
+            parse_loopback_listener_port("n127.0.0.1:51234"),
+            Some(51234)
+        );
         assert_eq!(parse_loopback_listener_port("n0.0.0.0:51234"), None);
         assert_eq!(parse_loopback_listener_port("n192.0.2.10:51234"), None);
         assert_eq!(parse_loopback_listener_port("n[::1]:51234"), None);
@@ -2636,7 +2635,10 @@ mod tests {
             true,
         )
         .is_err());
-        assert!(root.join("conversations").join(format!("{root_b}.db")).exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{root_b}.db"))
+            .exists());
 
         // 2. Cross-root subagent UUID in descendants is rejected
         assert!(execute_batch_item(
@@ -2647,7 +2649,10 @@ mod tests {
             true,
         )
         .is_err());
-        assert!(root.join("conversations").join(format!("{sub_b}.db")).exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_b}.db"))
+            .exists());
 
         // 3. Descendants supplied when include_descendants == false is rejected
         assert!(execute_batch_item(
@@ -2679,8 +2684,14 @@ mod tests {
             assert!(
                 execute_batch_item(&paths, &root_a, SessionOperation::Delete, &[], true).is_err()
             );
-            assert!(root.join("conversations").join(format!("{root_a}.db")).exists());
-            assert!(root.join("conversations").join(format!("{sub_a}.db")).exists());
+            assert!(root
+                .join("conversations")
+                .join(format!("{root_a}.db"))
+                .exists());
+            assert!(root
+                .join("conversations")
+                .join(format!("{sub_a}.db"))
+                .exists());
             unsafe {
                 let _ = libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
             }
@@ -2697,7 +2708,10 @@ mod tests {
             assert_eq!(partial.status, "failed");
             assert!(partial.deleted_ids.is_empty());
             assert!(!partial.residuals.is_empty());
-            assert!(root.join("conversations").join(format!("{root_a}.db")).exists());
+            assert!(root
+                .join("conversations")
+                .join(format!("{root_a}.db"))
+                .exists());
             assert!(root.join("brain").join(&root_a).exists());
             // root_a remains visible in list_sessions for retry!
             assert!(list_sessions(&paths, &ProviderListRequest::default())
@@ -2772,7 +2786,9 @@ mod tests {
                 let json_body: Value = serde_json::from_slice(&body).unwrap_or_default();
                 let (sub_busy, fail_sub_delete) = *server_mode.lock().unwrap();
                 let (status_code, resp) = if req_line.contains("GetAllCascadeTrajectories") {
-                    let exclude_sub = json_body["excludeSubtrajectories"].as_bool().unwrap_or(true);
+                    let exclude_sub = json_body["excludeSubtrajectories"]
+                        .as_bool()
+                        .unwrap_or(true);
                     let mut summaries = serde_json::Map::new();
                     summaries.insert(
                         s_root.clone(),
@@ -2824,7 +2840,10 @@ mod tests {
         // 1. Subagent BUSY blocks both preview and execute even though root summary is IDLE
         assert!(preview_batch_item(&paths, &root_id, SessionOperation::Delete, true).is_err());
         assert!(execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).is_err());
-        assert!(root.join("conversations").join(format!("{sub_id}.db")).exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
 
         // 2. Subagent IDLE, but DeleteCascadeTrajectory on sub_id returns HTTP 500 -> must NOT delete disk files!
         *mode.lock().unwrap() = (false, true);
@@ -2833,9 +2852,15 @@ mod tests {
         assert_eq!(failed.status, "failed");
         assert!(failed.deleted_ids.is_empty());
         assert!(!failed.residuals.is_empty());
-        assert!(root.join("conversations").join(format!("{sub_id}.db")).exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
         assert!(root.join("brain").join(&sub_id).exists());
-        assert!(root.join("conversations").join(format!("{root_id}.db")).exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
         assert!(root.join("brain").join(&root_id).exists());
 
         // 3. Once RPC succeeds, both sub_id and root_id are cleanly deleted
@@ -2843,8 +2868,14 @@ mod tests {
         let ok = execute_batch_item(&paths, &root_id, SessionOperation::Delete, &[], true).unwrap();
         assert_eq!(ok.status, "succeeded");
         assert!(ok.residuals.is_empty());
-        assert!(!root.join("conversations").join(format!("{sub_id}.db")).exists());
-        assert!(!root.join("conversations").join(format!("{root_id}.db")).exists());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = TcpStream::connect(("127.0.0.1", port));
@@ -2854,10 +2885,8 @@ mod tests {
 
     #[test]
     fn canonical_path_prefers_plain_transcript_handoff_files_over_sqlite_db() {
-        let root = std::env::temp_dir().join(format!(
-            "nexushub-ag-handoff-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("nexushub-ag-handoff-{}", uuid::Uuid::new_v4()));
         let id = "11111111-1111-4111-8111-111111111111";
         let paths = AntigravityPaths::offline(root.clone());
         let logs = paths.brain_dir().join(id).join(".system_generated/logs");

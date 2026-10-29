@@ -2831,10 +2831,16 @@ fn lists_sort_by_last_conversation_message_before_limiting() {
     let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
     conn.execute("INSERT INTO threads SELECT 'second', ?1, created_at, 1, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview FROM threads WHERE id = 'first'", [second.to_string_lossy().as_ref()]).unwrap();
     let paths = CodexPaths::new(&root);
-    assert_eq!(list_threads(&paths, false, None, 1).unwrap()[0].id, "second");
+    assert_eq!(
+        list_threads(&paths, false, None, 1).unwrap()[0].id,
+        "second"
+    );
     let mut file = fs::OpenOptions::new().append(true).open(&first).unwrap();
     writeln!(file, "{}", json!({"type":"response_item","timestamp":"2026-12-01T00:00:00Z","payload":{"type":"function_call","name":"fixture_tool","call_id":"tool","arguments":"{}"}})).unwrap();
-    assert_eq!(list_threads(&paths, false, None, 1).unwrap()[0].id, "second");
+    assert_eq!(
+        list_threads(&paths, false, None, 1).unwrap()[0].id,
+        "second"
+    );
     writeln!(file, "{}", message("user", "2026-10-01T05:00:00Z")).unwrap();
     let list = list_threads(&paths, false, None, 1).unwrap();
     assert_eq!(list[0].id, "first");

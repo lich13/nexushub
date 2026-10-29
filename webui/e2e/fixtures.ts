@@ -22,11 +22,11 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
   let connection: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false, ...options.connection };
   const calls: string[] = [];
   const titles = new Map<string, string>();
-  const archived = new Set<string>();
+  const archived = new Set<string>(demo.demoThreads(true, "").map((thread) => thread.id));
   let probeSettings = demo.demoProbeSettings(connection.target === "remote" ? "linux-api" : "macos-tauri");
   probeSettings.notifications = { ...probeSettings.notifications, enabled: true, device_key_configured: true };
   let jobReads = 0;
-  let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "recent" }];
+  let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", handoffPath: "/isolated/sessions/grok-fixture/chat_history.jsonl", messageCount: 2, status: "recent" }];
   let antigravity = [{
     id: "ag-fixture",
     sessionKey: "ag:ag-fixture",
@@ -86,11 +86,34 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "system.capabilities": () => demo.demoSystemCapabilities(fixture()),
         "system.version": demo.demoSystemVersion,
         "system.platform": () => demo.demoPlatformOverview(fixture()),
-        "threads.list": () => demo.demoThreads("all", "").map((thread) => ({ ...thread, title: titles.get(thread.id) ?? thread.title, status: archived.has(thread.id) ? "Archived" : thread.status })).filter((thread) => {
-          const status = args.status ?? "all";
-          return (status === "archived" ? thread.status === "Archived" : thread.status !== "Archived" && (status === "all" || thread.status === ({ running: "Running", "reply-needed": "ReplyNeeded", recoverable: "Recoverable" } as Record<string, string>)[status])) && thread.title.toLowerCase().includes((args.q ?? "").toLowerCase());
-        }),
-        "threads.detail": () => { const detail = demo.demoThreadDetail(args.id); return { ...detail, summary: { ...detail.summary, title: titles.get(args.id) ?? detail.summary.title, status: archived.has(args.id) ? "Archived" : detail.summary.status } }; },
+        "threads.list": () => {
+          const wantArchived = Boolean(args.archived);
+          const q = String(args.q ?? "").toLowerCase();
+          return [...demo.demoThreads(false, ""), ...demo.demoThreads(true, "")]
+            .map((thread) => {
+              const isArch = archived.has(thread.id);
+              return {
+                ...thread,
+                title: titles.get(thread.id) ?? thread.title,
+                status: isArch ? ("Archived" as const) : thread.status === "Archived" ? ("Recent" as const) : thread.status,
+                archived_at: isArch ? (thread.archived_at ?? "2026-10-01T00:00:00Z") : null,
+              };
+            })
+            .filter((thread) => (thread.status === "Archived") === wantArchived && (!q || thread.title.toLowerCase().includes(q) || thread.id.toLowerCase().includes(q)));
+        },
+        "threads.detail": () => {
+          const detail = demo.demoThreadDetail(args.id);
+          const isArch = archived.has(args.id);
+          return {
+            ...detail,
+            summary: {
+              ...detail.summary,
+              title: titles.get(args.id) ?? detail.summary.title,
+              status: isArch ? ("Archived" as const) : detail.summary.status === "Archived" ? ("Recent" as const) : detail.summary.status,
+              archived_at: isArch ? (detail.summary.archived_at ?? "2026-10-01T00:00:00Z") : null,
+            },
+          };
+        },
         "threads.rename": () => { titles.set(args.threadId, args.name); return { ok: true }; },
         "threads.archive": () => { archived.add(args.threadId); return { ok: true }; },
         "threads.restore": () => { archived.delete(args.threadId); return { ok: true }; },

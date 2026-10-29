@@ -228,7 +228,7 @@ export function applyThreadDetailToSlot(
   // identity/change metadata can discard already loaded messages.
   const reset = detail.history?.reset || (slot.history && detail.history && slot.history.epoch !== detail.history.epoch);
   if (reset) { slot.blocks = []; slot.beforeCursor = null; slot.hasMoreBlocks = false; }
-  slot.timeline = detail.timeline;
+  slot.timeline = detail.timeline ?? (reset ? undefined : slot.timeline);
   slot.history = detail.history;
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;

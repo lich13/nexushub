@@ -20,9 +20,9 @@ export function executionSummary(group: ExecutionGroup) {
   return { label: `${prefix}${words.join("、")}`, Icon: kinds.has("integration") ? Blocks : kinds.has("command") ? Terminal : kinds.has("search") ? Search : BookOpen };
 }
 
-const CommandView = memo(function CommandView({ command }: { command: ExecutionCommand }) {
+export const ExecutionCommandRow = memo(function CommandView({ command }: { command: ExecutionCommand }) {
   return <ActivityDetails timelineId={command.id} timelineAliases={command.sourceIds} className="execution-command" stateKey={command.id} initiallyOpen={!command.instructionFile && command.status !== "completed"} summary={<>
-    <Terminal size={16} aria-hidden="true" /><span className="tool-title" title={command.instructionFile ? "AGENTS.md" : visibleMarkdown(`${command.title} ${command.preview ?? ""}`)}>{command.instructionFile ? "AGENTS.md" : <>{visibleMarkdown(command.title)}{command.preview && <span className="command-preview"> {visibleMarkdown(command.preview)}</span>}</>}</span>
+    <Terminal size={15} aria-hidden="true" /><span className="tool-title" title={command.instructionFile ? "AGENTS.md" : visibleMarkdown(`${command.title} ${command.preview ?? ""}`)}>{command.instructionFile ? "AGENTS.md" : <>{visibleMarkdown(command.title)}{command.preview && <span className="command-preview"> {visibleMarkdown(command.preview)}</span>}</>}</span>
     {command.status === "running" && <RunningIndicator />}
     <small>{{ completed: "已完成", running: "运行中", failed: "失败" }[command.status]}</small>
   </>}>
@@ -37,11 +37,11 @@ export const ExecutionGroupView = memo(function ExecutionGroupView({ group }: { 
   const positionKey = useContext(DisclosureRevealContext);
   const reveal = Boolean(positionKey && group.commands.some(command => matchesTimelinePosition(positionKey, command.id, command.sourceIds)));
   return <ActivityDetails timelineId={group.id} timelineAliases={group.commands.map(command => `group:${command.id}`)} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} reveal={reveal} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
-    <Icon size={17} aria-hidden="true" />
+    <Icon size={15} aria-hidden="true" />
     <span className="activity-label">{label}</span>
     <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>
     {group.running && <RunningIndicator />}
   </>}>
-    {() => <div className="execution-rows" data-history-scroll-container="commands">{group.commands.map(command => <CommandView key={command.id} command={command} />)}</div>}
+    {() => <div className="execution-rows" data-history-scroll-container="commands">{group.commands.map(command => <ExecutionCommandRow key={command.id} command={command} />)}</div>}
   </ActivityDetails>;
 });

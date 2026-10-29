@@ -2575,8 +2575,7 @@ fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
             }
         }),
     );
-    let active =
-        thread_service::filter_thread_summaries(rows.clone(), false, None, 50);
+    let active = thread_service::filter_thread_summaries(rows.clone(), false, None, 50);
 
     assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
     assert_eq!(detail.summary.status, ThreadStatus::ReplyNeeded);

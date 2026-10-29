@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import {
-  applyThreadTitleOverride,
   applyThreadTitleOverrideToDetail,
   applyThreadTitleOverrides,
+  filterVisibleThreadSummaries,
   threadDetailRefetchInterval,
   type SelectedThread
 } from "../lib/domain/codexViewModel";
@@ -18,22 +18,43 @@ import {
   useThreadsQuery,
   type ThreadMessageStoreController
 } from "../lib/query/threads";
-import type { ThreadSummary } from "../types";
 
 export function useConversationController(input: {
-  status: string;
+  archivedOpen: boolean;
   q: string;
   setMobileThreadsOpen: (open: boolean) => void;
 }) {
   const threadCache = useThreadCacheActions();
   const messageStore = useThreadMessageStoreController();
   const threads = useThreadsQuery({
-    status: input.status,
+    archived: false,
     q: input.q,
     select: applyThreadTitleOverrides
   });
-  const includeArchived = input.status === "archived";
-  const selection = useSelectedThreadState(threads.data ?? [], includeArchived);
+  const archivedThreads = useThreadsQuery({
+    archived: true,
+    q: input.q,
+    enabled: input.archivedOpen,
+    select: applyThreadTitleOverrides
+  });
+  const includeArchived = input.archivedOpen;
+  const combinedThreads = useMemo(
+    () => includeArchived ? [...(threads.data ?? []), ...(archivedThreads.data ?? [])] : (threads.data ?? []),
+    [archivedThreads.data, includeArchived, threads.data]
+  );
+  const activeThreads = useMemo(
+    () => filterVisibleThreadSummaries(threads.data ?? [], false),
+    [threads.data]
+  );
+  const visibleArchivedThreads = useMemo(
+    () => includeArchived
+      ? filterVisibleThreadSummaries(archivedThreads.data ?? [], true).filter(
+          (thread) => thread.status === "Archived" || Boolean(thread.archived_at)
+        )
+      : [],
+    [archivedThreads.data, includeArchived]
+  );
+  const selection = useSelectedThreadState(combinedThreads, includeArchived);
   const {
     selectedId,
     selectThread: setSelectedId,
@@ -87,7 +108,9 @@ export function useConversationController(input: {
     threadCache,
     messageStore,
     threads,
-    visibleThreads,
+    archivedThreads,
+    visibleThreads: activeThreads,
+    visibleArchivedThreads,
     resolvedSelected,
     selectedThreadSummary,
     selectedDetail,

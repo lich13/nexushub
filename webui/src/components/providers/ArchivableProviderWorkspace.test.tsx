@@ -100,8 +100,9 @@ describe("ArchivableProviderWorkspace", () => {
     "%s renders user message, collapsed thinking, grouped execution disclosures, and copyable final markdown",
     providerName => {
       const { html, details } = renderEvents(providerName);
-      expect(details.length).toBeGreaterThanOrEqual(2);
-      expect(details.every(item => item.props.open === false)).toBe(true);
+      expect(details).toHaveLength(1);
+      expect(details[0]?.props.open).toBe(false);
+      expect(html).toContain("process-group");
       expect(html).toContain("Inspect the workspace build pipeline");
       expect(html).toContain("已思考");
       expect(html).not.toContain("Hidden reasoning trace fixture");

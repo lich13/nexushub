@@ -42,6 +42,10 @@ function retainHistoryWindows<Page>(oldData: unknown, newData: unknown, adapter:
   return replaceEqualDeep(previous, { ...incoming, pages, pageParams });
 }
 
+function preservedTimeline<T extends { timeline?: ClaudeSessionDetail["timeline"] }>(oldPage: T, page: T) {
+  return page.timeline === undefined && oldPage.timeline !== undefined ? { timeline: oldPage.timeline } : {};
+}
+
 export function retainClaudeHistory(previous: unknown, incoming: unknown): InfiniteData<ClaudeSessionDetail> {
   return retainHistoryWindows<ClaudeSessionDetail>(previous, incoming, {
     identity: page => JSON.stringify([page.summary.sessionKey, page.summary.id]),
@@ -51,7 +55,7 @@ export function retainClaudeHistory(previous: unknown, incoming: unknown): Infin
         { hasMore: oldPage.hasMore, cursor: oldPage.beforeCursor },
         { hasMore: page.hasMore, cursor: page.beforeCursor }
       );
-      return { ...page, events: mergeBlocksPreservingHistory(oldPage.events, page.events), hasMore: Boolean(boundary.hasMore), beforeCursor: boundary.cursor };
+      return { ...page, ...preservedTimeline(oldPage, page), events: mergeBlocksPreservingHistory(oldPage.events, page.events), hasMore: Boolean(boundary.hasMore), beforeCursor: boundary.cursor };
     }
   });
 }
@@ -65,7 +69,7 @@ export function retainSubagentHistory(previous: unknown, incoming: unknown): Inf
         { hasMore: oldPage.detail.has_more_blocks, cursor: oldPage.detail.before_cursor },
         { hasMore: page.detail.has_more_blocks, cursor: page.detail.before_cursor }
       );
-      return { ...page, detail: { ...page.detail, blocks: mergeBlocksPreservingHistory(oldPage.detail.blocks, page.detail.blocks), has_more_blocks: boundary.hasMore, before_cursor: boundary.cursor } };
+      return { ...page, detail: { ...page.detail, ...preservedTimeline(oldPage.detail, page.detail), blocks: mergeBlocksPreservingHistory(oldPage.detail.blocks, page.detail.blocks), has_more_blocks: boundary.hasMore, before_cursor: boundary.cursor } };
     }
   });
 }
@@ -79,7 +83,7 @@ export function retainGrokHistory(previous: unknown, incoming: unknown): Infinit
       // Old services don't supply stable event identities or pagination.
       const events = page.events.every(event => event.id) && oldPage.events.every(event => event.id)
         ? mergeBlocksPreservingHistory(oldPage.events as (typeof page.events[number] & { id: string })[], page.events as (typeof page.events[number] & { id: string })[]) : page.events;
-      return { ...page, events, hasMore: boundary.hasMore, beforeCursor: boundary.cursor };
+      return { ...page, ...preservedTimeline(oldPage, page), events, hasMore: boundary.hasMore, beforeCursor: boundary.cursor };
     }
   });
 }
@@ -90,7 +94,7 @@ export function retainCodexHistory(previous: unknown, incoming: unknown): Infini
     total: page => page.total_blocks,
     merge: (oldPage, page) => {
       const boundary = retainedBoundary({ hasMore: oldPage.has_more_blocks, cursor: oldPage.before_cursor }, { hasMore: page.has_more_blocks, cursor: page.before_cursor });
-      return { ...page, blocks: mergeBlocksPreservingHistory(oldPage.blocks, page.blocks), has_more_blocks: boundary.hasMore, before_cursor: boundary.cursor };
+      return { ...page, ...preservedTimeline(oldPage, page), blocks: mergeBlocksPreservingHistory(oldPage.blocks, page.blocks), has_more_blocks: boundary.hasMore, before_cursor: boundary.cursor };
     }
   });
 }
@@ -132,6 +136,7 @@ export function retainProviderHistory(previous: unknown, incoming: unknown): Inf
       );
       return {
         ...page,
+        ...preservedTimeline(oldPage, page),
         events: mergeBlocksPreservingHistory(oldPage.events, page.events),
         hasMore: Boolean(boundary.hasMore),
         beforeCursor: boundary.cursor,

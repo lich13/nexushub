@@ -43,8 +43,8 @@ test("the process defaults closed with no mounted body while final answer and co
   const { html, details } = render(fixture(), "default");
   expect(details).toHaveLength(1);
   expect(details[0].props.open).toBe(false);
-  expect(html).toContain("2 段 · 1 项工具");
-  expect(html).toContain("已完成");
+  expect(html).toContain("已思考");
+  expect(html).toContain("1 项工具");
   expect(html).not.toContain("Private process fixture");
   expect(html).not.toContain("Temporary explanation");
   expect(html).not.toContain("Synthetic tool result");

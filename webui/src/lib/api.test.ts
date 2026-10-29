@@ -276,13 +276,14 @@ describe("archive delete API compatibility", () => {
     const { getProbeStatus, listThreads } = await import("./api");
 
     const status = await getProbeStatus();
-    const threads = await listThreads("reply-needed", "");
+    const threads = await listThreads(false, "");
+    const replyNeeded = threads.find((thread) => thread.status === "ReplyNeeded");
 
     expect(status.available).toBe(true);
     expect(JSON.stringify(status.data)).not.toContain("<proposed_plan>");
     expect(JSON.stringify(threads)).not.toContain("<proposed_plan>");
     expect(status.data?.reply_needed_threads?.[0]?.latest_message).toBe("等待确认");
-    expect(threads[0]?.latest_message).toBe("等待确认");
+    expect(replyNeeded?.latest_message).toBe("等待确认");
   });
 
   test("demo jobs include probe job history entries", async () => {
@@ -1188,16 +1189,17 @@ describe("archive delete API compatibility", () => {
     expect(renderToStaticMarkup(createElement(MessageBlockView, { block: { id: "approval", role: "assistant", kind: "approval", text: "Retired approval", questions: [] } }))).toBe("");
   });
 
-  test("thread status tabs include an explicit archive restoration view", async () => {
+  test("retires top 5-category status tabs and splits active vs archived demo threads", async () => {
     const app = await import("../test/domain");
+    const { demoThreads } = await import("./api/demo");
 
-    expect(app.statusTabs.map((tab: { id: string }) => tab.id)).toEqual([
-      "all",
-      "running",
-      "reply-needed",
-      "recoverable",
-      "archived"
-    ]);
+    expect("statusTabs" in app).toBe(false);
+    const active = demoThreads(false, "");
+    const archived = demoThreads(true, "");
+    expect(active.length).toBeGreaterThan(0);
+    expect(active.every((thread) => thread.status !== "Archived")).toBe(true);
+    expect(archived.length).toBeGreaterThan(0);
+    expect(archived.every((thread) => thread.status === "Archived")).toBe(true);
   });
 
   test("NexusHub navigation exposes the slim provider workspaces", async () => {
@@ -1264,7 +1266,7 @@ describe("archive delete API compatibility", () => {
     vi.resetModules();
     const { listThreads } = await import("./api");
 
-    const threads = await listThreads("all", "");
+    const threads = await listThreads(false, "");
     const serialized = JSON.stringify(threads);
 
     expect(threads.every((thread) => !("cwd" in thread))).toBe(true);
@@ -1273,7 +1275,7 @@ describe("archive delete API compatibility", () => {
     expect(serialized).not.toContain("/home/ubuntu/codex-workspace");
   });
 
-  test("thread list cache helper inserts and removes rows for running filter", async () => {
+  test("thread list cache helper separates active and archived caches and applies search query", async () => {
     const app = await import("../test/domain");
     const existing = {
       id: "thread-a",
@@ -1289,21 +1291,25 @@ describe("archive delete API compatibility", () => {
       active_turn_id: "turn-live",
       latest_message: "working"
     } satisfies ThreadSummary;
-    const completed = {
+    const archivedRow = {
       ...existing,
-      status: "Recent",
+      status: "Archived",
+      archived_at: "2026-10-01T00:00:00Z",
       active_turn_id: null,
       latest_message: "done"
     } satisfies ThreadSummary;
 
-    expect(app.mergeThreadSummaryIntoListCache([], running, "running", "")).toEqual([
+    expect(app.mergeThreadSummaryIntoListCache([], running, false, "")).toEqual([
       expect.objectContaining({ id: "thread-a", status: "Running", active_turn_id: "turn-live" })
     ]);
-    expect(app.mergeThreadSummaryIntoListCache([existing], running, "all", "")).toEqual([
+    expect(app.mergeThreadSummaryIntoListCache([existing], running, false, "")).toEqual([
       expect.objectContaining({ id: "thread-a", title: "example-user", latest_message: "working" })
     ]);
-    expect(app.mergeThreadSummaryIntoListCache([running], completed, "running", "")).toEqual([]);
-    expect(app.mergeThreadSummaryIntoListCache([existing], running, "running", "example_task")).toEqual([]);
+    expect(app.mergeThreadSummaryIntoListCache([running], archivedRow, false, "")).toEqual([]);
+    expect(app.mergeThreadSummaryIntoListCache([], archivedRow, true, "")).toEqual([
+      expect.objectContaining({ id: "thread-a", status: "Archived" })
+    ]);
+    expect(app.mergeThreadSummaryIntoListCache([existing], running, false, "example_task")).toEqual([]);
   });
 
   test("thread list visibility filters archived and every known subagent marker", async () => {

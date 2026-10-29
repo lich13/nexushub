@@ -37,7 +37,7 @@ import {
 import { preservePreviousQueryData } from "./shared";
 
 export const threadQueryKeys = {
-  threads: (status?: string, q?: string) => status === undefined && q === undefined ? ["threads"] as const : ["threads", status, q] as const,
+  threads: (archived?: boolean, q?: string) => archived === undefined && q === undefined ? ["threads"] as const : ["threads", archived ? "archived" : "active", q] as const,
   thread: (threadId: string | null) => ["thread", threadId] as const,
   threadBlocks: (threadId: string) => ["thread-blocks", threadId] as const,
   plugins: ["plugins"] as const,
@@ -81,8 +81,9 @@ function sourceValueContainsSubagent(value: unknown): boolean {
   return false;
 }
 
-function isVisibleMainThreadForCache(thread: Partial<ThreadSummary>): boolean {
-  if (thread.status === "Archived" || thread.archived_at) return false;
+function isVisibleMainThreadForCache(thread: Partial<ThreadSummary>, includeArchived = false): boolean {
+  const isArchived = thread.status === "Archived" || Boolean(thread.archived_at);
+  if (includeArchived ? !isArchived : isArchived) return false;
   if (nonEmptyString(thread.parentThreadId ?? thread.parent_thread_id)) return false;
   if (nonEmptyString(thread.agentPath ?? thread.agent_path)) return false;
   if (nonEmptyString(thread.agentNickname ?? thread.agent_nickname)) return false;
@@ -93,18 +94,8 @@ function isVisibleMainThreadForCache(thread: Partial<ThreadSummary>): boolean {
   return true;
 }
 
-function isThreadListItemRunningForCache(thread: Partial<ThreadSummary>): boolean {
-  return thread.status === "Running" || (thread.status === "Recent" && Boolean(thread.active_job_id));
-}
-
-function threadMatchesListFilterForCache(thread: Partial<ThreadSummary>, status = "all", q = ""): boolean {
-  if (!isVisibleMainThreadForCache(thread)) return false;
-  if (status !== "all") {
-    if (status === "running" && !isThreadListItemRunningForCache(thread)) return false;
-    if (status === "reply-needed" && thread.status !== "ReplyNeeded") return false;
-    if (status === "recoverable" && thread.status !== "Recoverable") return false;
-    if (!["running", "reply-needed", "recoverable"].includes(status) && thread.status !== status) return false;
-  }
+function threadMatchesListFilterForCache(thread: Partial<ThreadSummary>, archived = false, q = ""): boolean {
+  if (!isVisibleMainThreadForCache(thread, archived)) return false;
   const needle = q.trim().toLowerCase();
   if (!needle) return true;
   return [
@@ -137,13 +128,13 @@ function mergeIncomingThreadSummaryForCache<T extends Partial<ThreadSummary>>(cu
 export function mergeThreadSummaryIntoListCache(
   rows: ThreadSummary[] | undefined,
   incoming: ThreadSummary,
-  status = "all",
+  archived = false,
   q = ""
 ): ThreadSummary[] | undefined {
   if (!rows) return rows;
   const existing = rows.find((thread) => thread.id === incoming.id);
   const merged = existing ? mergeIncomingThreadSummaryForCache(existing, incoming) as ThreadSummary : incoming;
-  const matches = threadMatchesListFilterForCache(merged, status, q);
+  const matches = threadMatchesListFilterForCache(merged, archived, q);
   if (!matches) {
     return existing ? rows.filter((thread) => thread.id !== incoming.id) : rows;
   }
@@ -247,9 +238,9 @@ export function cachedThreadSummary(qc: QueryClient, threadId: string): ThreadSu
 
 export function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
   for (const query of qc.getQueryCache().findAll({ queryKey: threadQueryKeys.threads() })) {
-    const { status, q } = threadListFilterFromQueryKey(query.queryKey);
+    const { archived, q } = threadListFilterFromQueryKey(query.queryKey);
     qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
-      mergeThreadSummaryIntoListCache(rows, incoming, status, q)
+      mergeThreadSummaryIntoListCache(rows, incoming, archived, q)
     );
   }
 }
@@ -282,17 +273,17 @@ export function rollbackOptimisticThreadRestore(qc: QueryClient, snapshot?: Thre
   restoreQueryCacheSnapshot(qc, snapshot);
 }
 
-function threadListFilterFromQueryKey(queryKey: QueryKey): { status: string; q: string } {
-  const [, statusOrFilter = "all", qValue = ""] = queryKey as [unknown, unknown?, unknown?];
-  if (typeof statusOrFilter === "object" && statusOrFilter) {
-    const filter = statusOrFilter as { status?: unknown; q?: unknown };
+function threadListFilterFromQueryKey(queryKey: QueryKey): { archived: boolean; q: string } {
+  const [, archivedOrFilter = "active", qValue = ""] = queryKey as [unknown, unknown?, unknown?];
+  if (typeof archivedOrFilter === "object" && archivedOrFilter) {
+    const filter = archivedOrFilter as { archived?: unknown; q?: unknown };
     return {
-      status: typeof filter.status === "string" ? filter.status : "all",
+      archived: Boolean(filter.archived),
       q: typeof filter.q === "string" ? filter.q : ""
     };
   }
   return {
-    status: typeof statusOrFilter === "string" ? statusOrFilter : "all",
+    archived: archivedOrFilter === "archived" || archivedOrFilter === true,
     q: typeof qValue === "string" ? qValue : ""
   };
 }
@@ -447,17 +438,21 @@ export type {
 };
 
 export function useThreadsQuery(input: {
-  status: string;
+  archived?: boolean;
   q: string;
+  enabled?: boolean;
   select?: (threads: ThreadSummary[]) => ThreadSummary[];
 }) {
+  const archived = Boolean(input.archived);
+  const enabled = input.enabled ?? true;
   return useQuery({
-    queryKey: threadQueryKeys.threads(input.status, input.q),
+    queryKey: threadQueryKeys.threads(archived, input.q),
     queryFn: async () => {
-      const threads = await listThreads(input.status, input.q);
+      const threads = await listThreads(archived, input.q);
       return input.select ? input.select(threads) : threads;
     },
-    refetchInterval: 5000,
+    enabled,
+    refetchInterval: enabled ? 5000 : false,
     staleTime: 3000,
     placeholderData: preservePreviousQueryData
   });

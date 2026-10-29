@@ -12,6 +12,7 @@ export type SessionStorageSize = { bytes: number | null; scope: "file" | "direct
 export type GrokSessionSummary = {
   deletionEligibility?: { allowed: boolean; reason: string | null } | null;
   storageSize?: SessionStorageSize | null;
+  handoffPath?: string | null;
   id: string;
   title: string;
   cwd: string;

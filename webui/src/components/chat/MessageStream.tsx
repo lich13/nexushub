@@ -100,8 +100,15 @@ function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: Messag
   const kind = historyCollapseKind(block);
   const label = toolBlockSummary(block) ?? (kind === "tool" ? "历史工具活动已折叠" : kind === "action" ? "历史计划和问题已折叠" : "较早消息已折叠");
   const eyebrow = kind === "tool" ? "Tool activity" : kind === "action" ? "Plan & questions" : "Earlier messages";
+  const collapsedIds = Array.isArray((block.payload as { collapsedIds?: unknown } | undefined)?.collapsedIds)
+    ? ((block.payload as { collapsedIds: string[] }).collapsedIds)
+    : [];
   return (
-    <article className="history-collapse-cell" data-timeline-id={block.id}>
+    <article
+      className="history-collapse-cell"
+      data-timeline-id={block.id}
+      data-timeline-aliases={collapsedIds.length ? collapsedIds.join(" ") : undefined}
+    >
       <div>
         <span>{eyebrow}</span>
         <strong>{label}</strong>

@@ -1,9 +1,9 @@
 import {
   Archive,
   ArchiveRestore,
-  Brain,
   Check,
   ChevronLeft,
+  ChevronRight,
   Copy,
   Layers,
   Pencil,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { groupProviderEvents, type ExecutionRenderItem } from "../../lib/domain/executionGroups";
+import { foldProcessSequence, thinkingStepFromText } from "../../lib/domain/processGroups";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { machineScope } from "../../lib/query/connection";
@@ -25,7 +26,7 @@ import {
   useProviderSessions,
   type ArchivableProviderId,
 } from "../../lib/query/providerSessions";
-import { useSessionSelection } from "../../lib/query/sessions";
+import { useSessionSelection, type SessionSelection } from "../../lib/query/sessions";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { providerTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
@@ -45,9 +46,13 @@ import { MarkdownPathScope, ToolOutput } from "../common/FilePathLink";
 import { HistoryLoading } from "../common/HistoryLoading";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { PlanActions } from "../common/PlanActions";
+import { ProcessGroupView } from "../common/ProcessGroupView";
 import { RenameableSession } from "../common/RenameableSession";
 import { RunningIndicator } from "../common/RunningIndicator";
-import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
+import {
+  SessionBatchControls,
+  buildBatchContextMenuActions,
+} from "../common/SessionBatchControls";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 import { SessionSize } from "../common/SessionSize";
 import { TaskMenu, ThreadMenuItems, type ThreadMenuAction } from "../common/TaskMenu";
@@ -89,7 +94,7 @@ export function ArchivableProviderWorkspace({
   const menuTrigger = useRef<HTMLElement>(null);
   const stream = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
-  const [archived, setArchived] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
@@ -99,20 +104,57 @@ export function ArchivableProviderWorkspace({
   const [feedback, setFeedback] = useState("");
   const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
 
-  const sessions = useProviderSessions(provider, { q: query, archived }, queryEnabled);
-  const filterKey = `${archived ? "archived" : "active"}:${query}`;
-  const batch = useSessionSelection(
+  const sessions = useProviderSessions(provider, { q: query, archived: false }, queryEnabled);
+  const archivedSessions = useProviderSessions(
     provider,
-    filterKey,
-    (sessions.data ?? []).map(item => item.sessionKey),
-    keys => {
+    { q: query, archived: true },
+    queryEnabled && archivedOpen,
+  );
+
+  const activeKeys = useMemo(
+    () => (sessions.data ?? []).map(item => item.sessionKey),
+    [sessions.data],
+  );
+  const archivedKeys = useMemo(
+    () => (archivedSessions.data ?? []).map(item => item.sessionKey),
+    [archivedSessions.data],
+  );
+
+  const allListed = useMemo(
+    () => [...(sessions.data ?? []), ...(archivedOpen ? (archivedSessions.data ?? []) : [])],
+    [archivedOpen, archivedSessions.data, sessions.data],
+  );
+  const listed =
+    allListed.find(item => item.sessionKey === selectedKey) ?? sessions.data?.[0];
+
+  const activeSelectedKey =
+    listed?.sessionKey && activeKeys.includes(listed.sessionKey) ? listed.sessionKey : null;
+  const archivedSelectedKey =
+    listed?.sessionKey && archivedKeys.includes(listed.sessionKey) ? listed.sessionKey : null;
+
+  const handleBatchSucceeded = useCallback(
+    (keys: string[]) => {
       if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
       setRenaming(false);
     },
+    [selectedKey],
   );
 
-  const listed =
-    sessions.data?.find(item => item.sessionKey === selectedKey) ?? sessions.data?.[0];
+  const batch = useSessionSelection(
+    provider,
+    `active:${query}`,
+    activeKeys,
+    handleBatchSucceeded,
+    activeSelectedKey,
+  );
+  const archivedBatch = useSessionSelection(
+    provider,
+    `archived:${query}`,
+    archivedKeys,
+    handleBatchSucceeded,
+    archivedSelectedKey,
+  );
+
   const detailTargetKey =
     pendingSearch && selectedKey ? selectedKey : listed?.sessionKey ?? null;
   const detailVisible = !narrow || Boolean(selectedKey);
@@ -226,11 +268,11 @@ export function ArchivableProviderWorkspace({
     if (
       pendingSearch &&
       detail.data?.summary.sessionKey === pendingSearch.sessionKey &&
-      detail.data.summary.archived !== archived
+      detail.data.summary.archived
     ) {
-      setArchived(detail.data.summary.archived);
+      setArchivedOpen(true);
     }
-  }, [archived, detail.data?.summary.archived, detail.data?.summary.sessionKey, pendingSearch]);
+  }, [detail.data?.summary.archived, detail.data?.summary.sessionKey, pendingSearch]);
 
   const history = useHistoryScroll({
     scopeKey: `${machineScope()}:${provider}:${selected?.sessionKey ?? ""}:${navigation.generation}`,
@@ -317,7 +359,7 @@ export function ArchivableProviderWorkspace({
       {
         onSuccess: () => {
           setFeedback(item.archived ? "已恢复线程" : "已归档线程");
-          if (selectedKey === item.sessionKey) {
+          if (!item.archived && selectedKey === item.sessionKey && !archivedOpen) {
             const list = sessions.data ?? [];
             const index = list.findIndex(entry => entry.sessionKey === item.sessionKey);
             const next =
@@ -330,14 +372,17 @@ export function ArchivableProviderWorkspace({
     );
   };
 
-  const rowMenuActions = (item: ProviderSessionSummary): ThreadMenuAction[] => [
+  const rowMenuActions = (
+    item: ProviderSessionSummary,
+    targetBatch: SessionSelection,
+  ): ThreadMenuAction[] => [
     {
       id: item.archived ? "restore" : "archive",
       label: item.archived ? "恢复" : "归档",
       icon: item.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />,
       disabled:
         !item.canArchive ||
-        batch.busy ||
+        targetBatch.busy ||
         actions.archive.isPending ||
         actions.restore.isPending,
       reason: !item.canArchive ? item.archiveBlockReason : null,
@@ -364,22 +409,89 @@ export function ArchivableProviderWorkspace({
       label: "永久删除",
       icon: <Trash2 size={15} />,
       danger: true,
-      disabled: !item.canDelete || batch.busy,
+      disabled: !item.canDelete || targetBatch.busy,
       reason: !item.canDelete ? item.deleteBlockReason : null,
       run: () => {
-        batch.prepareSingle(item.sessionKey, "delete");
+        targetBatch.prepareSingle(item.sessionKey, "delete");
       },
     },
   ];
 
-  const switchArchiveTab = (nextArchived: boolean) => {
-    if (nextArchived === archived) return;
-    setArchived(nextArchived);
-    setSelectedKey(null);
-    setRenaming(false);
-    setFeedback("");
-    setPendingSearch(null);
+  const activeBatchMenu = useMemo(
+    () => buildBatchContextMenuActions(batch, ["archive", "delete"]),
+    [batch],
+  );
+  const archivedBatchMenu = useMemo(
+    () => buildBatchContextMenuActions(archivedBatch, ["restore", "delete"]),
+    [archivedBatch],
+  );
+
+  const handleTimelineSelect = useCallback(
+    (id: string) => {
+      history.follow.current = false;
+      if (stream.current && locateTimelineTarget(id, stream.current, "auto")) {
+        history.capture();
+        return;
+      }
+      if (detail.data?.timeline) {
+        navigation.select(id);
+      }
+    },
+    [detail.data?.timeline, history, navigation],
+  );
+
+  const renderSessionRow = (
+    item: ProviderSessionSummary,
+    targetBatch: SessionSelection,
+    otherBatch: SessionSelection,
+    batchMenu: ThreadMenuAction[],
+  ) => {
+    const isSelected = item.sessionKey === selected?.sessionKey;
+    const multiSelected = targetBatch.selection.includes(item.sessionKey);
+    return (
+      <div key={item.sessionKey} className="selectable-session">
+        <RenameableSession
+          title={providerSessionLabel(item)}
+          className={`provider-session ${isSelected ? "selected" : ""}`}
+          disabled={targetBatch.busy}
+          selecting={targetBatch.selecting}
+          selected={isSelected}
+          multiSelected={multiSelected}
+          renameBlockReason={
+            !item.canRename ? item.renameBlockReason || "当前线程不可改名" : undefined
+          }
+          onSelect={event => {
+            if (otherBatch.selecting || otherBatch.selection.length) otherBatch.clear();
+            targetBatch.select(item.sessionKey, event, () => {
+              setSelectedKey(item.sessionKey);
+              setRenaming(false);
+              setFeedback("");
+            });
+          }}
+          onRename={next =>
+            actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })
+          }
+          batchMenuActions={batchMenu}
+          menuActions={rowMenuActions(item, targetBatch)}
+        >
+          <strong>{providerSessionLabel(item)}</strong>
+          {item.cwd && <span>{item.cwd}</span>}
+          <span>{item.id}</span>
+          <span className="session-status-row">
+            {item.status === "running" ? (
+              <RunningIndicator />
+            ) : (
+              <small>{providerStatusLabel(item)}</small>
+            )}
+            <SessionSize size={item.storageSize} />
+          </span>
+        </RenameableSession>
+      </div>
+    );
   };
+
+  const anyBatchBusy = batch.busy || archivedBatch.busy;
+  const activeDetailBatch = selected?.archived ? archivedBatch : batch;
 
   return (
     <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
@@ -391,15 +503,16 @@ export function ArchivableProviderWorkspace({
             disabled={!queryEnabled}
             onClick={() => {
               void sessions.refetch();
+              if (archivedOpen) void archivedSessions.refetch();
               if (selected && detailVisible) void detail.refetch();
             }}
             title="刷新任务"
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={15} />
           </button>
         </header>
         <label className="search-box">
-          <Search size={16} />
+          <Search size={15} />
           <input
             value={query}
             disabled={supported === false}
@@ -407,106 +520,88 @@ export function ArchivableProviderWorkspace({
             placeholder="搜索标题、ID 或工作目录"
           />
         </label>
-        <div className="segmented provider-filter-tabs" role="tablist" aria-label={`${label} 线程筛选`}>
-          <button
-            role="tab"
-            type="button"
-            className={!archived ? "active" : ""}
-            aria-selected={!archived}
-            disabled={supported === false}
-            onClick={() => switchArchiveTab(false)}
-          >
-            全部
-          </button>
-          <button
-            role="tab"
-            type="button"
-            className={archived ? "active" : ""}
-            aria-selected={archived}
-            disabled={supported === false}
-            onClick={() => switchArchiveTab(true)}
-          >
-            已归档
-          </button>
-        </div>
-        <div className="provider-list-scroll">
+        <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
           {supported === false ? (
             <div className="muted-row" role="status">
               当前连接的远程服务版本较旧，尚未支持 {label} 会话列表。请先在「设置 → 更新与维护」升级远程服务。
             </div>
           ) : (
             <>
-              <SessionBatchControls
-                batch={batch}
-                operations={archived ? ["restore", "delete"] : ["archive", "delete"]}
-              />
               {sessions.error && (
                 <div className="form-error" role="alert">
                   {sessions.error.message}
                 </div>
               )}
-              {sessions.data?.map(item => (
-                <div key={item.sessionKey} className="selectable-session">
-                  {batch.selecting && (
-                    <SessionCheckbox
-                      batch={batch}
-                      sessionKey={item.sessionKey}
-                      title={providerSessionLabel(item)}
-                    />
-                  )}
-                  <RenameableSession
-                    title={providerSessionLabel(item)}
-                    className={`provider-session ${
-                      item.sessionKey === selected?.sessionKey ? "selected" : ""
-                    }`}
-                    disabled={batch.busy}
-                    selecting={batch.selecting}
-                    selected={item.sessionKey === selected?.sessionKey}
-                    renameBlockReason={
-                      !item.canRename ? item.renameBlockReason || "当前线程不可改名" : undefined
-                    }
-                    onSelect={event =>
-                      batch.select(item.sessionKey, event, () => {
-                        setSelectedKey(item.sessionKey);
-                        setRenaming(false);
-                        setFeedback("");
-                      })
-                    }
-                    onRename={next =>
-                      actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })
-                    }
-                    menuActions={rowMenuActions(item)}
-                  >
-                    <strong>{providerSessionLabel(item)}</strong>
-                    {item.cwd && <span>{item.cwd}</span>}
-                    <span>{item.id}</span>
-                    <span className="session-status-row">
-                      {item.status === "running" ? (
-                        <RunningIndicator />
-                      ) : (
-                        <small>{providerStatusLabel(item)}</small>
-                      )}
-                      <SessionSize size={item.storageSize} />
-                    </span>
-                  </RenameableSession>
-                </div>
-              ))}
+              {sessions.data?.map(item =>
+                renderSessionRow(item, batch, archivedBatch, activeBatchMenu),
+              )}
               {(supported === undefined || sessions.isLoading) && (
                 <div className="muted-row">正在读取任务...</div>
               )}
               {queryEnabled && !sessions.isLoading && !sessions.data?.length && (
-                <div className="muted-row">
-                  {archived ? `暂无已归档的 ${label} 会话` : `未发现 ${label} 会话`}
+                <div className="muted-row">{`未发现 ${label} 会话`}</div>
+              )}
+              {queryEnabled && (
+                <div className={`archived-drawer ${archivedOpen ? "is-open" : ""}`}>
+                  <button
+                    type="button"
+                    className="archived-toggle"
+                    aria-expanded={archivedOpen}
+                    onClick={() => setArchivedOpen(open => !open)}
+                  >
+                    <ChevronRight size={14} className="archived-chevron" aria-hidden="true" />
+                    <span>已归档</span>
+                    {archivedOpen && !archivedSessions.isLoading && (
+                      <small aria-hidden="true">{archivedSessions.data?.length ?? 0}</small>
+                    )}
+                  </button>
+                  {archivedOpen && (
+                    <div
+                      className="archived-list"
+                      onKeyDown={event => {
+                        event.stopPropagation();
+                        archivedBatch.onListKeyDown(event);
+                      }}
+                    >
+                      {archivedSessions.error && (
+                        <div className="form-error" role="alert">
+                          {archivedSessions.error.message}
+                        </div>
+                      )}
+                      {archivedSessions.isLoading && (
+                        <div className="muted-row">正在读取已归档会话...</div>
+                      )}
+                      {archivedSessions.data?.map(item =>
+                        renderSessionRow(item, archivedBatch, batch, archivedBatchMenu),
+                      )}
+                      {!archivedSessions.isLoading &&
+                        !archivedSessions.error &&
+                        !archivedSessions.data?.length && (
+                          <div className="muted-row">{`暂无已归档的 ${label} 会话`}</div>
+                        )}
+                    </div>
+                  )}
                 </div>
               )}
             </>
           )}
         </div>
+        {supported === true && (
+          <>
+            <SessionBatchControls batch={batch} operations={["archive", "delete"]} />
+            {archivedOpen && (
+              <SessionBatchControls
+                batch={archivedBatch}
+                operations={["restore", "delete"]}
+              />
+            )}
+          </>
+        )}
       </aside>
       <main className="provider-detail">
         {!selected && (
           <div className="empty-state">
-            <EmptyIcon size={28} />
+            <EmptyIcon size={26} />
             <strong>
               {supported === false
                 ? `升级远程服务后即可浏览 ${label} 会话`
@@ -534,7 +629,7 @@ export function ArchivableProviderWorkspace({
               ) : null}
               <TaskMenu label={`${label} 任务操作`} triggerRef={menuTrigger}>
                 <button
-                  disabled={!selected.canRename || batch.busy}
+                  disabled={!selected.canRename || anyBatchBusy}
                   title={!selected.canRename ? selected.renameBlockReason ?? undefined : undefined}
                   onClick={() => {
                     setTitle(selected.title);
@@ -548,7 +643,7 @@ export function ArchivableProviderWorkspace({
                 <button
                   disabled={
                     !selected.canArchive ||
-                    batch.busy ||
+                    anyBatchBusy ||
                     actions.archive.isPending ||
                     actions.restore.isPending
                   }
@@ -602,10 +697,14 @@ export function ArchivableProviderWorkspace({
                       label: "永久删除",
                       icon: <Trash2 size={15} />,
                       danger: true,
-                      disabled: !selected.canDelete || batch.busy,
+                      disabled: !selected.canDelete || anyBatchBusy,
                       reason: !selected.canDelete ? selected.deleteBlockReason : null,
                       run: () => {
-                        batch.prepareSingle(selected.sessionKey, "delete", menuTrigger.current);
+                        activeDetailBatch.prepareSingle(
+                          selected.sessionKey,
+                          "delete",
+                          menuTrigger.current,
+                        );
                       },
                     },
                   ]}
@@ -678,7 +777,7 @@ export function ArchivableProviderWorkspace({
               <TimelineRail
                 entries={timelineEntries}
                 streamRef={stream}
-                onSelect={detail.data?.timeline ? navigation.select : undefined}
+                onSelect={handleTimelineSelect}
                 loadOlder={
                   !detail.data?.timeline && detail.hasNextPage
                     ? () => {
@@ -716,7 +815,12 @@ export function ArchivableProviderWorkspace({
                             : null
                         }
                       >
-                        {renderProviderEvents(groupedEvents, selected.title, label)}
+                        {renderProviderEvents(
+                          groupedEvents,
+                          selected.title,
+                          label,
+                          selected.status === "running",
+                        )}
                       </DisclosureRevealContext.Provider>
                     </DisclosureScope.Provider>
                   </MarkdownPathScope.Provider>
@@ -741,18 +845,59 @@ export function renderProviderEvents(
   entries: ExecutionRenderItem<ProviderHistoryEvent>[],
   title: string,
   providerLabel: string,
+  sessionRunning = false,
 ): ReactNode {
-  return entries.map(entry =>
-    entry.kind === "group" ? (
+  const prefix = providerLabel === "Antigravity" ? "antigravity" : "dsh";
+  const lastIndex = entries.length - 1;
+  const folded = foldProcessSequence(prefix, entries, entry => {
+    if (entry.kind === "group") {
+      return { kind: "execution", group: entry.group, turnId: entry.group.turnId };
+    }
+    const event = entry.item;
+    if (event.kind === "thinking") {
+      const isTrailing = entries.indexOf(entry) === lastIndex;
+      return thinkingStepFromText(
+        entry.key,
+        entry.sourceIds,
+        event.text,
+        sessionRunning && isTrailing,
+        event.turnId,
+      );
+    }
+    if (
+      event.detail &&
+      event.kind !== "user_message" &&
+      event.kind !== "plan" &&
+      !event.kind.startsWith("assistant_message")
+    ) {
+      return {
+        kind: "detail",
+        id: entry.key,
+        sourceIds: entry.sourceIds,
+        title: event.text ?? "活动记录",
+        detail: event.detail,
+        failed: event.kind === "failure" || /^(failed|error)$/i.test(event.status ?? ""),
+        turnId: event.turnId,
+      };
+    }
+    return null;
+  });
+
+  return folded.map(entry =>
+    entry.kind === "process" ? (
+      <ProcessGroupView key={entry.process.id} group={entry.process} />
+    ) : entry.kind === "execution" ? (
       <ExecutionGroupView key={entry.group.id} group={entry.group} />
+    ) : entry.item.kind === "group" ? (
+      <ExecutionGroupView key={entry.item.group.id} group={entry.item.group} />
     ) : (
       <ProviderEventView
-        key={entry.key}
-        activityId={entry.key}
-        event={entry.item}
+        key={entry.item.key}
+        activityId={entry.item.key}
+        event={entry.item.item}
         title={title}
         providerLabel={providerLabel}
-        timelineAliases={entry.sourceIds}
+        timelineAliases={entry.item.sourceIds}
       />
     ),
   );
@@ -776,13 +921,17 @@ function ProviderEventView({
     "data-timeline-aliases": timelineAliases.length ? timelineAliases.join(" ") : undefined,
   };
   if (event.kind === "user_message") {
+    const aliases = [
+      ...timelineAliases,
+      ...(event.userMessage?.id ? [event.userMessage.id] : []),
+    ];
     return (
       <UserMessage
         message={event.userMessage}
         text={event.text ?? ""}
         activityId={activityId}
         timelineId={activityId}
-        timelineAliases={timelineAliases}
+        timelineAliases={aliases}
       />
     );
   }
@@ -799,34 +948,6 @@ function ProviderEventView({
           foldInstructions={false}
         />
       </article>
-    );
-  }
-  if (event.kind === "thinking") {
-    if (!visibleMarkdown(event.text ?? "").trim()) return null;
-    return (
-      <ActivityDetails
-        timelineId={activityId}
-        timelineAliases={timelineAliases}
-        className="execution-group provider-thinking"
-        stateKey={activityId}
-        initiallyOpen={false}
-        summary={
-          <>
-            <Brain size={16} aria-hidden="true" />
-            <span className="activity-label">已思考</span>
-          </>
-        }
-      >
-        {() => (
-          <div className="thinking-body">
-            <MarkdownContent
-              text={event.text ?? ""}
-              activityId={`${activityId}:thinking`}
-              foldInstructions={false}
-            />
-          </div>
-        )}
-      </ActivityDetails>
     );
   }
   if (event.detail) {

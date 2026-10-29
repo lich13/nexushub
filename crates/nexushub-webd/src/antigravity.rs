@@ -276,13 +276,11 @@ async fn fetch_complete_trajectory(
         json!({"cascadeId": id, "disableRehydration": true}),
     )
     .await?;
-    let total = response["numTotalSteps"]
-        .as_u64()
-        .unwrap_or_else(|| {
-            response["trajectory"]["steps"]
-                .as_array()
-                .map_or(0, Vec::len) as u64
-        }) as usize;
+    let total = response["numTotalSteps"].as_u64().unwrap_or_else(|| {
+        response["trajectory"]["steps"]
+            .as_array()
+            .map_or(0, Vec::len) as u64
+    }) as usize;
     let mut current_len = response["trajectory"]["steps"]
         .as_array()
         .map_or(0, Vec::len);

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 
-test("batch archive confirms explicit keys, retains failed selections, and requires another preview", async ({ page }) => {
+test("Finder Command-click batch archive confirms explicit keys, retains failed selections, and requires another preview", async ({ page }) => {
   await mockApi(page);
   let previews = 0;
   const executed: any[] = [];
@@ -16,11 +16,16 @@ test("batch archive confirms explicit keys, retains failed selections, and requi
     return { items: request.items.map((item: any, index: number) => ({ sessionKey: item.sessionKey, status: index === 0 ? "succeeded" : "blocked", message: index === 0 ? null : "Fixture changed; preview again" })) };
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "多选线程", exact: true }).click();
-  const boxes = page.locator(".session-checkbox");
-  await boxes.nth(0).check();
-  await boxes.nth(1).check();
+  await expect(page.getByRole("button", { name: "多选线程", exact: true })).toHaveCount(0);
+  await expect(page.locator(".session-checkbox")).toHaveCount(0);
+
+  const rows = page.locator(".thread-item");
+  await rows.nth(0).click({ modifiers: ["Meta"] });
+  await rows.nth(1).click({ modifiers: ["Meta"] });
+  await expect(rows.nth(0)).toHaveClass(/\bmulti-selected\b/);
+  await expect(rows.nth(1)).toHaveClass(/\bmulti-selected\b/);
   await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
+
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -40,7 +45,7 @@ test("batch archive confirms explicit keys, retains failed selections, and requi
   expect(previews).toBe(3);
 });
 
-test("filter changes invalidate an in-flight batch preview and never select newly loaded rows", async ({ page }) => {
+test("filter changes invalidate an in-flight batch preview and Shift-range + Escape follow Finder semantics", async ({ page }) => {
   await mockApi(page);
   let release!: () => void;
   let started = false;
@@ -52,17 +57,22 @@ test("filter changes invalidate an in-flight batch preview and never select newl
     return { ...request, items: request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Old preview", paths: [], bytes: 0, allowed: true, fingerprint: key })) };
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "多选线程", exact: true }).click();
-  await page.locator(".session-checkbox").first().check();
+  const rows = page.locator(".thread-item");
+  await rows.first().click({ modifiers: ["Meta"] });
   await page.getByRole("button", { name: "归档所选线程", exact: true }).click();
   await expect.poll(() => started).toBe(true);
   await page.locator(".search-box input").first().fill("no matching fixture");
   release();
-  await expect(page.getByRole("button", { name: "多选线程", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
+
   await page.locator(".search-box input").first().fill("");
-  await page.getByRole("button", { name: "多选线程", exact: true }).click();
-  await expect(page.getByText("已选 0", { exact: true })).toBeVisible();
+  await rows.nth(0).click({ modifiers: ["Meta"] });
+  await rows.nth(2).click({ modifiers: ["Shift"] });
+  await expect(page.getByText("已选 3", { exact: true })).toBeVisible();
+  await rows.nth(2).focus();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".finder-selection-bar")).toHaveCount(0);
 });
 
 for (const provider of ["grok"] as const) {
@@ -70,8 +80,8 @@ for (const provider of ["grok"] as const) {
     await mockApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
     const keys = ["grok-one", "grok-two"];
-    await mockCommand(page, `${provider}.list`, args => keys.map((key, index) => ({ id: key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
-    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "无法定位线程目录", fingerprint: index === 0 ? "fixture" : null })) }));
+    await mockCommand(page, `${provider}.list`, () => keys.map((key, index) => ({ id: key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, handoffPath: `/isolated/sessions/${key}/chat_history.jsonl`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
+    await mockCommand(page, "sessions.bulkPreview", () => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "无法定位线程目录", fingerprint: index === 0 ? "fixture" : null })) }));
     let executed: any;
     await mockCommand(page, "sessions.bulkExecute", args => {
       executed = args.request;
@@ -79,8 +89,8 @@ for (const provider of ["grok"] as const) {
     });
     await page.goto("/");
     await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
-    await page.getByRole("button", { name: "多选线程", exact: true }).click();
-    await page.getByRole("button", { name: "全选当前结果", exact: true }).click();
+    await page.locator(".provider-session").first().click({ modifiers: ["Meta"] });
+    await page.locator(".finder-selection-bar").getByRole("button", { name: "全选", exact: true }).click();
     await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "删除所选线程", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText("无法定位线程目录");
@@ -90,3 +100,68 @@ for (const provider of ["grok"] as const) {
     expect(executed.items).toEqual([{ sessionKey: keys[0] }]);
   });
 }
+
+test("Antigravity 20-step alternating thinking and command wall collapses into one ChatGPT-App process disclosure and TimelineRail navigates turns", async ({ page }) => {
+  await mockApi(page);
+  const events: any[] = [
+    { id: "ag-u1", kind: "user_message", text: "First prompt: inspect repository structure", turnId: "t1" },
+    { id: "ag-a1", kind: "assistant_message", text: "## Step 1\n\nRepository structure verified.\n\n" + "Detail paragraph.\n\n".repeat(16), turnId: "t1" },
+    { id: "ag-u2", kind: "user_message", text: "Second prompt: run multi-step verification", turnId: "t2" },
+  ];
+  for (let i = 0; i < 10; i++) {
+    events.push({ id: `ag-think-${i}`, kind: "thinking", text: `Intermediate reasoning ${i}`, turnId: "t2" });
+    events.push({ id: `ag-call-${i}`, kind: "tool_call", callId: `c-${i}`, role: "run_command", detail: `printf check-${i}`, status: "completed", turnId: "t2" });
+    events.push({ id: `ag-out-${i}`, kind: "tool_result", callId: `c-${i}`, role: "run_command", result: `ok-${i}`, status: "completed", turnId: "t2" });
+  }
+  events.push({ id: "ag-a2", kind: "assistant_message", text: "## Final\n\nAll 10 verification rounds succeeded.", turnId: "t2" });
+
+  await mockCommand(page, "antigravity.detail", () => ({
+    summary: {
+      id: "ag-fixture",
+      sessionKey: "ag:ag-fixture",
+      title: "Antigravity fixture",
+      cwd: "/isolated/antigravity-workspace",
+      path: "/isolated/antigravity/brain/ag-fixture/.system_generated/logs/transcript_full.jsonl",
+      archived: false,
+      updatedAt: "2026-10-01T00:00:00Z",
+      messageCount: 4,
+      lastMessage: "All 10 verification rounds succeeded.",
+      status: "recent",
+      formatVersion: "transcript-v1",
+      storageSize: { status: "ready", bytes: 4096 },
+      canRename: true,
+      canArchive: true,
+      canDelete: true,
+    },
+    events,
+    totalEvents: events.length,
+    hasMore: false,
+    timeline: [
+      { id: "ag-u1", title: "First prompt: inspect repository structure" },
+      { id: "ag-u2", title: "Second prompt: run multi-step verification" },
+    ],
+  }));
+
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Antigravity", exact: true }).click();
+  await page.locator(".provider-session").first().click();
+
+  const stream = page.locator(".provider-events");
+  const processGroups = stream.locator("details.process-group");
+  await expect(processGroups).toHaveCount(1);
+  await expect(processGroups.first()).not.toHaveAttribute("open", "");
+  await expect(processGroups.first().locator(":scope > summary")).toContainText("已思考");
+  await expect(processGroups.first().locator(":scope > summary")).toContainText("10 项操作");
+
+  await processGroups.first().locator(":scope > summary").click();
+  await expect(processGroups.first()).toHaveAttribute("open", "");
+  await expect(processGroups.first().locator(".process-thought-step")).toHaveCount(10);
+  await expect(processGroups.first().locator(".execution-command")).toHaveCount(10);
+
+  const railItems = page.locator(".timeline-rail-item");
+  await expect(railItems).toHaveCount(2);
+  await railItems.first().click();
+  await expect(railItems.first()).toHaveClass(/\bactive\b/);
+  await assertNoOverflow(page);
+});

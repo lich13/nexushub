@@ -416,19 +416,18 @@ impl SessionUseCases {
                 }
                 match request.provider {
                     SessionProvider::Codex => {
-                        let verified: std::collections::BTreeSet<String> = if request
-                            .include_descendants
-                        {
-                            selected_codex::tree::descendants(
-                                &self.codex,
-                                std::slice::from_ref(&item.session_key),
-                            )?
-                            .into_iter()
-                            .filter(|id| id != &item.session_key)
-                            .collect()
-                        } else {
-                            std::collections::BTreeSet::new()
-                        };
+                        let verified: std::collections::BTreeSet<String> =
+                            if request.include_descendants {
+                                selected_codex::tree::descendants(
+                                    &self.codex,
+                                    std::slice::from_ref(&item.session_key),
+                                )?
+                                .into_iter()
+                                .filter(|id| id != &item.session_key)
+                                .collect()
+                            } else {
+                                std::collections::BTreeSet::new()
+                            };
                         for child in &item.descendants {
                             ensure!(
                                 request.include_descendants && verified.contains(child),

@@ -375,11 +375,16 @@ function compactIndexedBlocks(
   for (const [index, block] of blocks.entries()) {
     if (hide.has(index) && !keep.has(index)) {
       if (!segment) {
-        segment = { ...collapsed, id: inserted ? `${id}:${block.id}` : id };
+        segment = {
+          ...collapsed,
+          id: inserted ? `${id}:${block.id}` : id,
+          payload: { collapsedIds: [] as string[] }
+        };
         compacted.push(segment);
         inserted = true;
         segmentCount = 0;
       }
+      (segment.payload as { collapsedIds: string[] }).collapsedIds.push(block.id);
       segmentCount += 1;
       segment.text = segment.summary = `${segmentCount} ${label}`;
       continue;

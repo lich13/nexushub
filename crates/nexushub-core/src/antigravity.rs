@@ -182,7 +182,9 @@ fn collect_spawned_subagent_ids(value: &Value, out: &mut BTreeSet<String>) {
                 collect_spawned_subagent_ids(child, out);
             }
         }
-        Value::String(raw) if raw.trim_start().starts_with('{') || raw.trim_start().starts_with('[') => {
+        Value::String(raw)
+            if raw.trim_start().starts_with('{') || raw.trim_start().starts_with('[') =>
+        {
             if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
                 collect_spawned_subagent_ids(&parsed, out);
             }
@@ -203,11 +205,7 @@ fn cascade_status_is_active(status: Option<&str>) -> bool {
     )
 }
 
-fn has_unsettled_background_work(
-    id: &str,
-    summary_trajectory_id: &str,
-    steps: &[Value],
-) -> bool {
+fn has_unsettled_background_work(id: &str, summary_trajectory_id: &str, steps: &[Value]) -> bool {
     let turn_start = steps
         .iter()
         .enumerate()
@@ -217,9 +215,7 @@ fn has_unsettled_background_work(
             let inherited = source["trajectoryId"]
                 .as_str()
                 .is_some_and(|orig| orig != summary_trajectory_id)
-                || source["cascadeId"]
-                    .as_str()
-                    .is_some_and(|orig| orig != id);
+                || source["cascadeId"].as_str().is_some_and(|orig| orig != id);
             !inherited && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
         })
         .map_or(0, |(idx, _)| idx + 1);
@@ -232,9 +228,7 @@ fn has_unsettled_background_work(
         if source["trajectoryId"]
             .as_str()
             .is_some_and(|orig| orig != summary_trajectory_id)
-            || source["cascadeId"]
-                .as_str()
-                .is_some_and(|orig| orig != id)
+            || source["cascadeId"].as_str().is_some_and(|orig| orig != id)
         {
             continue;
         }
@@ -251,10 +245,7 @@ fn has_unsettled_background_work(
         }
         let tool_name = step_tool_name(step);
         let args = step_tool_args(step);
-        if let Some(task_id) = step["taskDetails"]["id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(task_id) = step["taskDetails"]["id"].as_str().filter(|s| !s.is_empty()) {
             if !step_is_daemon_task(step, &args) {
                 pending_tasks.insert(task_id.to_owned());
             }
@@ -265,10 +256,7 @@ fn has_unsettled_background_work(
                 .or_else(|| args["action"].as_str())
                 .unwrap_or("");
             if action == "kill" {
-                if let Some(tid) = args["TaskId"]
-                    .as_str()
-                    .or_else(|| args["taskId"].as_str())
-                {
+                if let Some(tid) = args["TaskId"].as_str().or_else(|| args["taskId"].as_str()) {
                     pending_tasks.remove(tid);
                 }
             }

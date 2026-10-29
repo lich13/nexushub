@@ -93,7 +93,7 @@ test("Codex row menu stays reachable after renaming a selected thread to a long 
 
 test("Codex context menu stays inside the viewport when opened at the lower edge", async ({ page }) => {
   await mockApi(page);
-  const sourceRows = demoThreads("all", "").filter(thread => thread.status !== "Archived");
+  const sourceRows = demoThreads(false, "");
   const rows = Array.from({ length: 24 }, (_, index) => ({
     ...sourceRows[index % sourceRows.length],
     id: `codex-menu-${index}`,
@@ -130,6 +130,12 @@ test("Grok and Claude context menus expose their provider actions", async ({ pag
   await mockApi(page);
   await mockCommand(page, "claude.list", () => [claudeSummary]);
   await page.setViewportSize({ width: 1280, height: 820 });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => { (window as any).__copiedText = text; } }
+    });
+  });
   await page.goto("/");
 
   const menu = page.locator(".context-task-menu");
@@ -137,8 +143,10 @@ test("Grok and Claude context menus expose their provider actions", async ({ pag
   await page.locator(".provider-session").click({ button: "right" });
   await expect(menu.getByRole("menuitem", { name: "改名", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "复制线程 ID", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "复制路径", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "删除任务文件", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
+  await menu.getByRole("menuitem", { name: "复制路径", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copiedText)).toBe("/isolated/sessions/grok-fixture/chat_history.jsonl");
 
   await page.locator(".side-nav").getByRole("button", { name: "Claude Code", exact: true }).click();
   await page.locator(".provider-session").click({ button: "right" });
@@ -192,8 +200,9 @@ test("Antigravity and DeepSeek Harness menus expose 5 actions, omit 复制恢复
   await page.locator(".task-menu-items").getByRole("button", { name: "归档", exact: true }).click();
   await expect.poll(() => calls.filter(name => name === "antigravity.archive").length).toBe(1);
 
-  await page.getByRole("tab", { name: "已归档", exact: true }).click();
-  const archivedAgRow = page.locator(".provider-session").first();
+  await expect(page.locator(".provider-filter-tabs")).toHaveCount(0);
+  await page.locator(".provider-list").getByRole("button", { name: "已归档", exact: true }).click();
+  const archivedAgRow = page.locator(".archived-list .provider-session").first();
   await expect(archivedAgRow).toContainText("Antigravity fixture");
   await archivedAgRow.click({ button: "right" });
   await expect(menu.getByRole("menuitem", { name: "恢复", exact: true })).toBeVisible();
@@ -312,12 +321,18 @@ for (const theme of ["light", "dark"] as const) {
       const widths = await cards.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().width));
       expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(1);
       await expect(page.getByLabel("运行中", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "多选线程", exact: true }).click();
-      await expect(page.locator(".session-checkbox")).toHaveCount(3);
+      await expect(page.getByRole("button", { name: "多选线程", exact: true })).toHaveCount(0);
+      await expect(page.locator(".session-checkbox")).toHaveCount(0);
+      await cards.nth(0).click({ modifiers: ["Meta"] });
+      await cards.nth(1).click({ modifiers: ["Meta"] });
+      await expect(page.getByText("已选 2", { exact: true })).toBeVisible();
       const batchWidths = await cards.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().width));
       expect(Math.max(...batchWidths) - Math.min(...batchWidths)).toBeLessThan(1);
-      await cards.first().click({ button: "right" });
+      await cards.nth(2).click({ button: "right" });
       await expect(page.locator(".context-task-menu")).toHaveCount(0);
+      await cards.nth(0).click({ button: "right" });
+      await expect(page.locator(".context-task-menu").getByRole("menuitem", { name: "删除所选 2 项…", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
       await assertNoOverflow(page);
     });
   }

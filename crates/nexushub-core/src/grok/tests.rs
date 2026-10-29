@@ -823,7 +823,10 @@ fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_tur
     let detail = grok_session_detail(&paths, &id, None).unwrap();
     assert_eq!(detail.events.len(), 4);
     assert_eq!(detail.events[0].kind, "user_message_chunk");
-    assert_eq!(detail.events[0].text.as_deref(), Some("Analyze repo structure"));
+    assert_eq!(
+        detail.events[0].text.as_deref(),
+        Some("Analyze repo structure")
+    );
     let timeline = detail.timeline.expect("timeline must be present on page 0");
     assert_eq!(timeline.len(), 2);
     assert_eq!(timeline[0].title, "Analyze repo structure");

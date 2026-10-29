@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.5.0": [
+        "恢复原生二进制公网 IP 隐私门禁，收紧 Antigravity 与 DSH 子会话删除归属校验、运行态拦截与残留报告，并统一五类 Agent 最优交接文件路径。",
+        "移除顶部状态筛选栏并改为底部轻量折叠「已归档」，切换访达风格 ⌘ 多选与连续中间过程单框折叠，修复五类 Agent 时间线定位及 Antigravity Bark 过早提醒。",
+    ],
     "1.4.0": [
         "新增 Antigravity 与 DeepSeek Harness 会话工作区，支持全部／已归档筛选、分页阅读、搜索、时间线、双击改名、归档／恢复与永久删除。",
         "整体前端界面深度重构为 ChatGPT macOS App 风格，统一七项导航、圆角气泡、代码块、工具披露、弹窗与设置卡片。",

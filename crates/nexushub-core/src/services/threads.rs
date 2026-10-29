@@ -504,8 +504,7 @@ mod tests {
         services::threads::{
             apply_thread_detail_runtime_state, build_threads_overview, filter_thread_summaries,
             merge_running_jobs, plan_thread_blocks_read, plan_thread_detail_read,
-            plan_thread_list_read, thread_list_fetch_limit, ThreadDetailResponseKind,
-            ThreadsQuery,
+            plan_thread_list_read, thread_list_fetch_limit, ThreadDetailResponseKind, ThreadsQuery,
         },
     };
 

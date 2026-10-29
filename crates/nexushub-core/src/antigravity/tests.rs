@@ -102,61 +102,89 @@ fn background_tasks_and_subagents_delay_completion_until_reactive_wakeup_finishe
         }
     });
     let mid = snapshot(ID, &summary, &response).unwrap();
-    assert!(mid.events.is_empty(), "must not notify while waiting on background task/subagent");
+    assert!(
+        mid.events.is_empty(),
+        "must not notify while waiting on background task/subagent"
+    );
     assert_eq!(mid.settled_count, 0);
 
     // Phase 2: Background task woke up via SYSTEM_MESSAGE, but subagent is still unsettled
-    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
-        "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
-        "status": "CORTEX_STEP_STATUS_DONE",
-        "systemMessage": { "agentMessage": { "sender": task_id } },
-        "metadata": { "executionId": "exec-2", "createdAt": "2026-01-01T00:00:10Z" }
-    }));
-    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
-        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
-        "status": "CORTEX_STEP_STATUS_DONE",
-        "metadata": {
+    response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "systemMessage": { "agentMessage": { "sender": task_id } },
+            "metadata": { "executionId": "exec-2", "createdAt": "2026-01-01T00:00:10Z" }
+        }));
+    response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {
+                "executionId": "exec-2",
+                "createdAt": "2026-01-01T00:00:11Z",
+                "completedAt": "2026-01-01T00:00:12Z"
+            },
+            "plannerResponse": { "response": "Command done, still waiting for subagent..." }
+        }));
+    response["trajectory"]["executorMetadatas"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
             "executionId": "exec-2",
-            "createdAt": "2026-01-01T00:00:11Z",
-            "completedAt": "2026-01-01T00:00:12Z"
-        },
-        "plannerResponse": { "response": "Command done, still waiting for subagent..." }
-    }));
-    response["trajectory"]["executorMetadatas"].as_array_mut().unwrap().push(json!({
-        "executionId": "exec-2",
-        "lastStepIdx": 5,
-        "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
-    }));
+            "lastStepIdx": 5,
+            "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+        }));
     response["numTotalSteps"] = json!(6);
     let mid2 = snapshot(ID, &summary, &response).unwrap();
-    assert!(mid2.events.is_empty(), "must not notify while subagent wakeup is still pending");
+    assert!(
+        mid2.events.is_empty(),
+        "must not notify while subagent wakeup is still pending"
+    );
     assert_eq!(mid2.settled_count, 4);
 
     // Phase 3: Subagent delivers SYSTEM_MESSAGE and final executor completes cleanly
-    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
-        "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
-        "status": "CORTEX_STEP_STATUS_DONE",
-        "systemMessage": { "agentMessage": { "sender": sub_id } },
-        "metadata": { "executionId": "exec-3", "createdAt": "2026-01-01T00:00:20Z" }
-    }));
-    response["trajectory"]["steps"].as_array_mut().unwrap().push(json!({
-        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
-        "status": "CORTEX_STEP_STATUS_DONE",
-        "metadata": {
+    response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "systemMessage": { "agentMessage": { "sender": sub_id } },
+            "metadata": { "executionId": "exec-3", "createdAt": "2026-01-01T00:00:20Z" }
+        }));
+    response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {
+                "executionId": "exec-3",
+                "createdAt": "2026-01-01T00:00:21Z",
+                "completedAt": "2026-01-01T00:00:22Z"
+            },
+            "plannerResponse": { "response": "All tasks and subagents finished!" }
+        }));
+    response["trajectory"]["executorMetadatas"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
             "executionId": "exec-3",
-            "createdAt": "2026-01-01T00:00:21Z",
-            "completedAt": "2026-01-01T00:00:22Z"
-        },
-        "plannerResponse": { "response": "All tasks and subagents finished!" }
-    }));
-    response["trajectory"]["executorMetadatas"].as_array_mut().unwrap().push(json!({
-        "executionId": "exec-3",
-        "lastStepIdx": 7,
-        "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
-    }));
+            "lastStepIdx": 7,
+            "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+        }));
     response["numTotalSteps"] = json!(8);
     let done = snapshot(ID, &summary, &response).unwrap();
-    assert_eq!(done.events.len(), 1, "must emit exactly one final completion event");
+    assert_eq!(
+        done.events.len(),
+        1,
+        "must emit exactly one final completion event"
+    );
     assert_eq!(done.events[0].turn_id, "exec-3");
     assert_eq!(done.events[0].position, 8);
     assert_eq!(done.events[0].body, "All tasks and subagents finished!");

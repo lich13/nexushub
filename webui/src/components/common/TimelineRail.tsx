@@ -40,8 +40,16 @@ export function TimelineRail({ entries, streamRef, onSelect, loadOlder, loading 
           const seen = new Set<string>();
           anchors = Array.from(root.querySelectorAll<HTMLElement>("[data-timeline-id], [data-timeline-aliases]"))
             .flatMap(element => {
-              const id = [element.dataset.timelineId, ...(element.dataset.timelineAliases?.split(/\s+/) ?? [])]
-                .find(id => id && entryIds.has(id));
+              const candidates = [element.dataset.timelineId, ...(element.dataset.timelineAliases?.split(/\s+/) ?? [])];
+              const id = candidates
+                .map(raw => {
+                  if (!raw) return undefined;
+                  if (entryIds.has(raw)) return raw;
+                  const colon = raw.indexOf(":");
+                  const stripped = colon >= 0 ? raw.slice(colon + 1) : "";
+                  return stripped && entryIds.has(stripped) ? stripped : undefined;
+                })
+                .find((value): value is string => Boolean(value));
               if (!id || seen.has(id)) return [];
               seen.add(id);
               return [{ id, top: element.getBoundingClientRect().top - origin }];

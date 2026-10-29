@@ -5,16 +5,30 @@ import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, Trash2, X } 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { ProcessGroupView } from "../common/ProcessGroupView";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls } from "../common/SessionBatchControls";
 import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
-import { latestAssistantCopyText, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
+import {
+  isHistoryCollapsedBlock,
+  isPlanBlock,
+  isQuestionBlock,
+  isQuestionResultBlock,
+  isRunningToolBlock,
+  isToolBlock,
+  latestAssistantCopyText,
+  threadResumeCommand,
+  toolBlockDetailText,
+  toolBlockTitle,
+  visibleConversationBlocksForHistory,
+} from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { SessionSearchResult, SubagentActivity, ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
+import { foldProcessSequence } from "../../lib/domain/processGroups";
 import { TimelineRail } from "../common/TimelineRail";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
@@ -27,8 +41,6 @@ import { machineScope, useConnection } from "../../lib/query/connection";
 import { codexTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { DesktopComposer } from "./DesktopComposer";
-
-
 
 export function Conversation(props: {
   threadId: string;
@@ -95,11 +107,41 @@ export function Conversation(props: {
   });
   const blocks = navigation.items ?? (slot.blocks.length ? slot.blocks : detail.blocks);
   const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId), [blocks, historyExpanded, revealedBlockId]);
-  const visibleItems = useMemo(() => groupCodexCommandBlocks(visibleBlocks), [visibleBlocks]);
+  const visibleItems = useMemo(() => {
+    const commandGrouped = groupCodexCommandBlocks(visibleBlocks);
+    return foldProcessSequence("codex", commandGrouped, entry => {
+      if (entry.kind === "group") return { kind: "execution", group: entry.group, turnId: entry.group.turnId };
+      const block = entry.item;
+      if (
+        block.subagent ||
+        isHistoryCollapsedBlock(block) ||
+        isPlanBlock(block) ||
+        isQuestionBlock(block) ||
+        isQuestionResultBlock(block)
+      ) {
+        return null;
+      }
+      if (isToolBlock(block)) {
+        const failed = /^(failed|error)$/i.test(block.status ?? "");
+        return {
+          kind: "detail",
+          id: block.id,
+          sourceIds: [block.id, ...(block.call_id ? [block.call_id] : [])],
+          title: toolBlockTitle(block),
+          detail: toolBlockDetailText(block),
+          running: isRunningToolBlock(block),
+          failed,
+          turnId: block.turn_id,
+        };
+      }
+      return null;
+    });
+  }, [visibleBlocks]);
   const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
     && props.capabilities.threadSubagents !== true
     && visibleBlocks.some(block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent");
-  const timelineEntries = useMemo(() => detail.timeline ?? userTimelineEntries("codex", blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message }))), [detail.timeline, blocks]);
+  const resolvedTimeline = slot.timeline ?? detail.timeline;
+  const timelineEntries = useMemo(() => resolvedTimeline ?? userTimelineEntries("codex", blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message }))), [resolvedTimeline, blocks]);
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
     if (keys.includes(props.threadId)) props.onSelect(null);
   });
@@ -116,6 +158,28 @@ export function Conversation(props: {
       return { cursor: page.before_cursor, hasMore: page.has_more_blocks };
     }
   });
+  const handleTimelineSelect = useCallback((id: string) => {
+    history.follow.current = false;
+    if (blocks.some(block => block.id === id)) {
+      setHistoryExpanded(true);
+      setRevealedHistory({ scope: historyScope, positionKey: id });
+      requestAnimationFrame(() => {
+        if (stream.current) locateTimelineTarget(id, stream.current, "auto");
+        history.capture();
+      });
+      return;
+    }
+    if (resolvedTimeline) {
+      navigation.select(id);
+      return;
+    }
+    setHistoryExpanded(true);
+    setRevealedHistory({ scope: historyScope, positionKey: id });
+    requestAnimationFrame(() => {
+      if (stream.current) locateTimelineTarget(id, stream.current, "auto");
+      history.capture();
+    });
+  }, [blocks, history, historyScope, navigation, resolvedTimeline]);
   const showHistory = useCallback(() => {
     history.follow.current = false;
     history.capture();
@@ -143,7 +207,7 @@ export function Conversation(props: {
     });
     observer.observe(shell.current);
     return () => observer.disconnect();
-  }, []);
+  }, [captureViewport]);
   useEffect(() => {
     if (searchPosition) {
       setRevealedHistory({ scope: historyScope, positionKey: searchPosition });
@@ -179,17 +243,17 @@ export function Conversation(props: {
     <main className="conversation-main">
       <header className="conversation-header" data-timeline-id="session">
         <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
-          <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1></div>
-          <div className="conversation-header-actions">
+        <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1></div>
+        <div className="conversation-header-actions">
           <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
           <TaskMenu triggerRef={deletion.returnFocus}>
-              <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
-              <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
-              <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
-              <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
-              <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
-              <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
-              <button className="danger-menu-item" disabled={actions.isPending || deletion.busy} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
+            <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
+            <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
+            <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
+            <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
+            <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
+            <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
+            <button className="danger-menu-item" disabled={actions.isPending || deletion.busy} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
           </TaskMenu>
         </div>
       </header>
@@ -205,13 +269,48 @@ export function Conversation(props: {
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.timeline ? navigation.select : id => { setHistoryExpanded(true); setRevealedHistory({ scope: historyScope, positionKey: id }); history.follow.current = false; requestAnimationFrame(() => { if (stream.current) locateTimelineTarget(id, stream.current); history.capture(); }); }} loadOlder={!detail.timeline && slot.hasMoreBlocks ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
-        {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
-        <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
-        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}><DisclosureRevealContext.Provider value={searchPosition}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={showHistory} />)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
-        <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
-        {!blocks.length && <div className="muted-row">暂无消息</div>}
-      </div></div>
+      <div className="timeline-reading-shell">
+        <TimelineRail
+          entries={timelineEntries}
+          streamRef={stream}
+          onSelect={handleTimelineSelect}
+          loadOlder={!resolvedTimeline && slot.hasMoreBlocks ? () => { void history.loadOlder("search"); } : undefined}
+          loading={history.loading}
+        />
+        <div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+          {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
+          <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
+          <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}>
+            <MarkdownPathScope.Provider value={summary.cwd}>
+              <DisclosureScope.Provider value={`codex:${props.threadId}`}>
+                <DisclosureRevealContext.Provider value={searchPosition}>
+                  {visibleItems.map((entry) =>
+                    entry.kind === "process" ? (
+                      <ProcessGroupView key={entry.process.id} group={entry.process} />
+                    ) : entry.kind === "execution" ? (
+                      <ExecutionGroupView key={entry.group.id} group={entry.group} />
+                    ) : entry.item.kind === "group" ? (
+                      <ExecutionGroupView key={entry.item.group.id} group={entry.item.group} />
+                    ) : (
+                      <MessageBlockView
+                        key={entry.item.item.id}
+                        block={entry.item.item}
+                        onOpenSubagent={openAgent}
+                        subagentsSupported={props.capabilities.threadSubagents === true}
+                        planFallbackTitle={summary.title}
+                        historyExpanded={historyExpanded}
+                        onShowHistory={showHistory}
+                      />
+                    )
+                  )}
+                </DisclosureRevealContext.Provider>
+              </DisclosureScope.Provider>
+            </MarkdownPathScope.Provider>
+          </UserMessageScope.Provider>
+          <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
+          {!blocks.length && <div className="muted-row">暂无消息</div>}
+        </div>
+      </div>
       {!archived && props.capabilities.codexDesktop === true && connection.target === "local" && <DesktopComposer key={`${connection.revision}:${props.threadId}`} threadId={props.threadId} />}
     </main>
     {selectedAgent && <SubagentPanel key={`${selectedAgent.machine}:${props.threadId}:${selectedAgent.agent?.agentId ?? "list"}`} rootThreadId={props.threadId} initialAgent={selectedAgent.agent} rootSubagents={slot.subagents ?? detail.subagents} docked={docked} onClose={closeAgent} />}

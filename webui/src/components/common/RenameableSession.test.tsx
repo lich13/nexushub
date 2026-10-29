@@ -2,7 +2,6 @@ import { isValidElement, type ComponentProps, type ReactElement, type ReactNode 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RenameableSession } from "./RenameableSession";
 import { ContextTaskMenu, ThreadMenuItems } from "./TaskMenu";
-import { SessionCheckbox } from "./SessionBatchControls";
 
 // The project uses Vitest's Node environment. Exercise component event/state
 // boundaries here; native event dispatch, portals and layout belong to browser QA.
@@ -110,16 +109,29 @@ afterEach(() => {
 });
 
 describe("RenameableSession event boundaries", () => {
-  test("checkboxes forward range modifiers and keyboard clicks to the shared selector", () => {
-    const select = vi.fn();
-    const batch = { selection: [], busy: false, select } as unknown as ComponentProps<typeof SessionCheckbox>["batch"];
-    const checkbox = SessionCheckbox({ batch, sessionKey: "fixture", title: "Fixture" });
-    for (const event of [{ detail: 1, shiftKey: true, metaKey: false, ctrlKey: false }, { detail: 0, shiftKey: true, metaKey: true, ctrlKey: false }]) {
-      checkbox.props.onClick(event);
-      expect(select).toHaveBeenLastCalledWith("fixture", event, expect.any(Function));
-    }
-    checkbox.props.onChange();
-    expect(select).toHaveBeenCalledTimes(2);
+  test("multi-selected rows expose batch context menu actions on right-click and Shift+F10 while suppressing rename", () => {
+    const deleteBatch = vi.fn();
+    const clearBatch = vi.fn();
+    const view = mount({
+      selecting: true,
+      multiSelected: true,
+      batchMenuActions: [
+        { id: "batch-delete", label: "删除所选 2 项…", danger: true, run: deleteBatch },
+        { id: "batch-clear", label: "取消选择", run: clearBatch },
+      ],
+    });
+    expect(view.row().props.className).toContain("multi-selected");
+    expect(view.row().props["aria-pressed"]).toBe(true);
+    view.row().props.onDoubleClick(doubleClick());
+    view.row().props.onKeyDown(key("F2"));
+    view.render();
+    expect(view.find(element => element.type === "input")).toBeUndefined();
+
+    view.row().props.onContextMenu({ preventDefault: vi.fn(), clientX: 24, clientY: 36 });
+    view.render();
+    expect(view.actions().map(action => action.id)).toEqual(["batch-delete", "batch-clear"]);
+    view.actions()[0]!.run();
+    expect(deleteBatch).toHaveBeenCalledTimes(1);
   });
 
   test("selects immediately on the first click and opens rename on double-click without selecting twice", () => {

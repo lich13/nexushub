@@ -7,6 +7,5 @@ export * from "../lib/query/threads";
 export * from "../lib/query/shared";
 export { runtimeCapabilitiesForRuntime } from "../lib/query/system";
 export { probeEventCard } from "../lib/probeUi";
-export { statusTabs } from "../components/chat/ChatWorkspace";
 export { Conversation } from "../components/chat/Conversation";
 export { navigationItems, navigationLabelsForRuntime } from "../App";

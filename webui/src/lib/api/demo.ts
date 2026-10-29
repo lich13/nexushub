@@ -321,19 +321,21 @@ export function demoUpdateJobId(action: "check" | "install" | "prune"): { job_id
   return { job_id: `update-${action}-demo` };
 }
 
-export function demoThreads(status: string, q: string): ThreadSummary[] {
+export function demoThreads(archived = false, q = ""): ThreadSummary[] {
   const now = new Date().toISOString();
   const threads: ThreadSummary[] = [
-    { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", updated_at: now },
-    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认", updated_at: now },
-    { id: "019e5281-demo", title: "检查仓库状态", status: "Recent", message_count: 3, latest_message: "仓库状态干净。", updated_at: now },
-    { id: "019e42aa-demo", title: "旧归档线程", status: "Archived", message_count: 2, latest_message: "已归档。", updated_at: new Date(Date.now() - 86400000).toISOString() }
+    { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", rollout_path: "/isolated/codex/sessions/2026/10/29/rollout-019e8c1f-demo.jsonl", updated_at: now },
+    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认", rollout_path: "/isolated/codex/sessions/2026/10/29/rollout-019e95a0-demo.jsonl", updated_at: now },
+    { id: "019e5281-demo", title: "检查仓库状态", status: "Recent", message_count: 3, latest_message: "仓库状态干净。", rollout_path: "/isolated/codex/sessions/2026/10/29/rollout-019e5281-demo.jsonl", updated_at: now },
+    { id: "019e42aa-demo", title: "旧归档线程", status: "Archived", message_count: 2, latest_message: "已归档。", rollout_path: "/isolated/codex/archived_sessions/rollout-019e42aa-demo.jsonl", updated_at: new Date(Date.now() - 86400000).toISOString() }
   ];
-  return threads.filter((thread) => (status === "all" || status === threadStatusParam(thread.status)) && (!q || `${thread.title} ${thread.id}`.toLowerCase().includes(q.toLowerCase())));
+  const wantArchived = Boolean(archived);
+  return threads.filter((thread) => ((thread.status === "Archived") === wantArchived) && (!q || `${thread.title} ${thread.id}`.toLowerCase().includes(q.toLowerCase())));
 }
 
 export function demoThreadDetail(id: string): ThreadDetail {
-  const summary = demoThreads("all", "").find((thread) => thread.id === id) ?? demoThreads("all", "")[0];
+  const all = [...demoThreads(false, ""), ...demoThreads(true, "")];
+  const summary = all.find((thread) => thread.id === id) ?? all[0];
   const longChatBlocks: MessageBlock[] = Array.from({ length: 68 }, (_, index) => ({
     id: `history-${index}`,
     role: index % 2 === 0 ? "user" : "assistant",
@@ -460,9 +462,4 @@ export function demoJob(id: string): JobRecord {
     output: "",
     error: "demo job not found"
   };
-}
-
-export function threadStatusParam(status: ThreadSummary["status"]): string {
-  if (status === "ReplyNeeded") return "reply-needed";
-  return status.toLowerCase();
 }

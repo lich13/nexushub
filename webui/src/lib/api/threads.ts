@@ -8,9 +8,9 @@ export async function getSubagentDetail(request: SubagentDetailRequest): Promise
   return callCommand<SubagentDetailResponse>("threads.subagentDetail", { request });
 }
 
-export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
-  if (USE_DEMO) return demoThreads(status, q);
-  return callCommand<ThreadSummary[]>("threads.list", { status, q, limit: 120 });
+export async function listThreads(archived = false, q = ""): Promise<ThreadSummary[]> {
+  if (USE_DEMO) return demoThreads(archived, q);
+  return callCommand<ThreadSummary[]>("threads.list", { archived, q, limit: 120 });
 }
 
 export type ThreadDetailOptions = {

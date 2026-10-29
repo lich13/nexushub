@@ -443,29 +443,31 @@ describe("conversation helpers", () => {
     expect(appSource).not.toContain("visibleThreads[0]?.id");
   });
 
-  test("thread list keeps title, search, and filters outside the independent scroll container", () => {
+  test("thread list keeps title and search outside the independent scroll container and retires top status tabs", () => {
     const source = extractThreadListSource();
     const titleIndex = source.indexOf('className="section-title thread-title-row"');
     const searchIndex = source.indexOf('className="search-box"');
-    const filtersIndex = source.indexOf('className="segmented"');
     const scrollIndex = source.indexOf('className="thread-scroll"');
-    const scrollEndIndex = source.indexOf("\n      </div>", scrollIndex);
+    const scrollEndIndex = source.indexOf("\n      </div>\n      <SessionBatchControls", scrollIndex);
     const scrollBody = source.slice(scrollIndex, scrollEndIndex);
 
     expect(source.match(/className="thread-scroll"/g)).toHaveLength(1);
     expect(titleIndex).toBeGreaterThanOrEqual(0);
     expect(searchIndex).toBeGreaterThan(titleIndex);
-    expect(filtersIndex).toBeGreaterThan(searchIndex);
-    expect(scrollIndex).toBeGreaterThan(filtersIndex);
+    expect(scrollIndex).toBeGreaterThan(searchIndex);
     expect(scrollEndIndex).toBeGreaterThan(scrollIndex);
 
+    expect(source).toContain("className={`thread-item ");
     expect(scrollBody).toContain("{threads.map((thread) => {");
-    expect(scrollBody).toContain("className={`thread-item ");
+    expect(scrollBody).toContain("renderThreadRow");
     expect(scrollBody).toContain("没有匹配任务");
+    expect(scrollBody).toContain('className="archived-toggle"');
+    expect(scrollBody).toContain("已归档");
+    expect(source).not.toContain('className="segmented"');
+    expect(source).not.toContain("statusTabs");
+    expect(source).not.toContain("多选线程");
     expect(scrollBody).not.toContain('className="section-title thread-title-row"');
     expect(scrollBody).not.toContain('className="search-box"');
-    expect(scrollBody).not.toContain('className="segmented"');
-    expect(scrollBody).not.toContain("statusTabs.map");
   });
 
   test("visible Codex copy avoids legacy transport labels", async () => {

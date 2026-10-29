@@ -372,7 +372,9 @@ fn with_session_history<R>(
             if info.changed {
                 #[cfg(test)]
                 HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
-                if !native && !state.reconciled_initial_native_turns && !state.events.events.is_empty()
+                if !native
+                    && !state.reconciled_initial_native_turns
+                    && !state.events.events.is_empty()
                 {
                     state.reconciled_initial_native_turns = true;
                     state.prepend_missing_initial_native_users(directory);
@@ -494,7 +496,9 @@ impl GrokReader {
                 "user" => {
                     let raw_content = value.get("content").cloned().unwrap_or(Value::Null);
                     let parts = match raw_content {
-                        Value::String(text) => vec![serde_json::json!({"type": "text", "text": text})],
+                        Value::String(text) => {
+                            vec![serde_json::json!({"type": "text", "text": text})]
+                        }
                         Value::Array(arr) => arr,
                         other => vec![other],
                     };

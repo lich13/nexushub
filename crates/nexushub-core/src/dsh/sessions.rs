@@ -1330,14 +1330,12 @@ fn remove_dsh_cache_strict(paths: &DshPaths, id: &str, outcome: &mut Outcome) ->
         };
         let filename = entry.file_name();
         let filename = filename.to_string_lossy();
-        if filename == name
+        let matches = filename == name
             || filename
                 .strip_prefix(&backup)
-                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
-        {
-            if !outcome.remove_strict(&entry.path()) {
-                return false;
-            }
+                .is_some_and(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()));
+        if matches && !outcome.remove_strict(&entry.path()) {
+            return false;
         }
     }
     true
@@ -1592,11 +1590,10 @@ pub fn execute_batch_item_checked(
                         let mut pin_failed = false;
                         for entry in entries.flatten() {
                             let fname = entry.file_name().to_string_lossy().into_owned();
-                            if fname == *id || fname.starts_with(&format!("{id}.")) {
-                                if !outcome.remove_strict(&entry.path()) {
-                                    pin_failed = true;
-                                    break;
-                                }
+                            let matches = fname == *id || fname.starts_with(&format!("{id}."));
+                            if matches && !outcome.remove_strict(&entry.path()) {
+                                pin_failed = true;
+                                break;
                             }
                         }
                         if pin_failed {
@@ -1883,19 +1880,27 @@ mod tests {
 
         write_zstd_frames(
             &proj.join(root_a).join("session.v4.jsonl.zstd"),
-            &[json!({"type":"session","version":4,"id":root_a,"createdAt":1,"cwd":"/workspace/demo","isSeeded":false})],
+            &[
+                json!({"type":"session","version":4,"id":root_a,"createdAt":1,"cwd":"/workspace/demo","isSeeded":false}),
+            ],
         );
         write_zstd_frames(
             &proj.join(sub_a).join("session.v4.jsonl.zstd"),
-            &[json!({"type":"session","version":4,"id":sub_a,"createdAt":2,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_a,"delegationDepth":1})],
+            &[
+                json!({"type":"session","version":4,"id":sub_a,"createdAt":2,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_a,"delegationDepth":1}),
+            ],
         );
         write_zstd_frames(
             &proj.join(root_b).join("session.v4.jsonl.zstd"),
-            &[json!({"type":"session","version":4,"id":root_b,"createdAt":3,"cwd":"/workspace/demo","isSeeded":false})],
+            &[
+                json!({"type":"session","version":4,"id":root_b,"createdAt":3,"cwd":"/workspace/demo","isSeeded":false}),
+            ],
         );
         write_zstd_frames(
             &proj.join(sub_b).join("session.v4.jsonl.zstd"),
-            &[json!({"type":"session","version":4,"id":sub_b,"createdAt":4,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_b,"delegationDepth":1})],
+            &[
+                json!({"type":"session","version":4,"id":sub_b,"createdAt":4,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_b,"delegationDepth":1}),
+            ],
         );
 
         let paths = DshPaths { home: home.clone() };

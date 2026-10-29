@@ -1,6 +1,5 @@
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
-import { ToolOutput } from "../common/FilePathLink";
-import { MarkdownPathScope } from "../common/FilePathLink";
+import { ToolOutput, MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, FolderOpen, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
@@ -16,14 +15,16 @@ import { MarkdownContent } from "../common/MarkdownContent";
 import { PlanActions } from "../common/PlanActions";
 import { CopyReplyButton } from "../common/CopyReplyButton";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { ProcessGroupView } from "../common/ProcessGroupView";
 import { TaskMenu, ThreadMenuItems, type ThreadMenuAction } from "../common/TaskMenu";
 import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { claudeResumeCommand } from "../../lib/domain/claudeSession";
 import { useSessionSelection } from "../../lib/query/sessions";
-import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
+import { SessionBatchControls, buildBatchContextMenuActions } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupClaudeProcesses, type ClaudeRenderItem } from "../../lib/domain/claudeProcessGroups";
+import { foldProcessSequence, thinkingStepFromText } from "../../lib/domain/processGroups";
 import { ClaudeProcessView } from "./ClaudeProcessView";
 import { TimelineRail } from "../common/TimelineRail";
 import { claudeTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
@@ -45,12 +46,20 @@ export function ClaudeWorkspace() {
   const [feedback, setFeedback] = useState("");
   const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = useClaudeSessions(query);
-  const batch = useSessionSelection("claude_code", query, (sessions.data ?? []).map(s => s.sessionKey), keys => {
-    if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
-    setRenaming(false);
-    setPreview(null);
-  });
   const listed = sessions.data?.find((item) => item.sessionKey === selectedKey) ?? sessions.data?.[0];
+  const sessionKeys = useMemo(() => (sessions.data ?? []).map(s => s.sessionKey), [sessions.data]);
+  const batch = useSessionSelection(
+    "claude_code",
+    query,
+    sessionKeys,
+    keys => {
+      if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
+      setRenaming(false);
+      setPreview(null);
+    },
+    listed?.sessionKey ?? null,
+  );
+  const batchMenu = useMemo(() => buildBatchContextMenuActions(batch, ["delete"]), [batch]);
   const detailVisible = !narrow || Boolean(selectedKey);
   const detail = useClaudeDetail(detailVisible ? listed?.sessionKey : undefined);
   const selected = detail.data?.pages[0]?.summary ?? listed;
@@ -60,7 +69,10 @@ export function ClaudeWorkspace() {
     return [...latest.values()];
   }, [detail.data]);
   const navigation = useTimelineWindow({
-    scope: `${machineScope()}:claude:${selected?.sessionKey ?? ""}`, streamRef: stream, history: detail.data?.pages[0]?.history, latestId: loadedEvents[loadedEvents.length - 1]?.id,
+    scope: `${machineScope()}:claude:${selected?.sessionKey ?? ""}`,
+    streamRef: stream,
+    history: detail.data?.pages[0]?.history,
+    latestId: loadedEvents[loadedEvents.length - 1]?.id,
     id: (event: ClaudeHistoryEvent) => event.id ?? "",
     read: async cursor => claudeTimelinePage(await getClaudeSession(selected!.sessionKey, cursor)),
     onNavigate: () => { history.follow.current = false; setPendingSearch(null); },
@@ -68,8 +80,9 @@ export function ClaudeWorkspace() {
   });
   const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupClaudeProcesses(events), [events]);
-  const timelineEntries = useMemo(() => detail.data?.pages[0]?.timeline ?? userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [detail.data, groupedEvents]);
+  const resolvedTimeline = detail.data?.pages[0]?.timeline;
+  const timelineEntries = useMemo(() => resolvedTimeline ?? userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [resolvedTimeline, groupedEvents]);
   const actions = useClaudeActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? (detail.isFetchNextPageError ? null : detail.error) ?? sessions.error;
   const selectSearchResult = useCallback((result: SessionSearchResult) => {
@@ -91,12 +104,16 @@ export function ClaudeWorkspace() {
 
   const oldestPage = detail.data?.pages[detail.data.pages.length - 1];
   const history = useHistoryScroll({
-    scopeKey: `${machineScope()}:claude:${selected?.sessionKey ?? ""}:${navigation.generation}`, streamRef: stream,
-    cursor: navigation.active ? navigation.before : oldestPage?.beforeCursor, hasMore: navigation.active ? navigation.hasMore : Boolean(detail.hasNextPage), ready: detailVisible && Boolean(detail.data),
+    scopeKey: `${machineScope()}:claude:${selected?.sessionKey ?? ""}:${navigation.generation}`,
+    streamRef: stream,
+    cursor: navigation.active ? navigation.before : oldestPage?.beforeCursor,
+    hasMore: navigation.active ? navigation.hasMore : Boolean(detail.hasNextPage),
+    ready: detailVisible && Boolean(detail.data),
     initialPosition: navigation.active ? { top: 0, follow: false } : undefined,
-    busy: navigation.busy || (!navigation.active && detail.isFetching), searchActive: Boolean(pendingSearch),
-    loadPage: async (cursor, isCurrent) => {
-      if (navigation.active) return navigation.loadOlder(cursor, isCurrent);
+    busy: navigation.busy || (!navigation.active && detail.isFetching),
+    searchActive: Boolean(pendingSearch),
+    loadPage: async (_cursor, isCurrent) => {
+      if (navigation.active) return navigation.loadOlder(_cursor, isCurrent);
       const result = await detail.fetchNextPage({ cancelRefetch: false });
       if (result.isError) throw result.error;
       const page = result.data?.pages[result.data.pages.length - 1];
@@ -104,6 +121,15 @@ export function ClaudeWorkspace() {
       return { cursor: page.beforeCursor, hasMore: page.hasMore };
     }
   });
+  const handleTimelineSelect = useCallback((id: string) => {
+    history.follow.current = false;
+    if (stream.current && locateTimelineTarget(id, stream.current, "auto")) {
+      history.capture();
+      return;
+    }
+    if (resolvedTimeline) navigation.select(id);
+  }, [history, navigation, resolvedTimeline]);
+
   useEffect(() => {
     if (!pendingSearch || pendingSearch.sessionKey !== selected?.sessionKey || detail.isLoading || detail.isFetching || history.loading) return;
     if (navigation.active) { navigation.latest(); return; }
@@ -129,88 +155,253 @@ export function ClaudeWorkspace() {
       run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
   ];
 
-  return <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
-    <aside className="provider-list">
-      <header className="workspace-heading"><h1>Claude Code</h1><button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={16} /></button></header>
-      <label className="search-box"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、ID 或工作目录" /></label>
-      <div className="provider-list-scroll">
-        <SessionBatchControls batch={batch} operations={["delete"]} />
-        {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-        {sessions.data?.map((item) => <div key={item.sessionKey} className="selectable-session">{batch.selecting && <SessionCheckbox batch={batch} sessionKey={item.sessionKey} title={claudeSessionLabel(item)} />}<RenameableSession
-          title={claudeSessionLabel(item)}
-          className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`}
-          disabled={batch.busy}
-          selecting={batch.selecting}
-          selected={item.sessionKey === selected?.sessionKey}
-          renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
-          onSelect={event => batch.select(item.sessionKey, event, () => { setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); })}
-          onRename={(next) => actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })}
-          menuActions={menuActions(item)}
-        ><strong>{claudeSessionLabel(item)}</strong><span>{item.id}</span><span>{item.cwd}</span><span className="session-status-row">{item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}<SessionSize size={item.storageSize} /></span></RenameableSession></div>)}
-        {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
-        {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Claude Code 会话</div>}
-      </div>
-    </aside>
-    <main className="provider-detail">
-      {!selected && <div className="empty-state"><Terminal size={28} /><strong>选择一个 Claude Code 任务</strong></div>}
-      {selected && <>
-        <header className="conversation-header" data-timeline-id="session">
-          <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
-          <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
-          <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
-            <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
-            <ThreadMenuItems actions={menuActions(selected)} />
-          </TaskMenu>
+  return (
+    <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
+      <aside className="provider-list">
+        <header className="workspace-heading">
+          <h1>Claude Code</h1>
+          <button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={15} /></button>
         </header>
-        {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-        {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
-        {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
-        {selected.readWarning && <DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><ActivityDetails className="task-feedback" summary="读取提示" initiallyOpen={false} stateKey="read-warning">{() => <div>{selected.readWarning}</div>}</ActivityDetails></DisclosureScope.Provider>}
-        {!selected.readError && selected.renameBlockReason && <div className="task-feedback" role="status">{selected.renameBlockReason}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
-        {connection.target === "local" && actions.diagnostics.variables === selected.sessionKey && <>
-          {actions.diagnostics.error && <div className="form-error" role="alert">{actions.diagnostics.error.message}</div>}
-          {actions.diagnostics.data && <ActivityDetails className="task-feedback" summary="原生进程归属" initiallyOpen stateKey={`ownership:${selected.sessionKey}`}>
-            <p>{actions.diagnostics.data.ownership === "inactive" ? "未发现关联的活跃会话进程" : actions.diagnostics.data.ownership === "open" ? "存在活跃会话或文件占用" : "归属尚未确认"}</p>
-            {actions.diagnostics.data.processes.map((process, index) => <p key={`${process.pid}:${index}`}>PID {process.pid} · {({ session: "会话", daemon: "后台服务", pty_host: "终端宿主", unknown: "未核验进程" } as Record<string, string>)[process.role] ?? process.role} · {process.registrationVerified ? "登记已核验" : "登记未核验"}{process.mismatchedFields.length > 0 && ` · 不匹配字段：${process.mismatchedFields.join("、")}`}</p>)}
-          </ActivityDetails>}
-        </>}
-        {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.data?.pages[0]?.timeline ? navigation.select : undefined} loadOlder={!detail.data?.pages[0]?.timeline && detail.hasNextPage ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
-          <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
-          <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.sessionKey ? pendingSearch.positionKey : null}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
-          <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
-          {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
-          {!detail.isLoading && !events.length && <div className="muted-row">暂无对话</div>}
-        </div></div>
-      </>}
-    </main>
-    {preview && <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
-      <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong>{(preview.paths ?? [preview.path]).map(path => <code className="delete-path" key={path}>{path}</code>)}<p>{preview.fileCount} 个会话及专属文件，{preview.bytes.toLocaleString()} 字节。</p>
-      {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
-      {preview.warnings?.map(warning => <p className="form-error" key={warning}>{warning}</p>)}
-      {actions.remove.data?.residuals?.map(path => <p className="form-error" role="alert" key={path}>{path}</p>)}
-      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true }, { onSuccess: result => { if (!result.deleted) return; setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
-    </ConfirmDialog>}
-  </div>;
+        <label className="search-box">
+          <Search size={15} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、ID 或工作目录" />
+        </label>
+        <div className="provider-list-scroll" onKeyDown={batch.onListKeyDown}>
+          {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
+          {sessions.data?.map((item) => (
+            <div key={item.sessionKey} className="selectable-session">
+              <RenameableSession
+                title={claudeSessionLabel(item)}
+                className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`}
+                disabled={batch.busy}
+                selecting={batch.selecting}
+                selected={item.sessionKey === selected?.sessionKey}
+                multiSelected={batch.selection.includes(item.sessionKey)}
+                renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
+                onSelect={event => batch.select(item.sessionKey, event, () => { setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); })}
+                onRename={(next) => actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })}
+                batchMenuActions={batchMenu}
+                menuActions={menuActions(item)}
+              >
+                <strong>{claudeSessionLabel(item)}</strong>
+                <span>{item.id}</span>
+                <span>{item.cwd}</span>
+                <span className="session-status-row">
+                  {item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}
+                  <SessionSize size={item.storageSize} />
+                </span>
+              </RenameableSession>
+            </div>
+          ))}
+          {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
+          {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Claude Code 会话</div>}
+        </div>
+        <SessionBatchControls batch={batch} operations={["delete"]} />
+      </aside>
+      <main className="provider-detail">
+        {!selected && <div className="empty-state"><Terminal size={26} /><strong>选择一个 Claude Code 任务</strong></div>}
+        {selected && (
+          <>
+            <header className="conversation-header" data-timeline-id="session">
+              <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
+              <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
+              <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
+                <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
+                <ThreadMenuItems actions={menuActions(selected)} />
+              </TaskMenu>
+            </header>
+            {feedback && <div role="status" className="task-feedback">{feedback}</div>}
+            {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
+            {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
+            {selected.readWarning && <DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><ActivityDetails className="task-feedback" summary="读取提示" initiallyOpen={false} stateKey="read-warning">{() => <div>{selected.readWarning}</div>}</ActivityDetails></DisclosureScope.Provider>}
+            {!selected.readError && selected.renameBlockReason && <div className="task-feedback" role="status">{selected.renameBlockReason}{connection.target === "local" && <button disabled={actions.diagnostics.isPending} onClick={() => actions.diagnostics.mutate(selected.sessionKey)}>查看占用详情</button>}</div>}
+            {connection.target === "local" && actions.diagnostics.variables === selected.sessionKey && <>
+              {actions.diagnostics.error && <div className="form-error" role="alert">{actions.diagnostics.error.message}</div>}
+              {actions.diagnostics.data && <ActivityDetails className="task-feedback" summary="原生进程归属" initiallyOpen stateKey={`ownership:${selected.sessionKey}`}>
+                <p>{actions.diagnostics.data.ownership === "inactive" ? "未发现关联的活跃会话进程" : actions.diagnostics.data.ownership === "open" ? "存在活跃会话或文件占用" : "归属尚未确认"}</p>
+                {actions.diagnostics.data.processes.map((process, index) => <p key={`${process.pid}:${index}`}>PID {process.pid} · {({ session: "会话", daemon: "后台服务", pty_host: "终端宿主", unknown: "未核验进程" } as Record<string, string>)[process.role] ?? process.role} · {process.registrationVerified ? "登记已核验" : "登记未核验"}{process.mismatchedFields.length > 0 && ` · 不匹配字段：${process.mismatchedFields.join("、")}`}</p>)}
+              </ActivityDetails>}
+            </>}
+            {error && <div className="form-error" role="alert">{error.message}</div>}
+            <div className="timeline-reading-shell">
+              <TimelineRail
+                entries={timelineEntries}
+                streamRef={stream}
+                onSelect={handleTimelineSelect}
+                loadOlder={!resolvedTimeline && detail.hasNextPage ? () => { void history.loadOlder("search"); } : undefined}
+                loading={history.loading}
+              />
+              <div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+                <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
+                <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}>
+                  <MarkdownPathScope.Provider value={selected.cwd}>
+                    <DisclosureScope.Provider value={`claude:${selected.sessionKey}`}>
+                      <DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.sessionKey ? pendingSearch.positionKey : null}>
+                        {renderClaudeEvents(groupedEvents, selected.title)}
+                      </DisclosureRevealContext.Provider>
+                    </DisclosureScope.Provider>
+                  </MarkdownPathScope.Provider>
+                </UserMessageScope.Provider>
+                <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
+                {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
+                {!detail.isLoading && !events.length && <div className="muted-row">暂无对话</div>}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+      {preview && (
+        <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
+          <h2 id="claude-delete-title">删除任务文件</h2>
+          <strong>{preview.title}</strong>
+          {(preview.paths ?? [preview.path]).map(path => <code className="delete-path" key={path}>{path}</code>)}
+          <p>{preview.fileCount} 个会话及专属文件，{preview.bytes.toLocaleString()} 字节。</p>
+          {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
+          {preview.warnings?.map(warning => <p className="form-error" key={warning}>{warning}</p>)}
+          {actions.remove.data?.residuals?.map(path => <p className="form-error" role="alert" key={path}>{path}</p>)}
+          <div className="button-row">
+            <button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button>
+            <button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true }, { onSuccess: result => { if (!result.deleted) return; setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}>
+              <Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}
+            </button>
+          </div>
+        </ConfirmDialog>
+      )}
+    </div>
+  );
 }
 
-function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event: ClaudeHistoryEvent; activityId: string; title: string; timelineAliases?: string[] }) {
+function ClaudeEvent({
+  event,
+  activityId,
+  title,
+  timelineAliases = [],
+  insideProcess = false,
+}: {
+  event: ClaudeHistoryEvent;
+  activityId: string;
+  title: string;
+  timelineAliases?: string[];
+  insideProcess?: boolean;
+}) {
   const timelineProps = { "data-timeline-id": activityId, "data-timeline-aliases": timelineAliases.length ? timelineAliases.join(" ") : undefined };
-  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} timelineId={activityId} timelineAliases={timelineAliases} />;
-  if (event.kind === "plan") return <article className="provider-event plan" {...timelineProps}><header className="plan-heading"><strong>计划</strong><PlanActions markdown={event.text ?? ""} fallbackTitle={title} /></header><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} /></article>;
-  if (event.detail) return <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>{() => <ToolOutput text={event.detail!} />}</ActivityDetails>;
+  if (event.kind === "user_message") {
+    const aliases = [...timelineAliases, ...(event.userMessage?.id ? [event.userMessage.id] : [])];
+    return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} timelineId={activityId} timelineAliases={aliases} />;
+  }
+  if (event.kind === "plan") {
+    return (
+      <article className="provider-event plan" {...timelineProps}>
+        <header className="plan-heading">
+          <strong>计划</strong>
+          <PlanActions markdown={event.text ?? ""} fallbackTitle={title} />
+        </header>
+        <MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} />
+      </article>
+    );
+  }
+  if (event.detail) {
+    return (
+      <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>
+        {() => <ToolOutput text={event.detail!} />}
+      </ActivityDetails>
+    );
+  }
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
-  return <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>{!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}<MarkdownContent text={event.text ?? ""} activityId={activityId} timelineAliases={timelineAliases} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  if (insideProcess && event.kind === "thinking") {
+    return (
+      <div className="process-thought-step" {...timelineProps}>
+        <MarkdownContent text={event.text ?? ""} activityId={activityId} timelineAliases={timelineAliases} foldInstructions={false} />
+      </div>
+    );
+  }
+  return (
+    <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>
+      {!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}
+      <MarkdownContent text={event.text ?? ""} activityId={activityId} timelineAliases={timelineAliases} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />
+      {event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}
+    </article>
+  );
 }
 
-export function renderClaudeEvents(entries: ClaudeRenderItem[], title: string): ReactNode {
-  return entries.map(entry => entry.kind === "process"
-    ? <ClaudeProcessView key={entry.process.id} group={entry.process}>{() => renderClaudeEvents(entry.process.entries, title)}</ClaudeProcessView>
-    : entry.kind === "metadata"
-    ? <ActivityDetails key={entry.group.id} className="execution-group claude-metadata-group" stateKey={entry.group.id} stateAliases={entry.group.sourceIds.map(id => `claude-metadata:${id}`)} timelineId={entry.group.id} timelineAliases={entry.group.sourceIds} initiallyOpen={false} summary={<span className="tool-title">{entry.group.label}</span>}>{() => renderClaudeEvents(entry.group.entries, title)}</ActivityDetails>
-    : entry.kind === "group"
-    ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : <ClaudeEvent key={entry.key} activityId={entry.key} event={entry.item} title={title} timelineAliases={entry.sourceIds} />);
+export function renderClaudeEvents(entries: ClaudeRenderItem[], title: string, insideProcess = false): ReactNode {
+  if (!insideProcess) {
+    const folded = foldProcessSequence("claude", entries, entry => {
+      if (entry.kind === "group") return { kind: "execution", group: entry.group, turnId: entry.group.turnId };
+      if (entry.kind === "item" && entry.item.kind === "thinking") {
+        return thinkingStepFromText(entry.key, entry.sourceIds, entry.item.text, false, entry.item.turnId);
+      }
+      if (
+        entry.kind === "item" &&
+        entry.item.detail &&
+        entry.item.kind !== "user_message" &&
+        entry.item.kind !== "plan" &&
+        !entry.item.kind.startsWith("assistant_message")
+      ) {
+        return {
+          kind: "detail",
+          id: entry.key,
+          sourceIds: entry.sourceIds,
+          title: entry.item.text ?? "活动记录",
+          detail: entry.item.detail,
+          failed: entry.item.kind === "failure" || /^(failed|error)$/i.test(entry.item.status ?? ""),
+          turnId: entry.item.turnId,
+        };
+      }
+      return null;
+    });
+
+    return folded.map(entry =>
+      entry.kind === "process" ? (
+        <ProcessGroupView key={entry.process.id} group={entry.process} />
+      ) : entry.kind === "execution" ? (
+        <ExecutionGroupView key={entry.group.id} group={entry.group} />
+      ) : (
+        renderSingleClaudeEntry(entry.item, title, false)
+      ),
+    );
+  }
+
+  return entries.map(entry => renderSingleClaudeEntry(entry, title, true));
+}
+
+function renderSingleClaudeEntry(entry: ClaudeRenderItem, title: string, insideProcess: boolean): ReactNode {
+  if (entry.kind === "process") {
+    return (
+      <ClaudeProcessView key={entry.process.id} group={entry.process}>
+        {() => renderClaudeEvents(entry.process.entries, title, true)}
+      </ClaudeProcessView>
+    );
+  }
+  if (entry.kind === "metadata") {
+    return (
+      <ActivityDetails
+        key={entry.group.id}
+        className="execution-group claude-metadata-group"
+        stateKey={entry.group.id}
+        stateAliases={entry.group.sourceIds.map(id => `claude-metadata:${id}`)}
+        timelineId={entry.group.id}
+        timelineAliases={entry.group.sourceIds}
+        initiallyOpen={false}
+        summary={<span className="tool-title">{entry.group.label}</span>}
+      >
+        {() => renderClaudeEvents(entry.group.entries, title, insideProcess)}
+      </ActivityDetails>
+    );
+  }
+  if (entry.kind === "group") {
+    return <ExecutionGroupView key={entry.group.id} group={entry.group} />;
+  }
+  return (
+    <ClaudeEvent
+      key={entry.key}
+      activityId={entry.key}
+      event={entry.item}
+      title={title}
+      timelineAliases={entry.sourceIds}
+      insideProcess={insideProcess}
+    />
+  );
 }
 
 function claudeEventLabel(event: ClaudeHistoryEvent): string {

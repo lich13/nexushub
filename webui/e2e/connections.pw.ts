@@ -14,14 +14,14 @@ async function installMachines(page: Page) {
   const calls = await mockApi(page, { connection: { configured: true, baseUrl } });
   let machine: "local" | "remote" = "local";
   const titles = { local: "Local thread", remote: "Remote thread" };
-  const summary = () => ({ ...demo.demoThreads("all", "")[0], id: sharedId, title: titles[machine], status: "Recent" as const });
+  const summary = () => ({ ...demo.demoThreads(false, "")[0], id: sharedId, title: titles[machine], status: "Recent" as const });
   const detail = () => ({ ...demo.demoThreadDetail(sharedId), summary: summary(), blocks: [
     { id: "same-message", role: "assistant", kind: "message", text: `${machine} machine content`, questions: [] }
   ] });
   await mockCommand(page, "remote.select", async (args, next) => {
     const view = await next(); machine = args.request.target; return view;
   });
-  await mockCommand(page, "threads.list", () => [summary()]);
+  await mockCommand(page, "threads.list", args => args?.archived ? [] : [summary()]);
   await mockCommand(page, "threads.detail", detail);
   await mockCommand(page, "threads.rename", args => { titles[machine] = args.name; return { ok: true }; });
   return { calls, detail, machine: () => machine };
