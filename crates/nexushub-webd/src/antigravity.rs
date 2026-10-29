@@ -113,7 +113,7 @@ fn discover() -> Result<Endpoint> {
     anyhow::bail!("Antigravity notifications require the local Mac App")
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn parse_loopback_listener_port(line: &str) -> Option<u16> {
     use std::net::Ipv4Addr;
     let (host, port) = line.strip_prefix('n')?.split_once(':')?;
