@@ -7,12 +7,14 @@ import {
   saveProbeSettings,
   runProbeBarkTest,
   runProbeHooksInstall,
+  runProbeHooksRemove,
   manageClaudeHooks,
 } from "../api";
 import { useConnection } from "./connection";
 import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
-import { preservePreviousQueryData, visiblePollInterval } from "./shared";
+import type { ProbeSectionId } from "../probeUi";
+import { preservePreviousQueryData } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
 export const probeQueryKeys = {
@@ -22,19 +24,20 @@ export const probeQueryKeys = {
   jobs: ["jobs"] as const
 };
 
-export function useProbeQueries({ section, historyOpen }: { section: "events" | "settings"; historyOpen: boolean }) {
+export function useProbeQueries({ section, historyOpen }: { section: ProbeSectionId; historyOpen: boolean }) {
+  const needsSettings = section === "settings" || section === "hooks";
   return {
     status: useQuery({
       queryKey: probeQueryKeys.status,
       queryFn: getProbeStatus,
-      refetchInterval: visiblePollInterval(15000),
+      refetchInterval: 15000,
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
     settings: useQuery({
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
-      enabled: section === "settings",
+      enabled: needsSettings,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
     }),
@@ -42,15 +45,15 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
       enabled: section === "events",
-      refetchInterval: visiblePollInterval(15000),
+      refetchInterval: 15000,
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
     jobs: useQuery({
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
-      enabled: section === "settings" && historyOpen,
-      refetchInterval: visiblePollInterval(5000),
+      enabled: needsSettings && historyOpen,
+      refetchInterval: 5000,
       placeholderData: preservePreviousQueryData
     })
   };
@@ -72,6 +75,7 @@ export function useProbeActions(input: {
 
   const runProbeCommand = (action: ProbeJobAction) => {
     if (action === "bark-test") return runProbeBarkTest();
+    if (action === "hooks-remove") return runProbeHooksRemove();
     return runProbeHooksInstall();
   };
 

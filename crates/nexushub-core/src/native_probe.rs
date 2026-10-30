@@ -66,6 +66,9 @@ impl NativeProvider {
             }
             (Self::Grok, "completion") => config.probe.notifications.notify_grok_completion,
             (Self::Grok, "failure") => config.probe.notifications.notify_grok_failure,
+            (Self::Grok, "reply_needed" | "authorization") => {
+                config.probe.notifications.notify_grok_reply_needed
+            }
             (Self::Antigravity, "completion") => {
                 config.probe.notifications.notify_antigravity_completion
             }
@@ -364,7 +367,7 @@ pub(crate) fn grok_events(
                     settled = settled.min(position as u64);
                     continue;
                 };
-                let kind = match (outcome, stop) {
+                let mut kind = match (outcome, stop) {
                     ("completed", "end_turn") => "completion",
                     ("error", "error") => "failure",
                     _ => continue,
@@ -417,6 +420,10 @@ pub(crate) fn grok_events(
                 if body.trim().is_empty() {
                     settled = settled.min(position as u64);
                     continue;
+                }
+                if kind == "completion" && crate::codex::assistant_feedback_request(&body).is_some()
+                {
+                    kind = "reply_needed";
                 }
                 result.push(NativeTurnEvent {
                     prompt_id: None,
@@ -524,5 +531,27 @@ mod tests {
         assert_eq!(cursor, 1);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].body, "next answer");
+    }
+
+    #[test]
+    fn grok_detects_reply_needed_questions_and_honors_grok_reply_needed_switch() {
+        let (events, mut updates) = grok_fixture("completed", "end_turn", "primary");
+        updates[1]["params"]["update"]["content"]["text"] =
+            json!("构建准备就绪。请问是否现在继续执行数据库迁移？");
+        let (turns, cursor) = grok_events("session", &events, &updates);
+        assert_eq!(cursor, 2);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].kind, "reply_needed");
+
+        // Rhetorical tail with earlier keywords stays completion instead of false-positive reply_needed.
+        updates[1]["params"]["update"]["content"]["text"] =
+            json!("已检查是否还有遗留项。为什么不值得庆贺呢？");
+        let (turns_rhetorical, _) = grok_events("session", &events, &updates);
+        assert_eq!(turns_rhetorical[0].kind, "completion");
+
+        let mut cfg = Config::default();
+        assert!(NativeProvider::Grok.event_enabled(&cfg, "reply_needed"));
+        cfg.probe.notifications.notify_grok_reply_needed = false;
+        assert!(!NativeProvider::Grok.event_enabled(&cfg, "reply_needed"));
     }
 }

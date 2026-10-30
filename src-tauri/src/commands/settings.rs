@@ -45,6 +45,14 @@ pub fn probeInstallHooks(
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command(rename = "probe.removeHooks")]
+pub fn probeRemoveHooks(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::RemoveHooks)
+        .map_err(|err| err.to_string())
+}
+
 #[tauri::command(rename = "probe.events")]
 pub fn getProbeEvents(
     state: tauri::State<'_, DesktopState>,

@@ -127,13 +127,14 @@ describe("ArchivableProviderWorkspace", () => {
     expect(providerSessionLabel({ id: "ag-2", title: "   " })).toBe("ag-2");
   });
 
-  test("row and header menus implement the 5 actions and strictly omit 复制恢复命令", () => {
+  test("row and header menus implement core actions + Finder reveal and strictly omit 复制恢复命令", () => {
     expect(workspaceSource).toContain("RenameableSession");
     expect(workspaceSource).toContain("改名");
     expect(workspaceSource).toContain('"恢复" : "归档"');
     expect(workspaceSource).toContain("取消归档");
     expect(workspaceSource).toContain('label: "复制 ID"');
     expect(workspaceSource).toContain('label: "复制路径"');
+    expect(workspaceSource).toContain('label: "在 Finder 中显示"');
     expect(workspaceSource).toContain('label: "永久删除"');
     expect(workspaceSource).not.toContain("复制恢复命令");
   });

@@ -95,7 +95,8 @@ for (const colorScheme of ["light", "dark"] as const) {
       }
       await nav.getByRole("button", { name: "Probe", exact: true }).click();
       await expect(page.getByRole("button", { name: "最近事件", exact: true })).toBeVisible();
-      await assertContrast(page, ".probe-status-banner strong, .probe-status-banner span, .probe-event-card .status-chip");
+      await expect(page.locator(".probe-status-banner")).toHaveCount(0);
+      await assertContrast(page, ".probe-live-overview strong, .probe-live-overview span, .probe-event-card .status-chip");
       await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
       await expect(page.getByText("Bark", { exact: true })).toBeVisible();
       await expect(page.getByLabel("主机标签", { exact: true })).toBeVisible();
@@ -103,6 +104,9 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect.poll(() => page.evaluate(() => innerWidth - document.documentElement.clientWidth), { message: "classic scrollbar gutter is present" }).toBeGreaterThan(0);
       }
       await assertContrast(page, ".field-label, .metric span, .metric strong");
+      await assertNoOverflow(page);
+      await page.locator(".probe-layout .segmented").getByRole("button", { name: "Hooks 管理" }).click();
+      await expect(page.getByText("Codex Hook", { exact: true }).first()).toBeVisible();
       await assertNoOverflow(page);
       await page.screenshot({ path: info.outputPath("probe.png"), fullPage: true });
       await nav.getByRole("button", { name: "设置", exact: true }).click();

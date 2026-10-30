@@ -341,6 +341,18 @@
       "responseDto": "ProbeInstallHooksResponse"
     },
     {
+      "id": "probe.removeHooks",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "probe.removeHooks",
+      "linuxRpc": "probe.removeHooks",
+      "tauriCommand": "commands::settings::probeRemoveHooks",
+      "webuiWrapper": "runProbeHooksRemove",
+      "dtoOwner": "probe",
+      "requestDto": "NoRequest",
+      "responseDto": "ProbeRemoveHooksResponse"
+    },
+    {
       "id": "updates.status",
       "kind": "rpc",
       "scope": "shared",
@@ -1086,6 +1098,10 @@
     "ProbeInstallHooksResponse": {
       "core": "ProbeInstallHooksResponse",
       "webui": "ProbeInstallHooksResponse"
+    },
+    "ProbeRemoveHooksResponse": {
+      "core": "ProbeRemoveHooksResponse",
+      "webui": "ProbeRemoveHooksResponse"
     },
     "ProbeSettingsGetResponse": {
       "core": "ProbeSettingsGetResponse",

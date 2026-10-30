@@ -81,6 +81,15 @@ export function ClaudeWorkspace() {
   });
   const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupClaudeProcesses(events), [events]);
+  const latestReplyText = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const candidate = events[index];
+      if (!candidate.kind.startsWith("assistant_message")) continue;
+      const cleaned = visibleMarkdown(candidate.text ?? "").trim();
+      if (cleaned) return cleaned;
+    }
+    return "";
+  }, [events]);
   const resolvedTimeline = detail.data?.pages[0]?.timeline;
   const timelineEntries = useMemo(() => resolvedTimeline ?? userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [resolvedTimeline, groupedEvents]);
@@ -218,10 +227,18 @@ export function ClaudeWorkspace() {
             <header className="conversation-header" data-timeline-id="session">
               <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
               <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
-              <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
-                <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
-                <ThreadMenuItems actions={menuActions(selected)} />
-              </TaskMenu>
+              <div className="conversation-header-actions">
+                {selected.status === "running" ? (
+                  <span className="status-chip tone-info">运行中</span>
+                ) : selected.readError ? (
+                  <span className="status-chip tone-danger">异常</span>
+                ) : null}
+                <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
+                  <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
+                  <button disabled={!latestReplyText} title={!latestReplyText ? "当前会话暂无可复制的助手答复" : undefined} onClick={() => { void copy(latestReplyText); }}><Copy size={15} />复制答复</button>
+                  <ThreadMenuItems actions={menuActions(selected)} />
+                </TaskMenu>
+              </div>
             </header>
             {feedback && <div role="status" className="task-feedback">{feedback}</div>}
             {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}

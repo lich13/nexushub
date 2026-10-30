@@ -109,8 +109,7 @@ export function usePagedHistory<Page>(options: Options<Page>) {
       const head = await read();
       return refreshHistory(client.getQueryData<HistoryData<Page>>(options.queryKey), head, read, options, signal);
     },
-    refetchInterval: state => document.visibilityState !== "visible" || busy ? false : options.interval(state.state.data?.pages[0]),
-    refetchIntervalInBackground: false
+    refetchInterval: state => document.visibilityState !== "visible" || busy ? false : options.interval(state.state.data?.pages[0])
   });
   useEffect(() => () => { flight.current?.controller.abort(); }, [scope]);
   const fetchNextPage = useCallback(async (_options?: { cancelRefetch?: boolean }) => {

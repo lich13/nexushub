@@ -445,6 +445,7 @@ mod tests {
         for (action, subcommand) in [
             (probe_service::ProbeAction::BarkTest, "bark-test"),
             (probe_service::ProbeAction::InstallHooks, "hooks-install"),
+            (probe_service::ProbeAction::RemoveHooks, "hooks-remove"),
         ] {
             let process = probe_service::probe_process_command(&platform, &config_path, action);
             assert_eq!(process.program, platform.daemon_binary());

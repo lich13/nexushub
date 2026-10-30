@@ -4,7 +4,8 @@ import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, Copy, FolderOpen, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
+import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
@@ -34,6 +35,11 @@ import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearc
 
 export function grokHandoffPath(session: Pick<GrokSessionSummary, "handoffPath" | "path">): string {
   return session.handoffPath?.trim() || session.path;
+}
+
+export function grokResumeCommand(cwd: string, id: string): string {
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  return `${cwd ? `cd -- ${quote(cwd)} && ` : ""}grok --resume ${quote(id)}`;
 }
 
 export function GrokWorkspace({}: {}) {
@@ -83,6 +89,17 @@ export function GrokWorkspace({}: {}) {
   });
   const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupGrokCommandEvents(events), [events]);
+  const latestReplyText = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const candidate = events[index];
+      if (!candidate.kind.startsWith("agent_message") && !candidate.kind.startsWith("assistant_message")) {
+        continue;
+      }
+      const cleaned = visibleMarkdown(candidate.text ?? "").trim();
+      if (cleaned) return cleaned;
+    }
+    return "";
+  }, [events]);
   const resolvedTimeline = detail.data?.pages[0]?.timeline;
   const timelineEntries = useMemo(() => resolvedTimeline ?? userTimelineEntries("grok", groupedEvents.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [resolvedTimeline, groupedEvents]);
@@ -209,6 +226,24 @@ export function GrokWorkspace({}: {}) {
                     run: () => { void copyText(grokHandoffPath(item), "已复制路径"); },
                   },
                   {
+                    id: "copy-resume",
+                    label: "复制恢复命令",
+                    icon: <Terminal size={15} />,
+                    run: () => { void copyText(grokResumeCommand(item.cwd, item.id), "已复制恢复命令"); },
+                  },
+                  {
+                    id: "reveal",
+                    label: "在 Finder 中显示",
+                    icon: <FolderOpen size={15} />,
+                    disabled: !canRevealLocalPath(),
+                    reason: canRevealLocalPath() ? null : "仅可在本机 Finder 中显示本机会话",
+                    run: () => {
+                      void revealLocalPath(grokHandoffPath(item)).catch(() =>
+                        setFeedback("无法在 Finder 中显示，请检查文件是否仍存在"),
+                      );
+                    },
+                  },
+                  {
                     id: "delete",
                     label: "删除任务文件",
                     icon: <Trash2 size={15} />,
@@ -250,12 +285,18 @@ export function GrokWorkspace({}: {}) {
             <header className="conversation-header" data-timeline-id="session">
               <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /></button>
               <div className="conversation-title-copy"><h1 className="conversation-title">{grokSessionLabel(selected)}</h1></div>
-              <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
-                <button onClick={() => { void copyText(selected.id, "已复制线程 ID"); }}><Copy size={15} />复制线程 ID</button>
-                <button onClick={() => { void copyText(grokHandoffPath(selected), "已复制路径"); }}><Copy size={15} />复制路径</button>
-                <button onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
-                <button disabled={actions.preview.isPending} onClick={() => { actions.remove.reset(); actions.preview.mutate(selected.id, { onSuccess: setPreview }); }}><Trash2 size={15} />删除任务文件</button>
-              </TaskMenu>
+              <div className="conversation-header-actions">
+                {selected.status === "running" && <span className="status-chip tone-info">运行中</span>}
+                <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
+                  <button onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
+                  <button disabled={!latestReplyText} title={!latestReplyText ? "当前会话暂无可复制的助手答复" : undefined} onClick={() => { void copyText(latestReplyText, "已复制答复"); }}><Copy size={15} />复制答复</button>
+                  <button onClick={() => { void copyText(selected.id, "已复制线程 ID"); }}><Copy size={15} />复制线程 ID</button>
+                  <button onClick={() => { void copyText(grokHandoffPath(selected), "已复制路径"); }}><Copy size={15} />复制路径</button>
+                  <button onClick={() => { void copyText(grokResumeCommand(selected.cwd, selected.id), "已复制恢复命令"); }}><Terminal size={15} />复制恢复命令</button>
+                  <button disabled={!canRevealLocalPath()} title={canRevealLocalPath() ? undefined : "仅可在本机 Finder 中显示本机会话"} onClick={() => { void revealLocalPath(grokHandoffPath(selected)).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); }}><FolderOpen size={15} />在 Finder 中显示</button>
+                  <button className="danger-menu-item" disabled={actions.preview.isPending} onClick={() => { actions.remove.reset(); actions.preview.mutate(selected.id, { onSuccess: setPreview }); }}><Trash2 size={15} />删除任务文件</button>
+                </TaskMenu>
+              </div>
             </header>
             {feedback && <div role="status" className="task-feedback">{feedback}</div>}
             {renaming && (
@@ -303,7 +344,7 @@ export function GrokWorkspace({}: {}) {
           {actions.remove.data?.residuals?.map(path => <p className="form-error" role="alert" key={path}>{path}</p>)}
           <div className="button-row">
             <button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button>
-            <button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ id: preview.id, confirmed: true }, { onSuccess: result => { if (!result.deleted) return; setPreview(null); setSelectedId(current => current === preview.id ? null : current); } })}>
+            <button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ id: preview.id, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: result => { if (!result.deleted) return; setPreview(null); setSelectedId(current => current === preview.id ? null : current); } })}>
               <Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}
             </button>
           </div>

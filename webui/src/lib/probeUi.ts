@@ -4,7 +4,8 @@ export const PROBE_NAV_LABEL = "Probe";
 
 export const probeSections = [
   { id: "events", label: "最近事件" },
-  { id: "settings", label: "通知配置" }
+  { id: "settings", label: "通知配置" },
+  { id: "hooks", label: "Hooks 管理" }
 ] as const;
 
 export type ProbeSectionId = typeof probeSections[number]["id"];
@@ -41,6 +42,7 @@ export type ProbeSettingsDraft = {
     notify_grok: boolean;
     notify_grok_completion: boolean;
     notify_grok_failure: boolean;
+    notify_grok_reply_needed: boolean;
     notify_claude: boolean;
     notify_claude_completion: boolean;
     notify_claude_failure: boolean;
@@ -113,6 +115,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_grok: notifications.notify_grok !== false,
       notify_grok_completion: notifications.notify_grok_completion !== false,
       notify_grok_failure: notifications.notify_grok_failure !== false,
+      notify_grok_reply_needed: notifications.notify_grok_reply_needed !== false,
       notify_claude: notifications.notify_claude !== false,
       notify_claude_completion: notifications.notify_claude_completion !== false,
       notify_claude_failure: notifications.notify_claude_failure !== false,
@@ -166,6 +169,7 @@ export function buildProbeSettingsPayload(
     notify_grok: draft.notifications.notify_grok,
     notify_grok_completion: draft.notifications.notify_grok_completion,
     notify_grok_failure: draft.notifications.notify_grok_failure,
+    notify_grok_reply_needed: draft.notifications.notify_grok_reply_needed,
     notify_claude: draft.notifications.notify_claude,
     notify_claude_completion: draft.notifications.notify_claude_completion,
     notify_claude_failure: draft.notifications.notify_claude_failure,
@@ -214,6 +218,111 @@ export function buildProbeSettingsPayload(
     payload.notifications = { device_key: deviceKey };
   }
   return payload;
+}
+
+export type ProbeNotificationPlatformId = "codex" | "claude_code" | "grok" | "antigravity" | "dsh";
+
+export const PROBE_NOTIFICATION_PLATFORMS: readonly {
+  id: ProbeNotificationPlatformId;
+  brand: "codex" | "claude" | "grok" | "antigravity" | "dsh";
+  label: string;
+  subtitle: string;
+  localOnly?: boolean;
+}[] = [
+  { id: "codex", brand: "codex", label: "Codex", subtitle: "完成 · 待回复 · 异常" },
+  { id: "claude_code", brand: "claude", label: "Claude Code", subtitle: "完成 · 待回复 · 失败" },
+  { id: "grok", brand: "grok", label: "Grok Build", subtitle: "完成 · 待回复 · 失败" },
+  { id: "antigravity", brand: "antigravity", label: "Antigravity", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true },
+  { id: "dsh", brand: "dsh", label: "DeepSeek Harness", subtitle: "完成 · 待回复 · 授权 · 失败", localOnly: true }
+];
+
+export function isPlatformNotificationEnabled(
+  draft: ProbeSettingsDraft,
+  platform: ProbeNotificationPlatformId
+): boolean {
+  const n = draft.notifications;
+  switch (platform) {
+    case "codex":
+      return n.notify_codex && (n.notify_completion || n.notify_reply_needed || n.notify_recoverable);
+    case "claude_code":
+      return n.notify_claude && (n.notify_claude_completion || n.notify_claude_failure || n.notify_claude_reply_needed);
+    case "grok":
+      return n.notify_grok && (n.notify_grok_completion || n.notify_grok_failure || n.notify_grok_reply_needed);
+    case "antigravity":
+      return n.notify_antigravity && (n.notify_antigravity_completion || n.notify_antigravity_failure || n.notify_antigravity_reply_needed || n.notify_antigravity_authorization);
+    case "dsh":
+      return n.notify_dsh && (n.notify_dsh_completion || n.notify_dsh_failure || n.notify_dsh_reply_needed || n.notify_dsh_authorization);
+  }
+}
+
+export function applyPlatformNotificationToggle(
+  draft: ProbeSettingsDraft,
+  platform: ProbeNotificationPlatformId,
+  enabled: boolean
+): ProbeSettingsDraft {
+  switch (platform) {
+    case "codex":
+      return {
+        ...draft,
+        probe: {
+          ...draft.probe,
+          error_monitor: { ...draft.probe.error_monitor, enabled }
+        },
+        notifications: {
+          ...draft.notifications,
+          notify_codex: enabled,
+          notify_completion: enabled,
+          notify_reply_needed: enabled,
+          notify_recoverable: enabled
+        }
+      };
+    case "claude_code":
+      return {
+        ...draft,
+        notifications: {
+          ...draft.notifications,
+          notify_claude: enabled,
+          notify_claude_completion: enabled,
+          notify_claude_failure: enabled,
+          notify_claude_reply_needed: enabled
+        }
+      };
+    case "grok":
+      return {
+        ...draft,
+        notifications: {
+          ...draft.notifications,
+          notify_grok: enabled,
+          notify_grok_completion: enabled,
+          notify_grok_failure: enabled,
+          notify_grok_reply_needed: enabled
+        }
+      };
+    case "antigravity":
+      return {
+        ...draft,
+        notifications: {
+          ...draft.notifications,
+          notify_antigravity: enabled,
+          notify_antigravity_completion: enabled,
+          notify_antigravity_failure: enabled,
+          notify_antigravity_reply_needed: enabled,
+          notify_antigravity_authorization: enabled
+        }
+      };
+    case "dsh":
+      return {
+        ...draft,
+        notifications: {
+          ...draft.notifications,
+          notify_dsh: enabled,
+          notify_dsh_completion: enabled,
+          notify_dsh_failure: enabled,
+          notify_dsh_reply_needed: enabled,
+          notify_dsh_authorization: enabled
+        }
+      };
+  }
 }
 
 export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {

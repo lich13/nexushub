@@ -105,6 +105,7 @@ export const contractDtoNames = [
   "ProbeBarkTestResponse",
   "ProbeEventsResponse",
   "ProbeInstallHooksResponse",
+  "ProbeRemoveHooksResponse",
   "ProbeSettingsGetResponse",
   "ProbeSettingsSaveRequest",
   "ProbeSettingsSaveResponse",

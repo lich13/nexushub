@@ -24,6 +24,7 @@ pub struct ProbeStatusAggregation {
     pub running_threads: Vec<ThreadSummary>,
     pub reply_needed_threads: Vec<ThreadSummary>,
     pub recoverable_threads: Vec<ThreadSummary>,
+    pub active_sessions: Vec<probe_core::ProbeLiveSession>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +98,8 @@ pub enum ProbeAction {
     BarkTest,
     #[serde(rename = "installHooks", alias = "hooks-install")]
     InstallHooks,
+    #[serde(rename = "removeHooks", alias = "hooks-remove")]
+    RemoveHooks,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,6 +236,7 @@ pub fn probe_status_with_runtime_read_model(
     status.running_threads = read_model.running_threads;
     status.reply_needed_threads = read_model.reply_needed_threads;
     status.recoverable_threads = read_model.recoverable_threads;
+    status.active_sessions = read_model.active_sessions;
     status
 }
 
@@ -284,6 +288,9 @@ pub fn plan_probe_action_with_device_key_and_config_path(
         ProbeAction::InstallHooks => {
             Some(runtime.plan_action(probe_core::ProbeActionPlanKind::InstallHooks)?)
         }
+        ProbeAction::RemoveHooks => {
+            Some(runtime.plan_action(probe_core::ProbeActionPlanKind::RemoveHooks)?)
+        }
     };
     let job = Some(probe_fixed_job_spec(platform, action, config_path)?);
     Ok(ProbeActionPlan {
@@ -295,16 +302,295 @@ pub fn plan_probe_action_with_device_key_and_config_path(
     })
 }
 
+fn resolve_provider_sandbox_root(config: &Config) -> Option<std::path::PathBuf> {
+    let raw = config.codex.home.as_os_str().to_string_lossy();
+    if raw.trim().is_empty() || raw == "auto" {
+        return None;
+    }
+    let default_codex = dirs::home_dir().map(|home| home.join(".codex"));
+    if default_codex.as_deref() == Some(config.codex.home.as_path()) {
+        return None;
+    }
+    if config.codex.home.file_name().and_then(|s| s.to_str()) == Some(".codex") {
+        config.codex.home.parent().map(Path::to_path_buf)
+    } else {
+        Some(config.codex.home.clone())
+    }
+}
+
+fn native_stream_live_bucket(
+    stream: &crate::native_probe::NativeStreamSnapshot,
+    now_ms: i64,
+) -> Option<&'static str> {
+    if stream.record_count != stream.settled_count {
+        return None;
+    }
+    let last = stream.events.last()?;
+    let fresh_ms = PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS.saturating_mul(1000);
+    if now_ms.saturating_sub(last.timestamp_ms) > fresh_ms {
+        return None;
+    }
+    match last.kind.as_str() {
+        "reply_needed" | "authorization" => Some("reply_needed"),
+        "failure" => Some("recoverable"),
+        _ => None,
+    }
+}
+
+fn aggregate_active_sessions(
+    config: &Config,
+    limit: usize,
+    running_threads: &[ThreadSummary],
+    reply_needed_threads: &[ThreadSummary],
+    recoverable_threads: &[ThreadSummary],
+) -> Vec<probe_core::ProbeLiveSession> {
+    let mut sessions = Vec::new();
+    let per_bucket_limit = limit.clamp(1, 50);
+    for (bucket, threads) in [
+        ("running", running_threads),
+        ("reply_needed", reply_needed_threads),
+        ("recoverable", recoverable_threads),
+    ] {
+        for thread in threads.iter().take(per_bucket_limit) {
+            let title = if thread.title.trim().is_empty() {
+                thread.id.clone()
+            } else {
+                thread.title.clone()
+            };
+            sessions.push(probe_core::ProbeLiveSession {
+                provider: "codex".to_string(),
+                id: thread.id.clone(),
+                session_key: thread.id.clone(),
+                title,
+                bucket: bucket.to_string(),
+                updated_at: thread.updated_at.clone(),
+                cwd: thread.cwd.clone(),
+            });
+        }
+    }
+
+    let sandbox_root = resolve_provider_sandbox_root(config);
+    let now_ms = Utc::now().timestamp_millis();
+
+    let claude_paths = match &sandbox_root {
+        Some(root) => crate::claude::ClaudePaths {
+            projects: root.join(".claude/projects"),
+            config: root.join(".claude"),
+        },
+        None => crate::claude::ClaudePaths::default_for_user(),
+    };
+    if claude_paths.available() {
+        let stream_buckets: std::collections::HashMap<String, &'static str> =
+            crate::claude::notification_snapshots(&claude_paths)
+                .map(|scan| {
+                    scan.streams
+                        .iter()
+                        .filter_map(|s| {
+                            native_stream_live_bucket(s, now_ms).map(|b| (s.session_key.clone(), b))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        if let Ok(items) =
+            crate::claude::list_claude_sessions(&claude_paths, per_bucket_limit, None)
+        {
+            for item in items {
+                let bucket = if item.status == "running" {
+                    Some("running")
+                } else if let Some(&b) = stream_buckets.get(&item.session_key) {
+                    Some(b)
+                } else if item.read_error.is_some() {
+                    Some("recoverable")
+                } else {
+                    None
+                };
+                if let Some(bucket) = bucket {
+                    sessions.push(probe_core::ProbeLiveSession {
+                        provider: "claude_code".to_string(),
+                        id: item.id.clone(),
+                        session_key: item.session_key,
+                        title: if item.title.trim().is_empty() {
+                            item.id
+                        } else {
+                            item.title
+                        },
+                        bucket: bucket.to_string(),
+                        updated_at: item.updated_at,
+                        cwd: (!item.cwd.is_empty()).then_some(item.cwd),
+                    });
+                }
+            }
+        }
+    }
+
+    let grok_paths = match &sandbox_root {
+        Some(root) => crate::grok::GrokPaths {
+            home: root.join(".grok"),
+        },
+        None => crate::grok::GrokPaths::default_for_user(),
+    };
+    if grok_paths.sessions().is_dir() {
+        let stream_buckets: std::collections::HashMap<String, &'static str> =
+            crate::grok::notification_snapshots(&grok_paths)
+                .map(|scan| {
+                    scan.streams
+                        .iter()
+                        .filter_map(|s| {
+                            native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        if let Ok(items) = crate::grok::list_grok_sessions(&grok_paths, per_bucket_limit, None) {
+            for item in items {
+                let bucket = if item.status == "running" {
+                    Some("running")
+                } else {
+                    stream_buckets.get(&item.id).copied()
+                };
+                if let Some(bucket) = bucket {
+                    sessions.push(probe_core::ProbeLiveSession {
+                        provider: "grok".to_string(),
+                        id: item.id.clone(),
+                        session_key: item.id.clone(),
+                        title: if item.title.trim().is_empty() {
+                            item.id
+                        } else {
+                            item.title
+                        },
+                        bucket: bucket.to_string(),
+                        updated_at: item.updated_at,
+                        cwd: (!item.cwd.is_empty()).then_some(item.cwd),
+                    });
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let ag_paths = match &sandbox_root {
+            Some(root) => crate::antigravity::sessions::AntigravityPaths::offline(
+                root.join(".gemini/antigravity"),
+            ),
+            None => crate::antigravity::sessions::AntigravityPaths::default_for_user(),
+        };
+        if ag_paths.available() {
+            if let Ok(items) = crate::antigravity::sessions::list_sessions(
+                &ag_paths,
+                &crate::provider_sessions::ProviderListRequest {
+                    archived: Some(false),
+                    q: None,
+                    limit: Some(per_bucket_limit),
+                },
+            ) {
+                for item in items {
+                    let bucket = match item.status.as_str() {
+                        "running" => Some("running"),
+                        "waiting" | "reply_needed" => Some("reply_needed"),
+                        "failed" => Some("recoverable"),
+                        _ if item.read_error.is_some() => Some("recoverable"),
+                        _ => None,
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(probe_core::ProbeLiveSession {
+                            provider: "antigravity".to_string(),
+                            id: item.id.clone(),
+                            session_key: item.session_key,
+                            title: if item.title.trim().is_empty() {
+                                item.id
+                            } else {
+                                item.title
+                            },
+                            bucket: bucket.to_string(),
+                            updated_at: item.updated_at,
+                            cwd: (!item.cwd.is_empty()).then_some(item.cwd),
+                        });
+                    }
+                }
+            }
+        }
+
+        let dsh_paths = match &sandbox_root {
+            Some(root) => crate::dsh::DshPaths {
+                home: root.join(".dsh"),
+            },
+            None => crate::dsh::DshPaths::default_for_user(),
+        };
+        if dsh_paths.home.join("sessions").is_dir() {
+            let stream_buckets: std::collections::HashMap<String, &'static str> =
+                crate::dsh::notifications::scan(&dsh_paths)
+                    .map(|scan| {
+                        scan.streams
+                            .iter()
+                            .filter_map(|s| {
+                                native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            if let Ok(items) = crate::dsh::sessions::list_sessions(
+                &dsh_paths,
+                &crate::provider_sessions::ProviderListRequest {
+                    archived: Some(false),
+                    q: None,
+                    limit: Some(per_bucket_limit),
+                },
+            ) {
+                for item in items {
+                    let bucket = if item.status == "running" {
+                        Some("running")
+                    } else if let Some(&b) = stream_buckets.get(&item.id) {
+                        Some(b)
+                    } else if item.read_error.is_some() {
+                        Some("recoverable")
+                    } else {
+                        None
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(probe_core::ProbeLiveSession {
+                            provider: "dsh".to_string(),
+                            id: item.id.clone(),
+                            session_key: item.session_key,
+                            title: if item.title.trim().is_empty() {
+                                item.id
+                            } else {
+                                item.title
+                            },
+                            bucket: bucket.to_string(),
+                            updated_at: item.updated_at,
+                            cwd: (!item.cwd.is_empty()).then_some(item.cwd),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    sessions
+}
+
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
     let limit = config.probe.recent_limit.clamp(1, 200);
+    let running_threads = probe_threads_for_status(config, "running", limit).unwrap_or_default();
+    let reply_needed_threads =
+        probe_threads_for_status(config, "reply-needed", limit).unwrap_or_default();
+    let recoverable_threads =
+        probe_threads_for_status(config, "recoverable", limit).unwrap_or_default();
+    let active_sessions = aggregate_active_sessions(
+        config,
+        limit,
+        &running_threads,
+        &reply_needed_threads,
+        &recoverable_threads,
+    );
     ProbeStatusAggregation {
         recent_event_count: recent_probe_event_count(&config.paths.db_path, limit as u32)
             .unwrap_or(0),
-        running_threads: probe_threads_for_status(config, "running", limit).unwrap_or_default(),
-        reply_needed_threads: probe_threads_for_status(config, "reply-needed", limit)
-            .unwrap_or_default(),
-        recoverable_threads: probe_threads_for_status(config, "recoverable", limit)
-            .unwrap_or_default(),
+        running_threads,
+        reply_needed_threads,
+        recoverable_threads,
+        active_sessions,
     }
 }
 
@@ -586,6 +872,7 @@ impl ProbeAction {
         match self {
             Self::BarkTest => commands::PROBE_BARK_TEST,
             Self::InstallHooks => commands::PROBE_INSTALL_HOOKS,
+            Self::RemoveHooks => commands::PROBE_REMOVE_HOOKS,
         }
     }
 
@@ -601,6 +888,7 @@ impl FromStr for ProbeAction {
         match value.trim() {
             "barkTest" | "bark-test" => Ok(Self::BarkTest),
             "installHooks" | "hooks-install" => Ok(Self::InstallHooks),
+            "removeHooks" | "hooks-remove" => Ok(Self::RemoveHooks),
             action => Err(anyhow!("unknown probe action: {action}")),
         }
     }
@@ -608,7 +896,9 @@ impl FromStr for ProbeAction {
 
 fn probe_action_capability(action: ProbeAction) -> Capability {
     match action {
-        ProbeAction::BarkTest | ProbeAction::InstallHooks => Capability::Probe,
+        ProbeAction::BarkTest | ProbeAction::InstallHooks | ProbeAction::RemoveHooks => {
+            Capability::Probe
+        }
     }
 }
 
@@ -952,6 +1242,12 @@ fn probe_fixed_job_spec(
             vec!["probe", "hooks-install"],
             "probe_hooks",
         ),
+        ProbeAction::RemoveHooks => (
+            "probe_hooks_remove",
+            "探针 Hook 移除",
+            vec!["probe", "hooks-remove"],
+            "probe_hooks",
+        ),
     };
     let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
     Ok(ProbeFixedJobSpec {
@@ -971,6 +1267,7 @@ pub fn probe_process_command(
     let subcommand = match action {
         ProbeAction::BarkTest => "bark-test",
         ProbeAction::InstallHooks => "hooks-install",
+        ProbeAction::RemoveHooks => "hooks-remove",
     };
     crate::jobs::ProcessCommand::new(
         platform.daemon_binary(),
@@ -1208,5 +1505,107 @@ mod tests {
         };
         let plan = probe_passive_thread_notification_plan(&thread, "recoverable");
         assert_eq!(plan.reason_label.as_deref(), Some("异常/可恢复"));
+    }
+
+    #[test]
+    fn aggregate_probe_status_collects_multi_provider_active_sessions_and_remove_hooks_plan() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("nexushub-probe-agg-{unique}"));
+        let codex_home = root.join(".codex");
+        let grok_session_id = "11111111-2222-4333-8444-555555555555";
+        let grok_dir = root
+            .join(".grok/sessions/workspace-a")
+            .join(grok_session_id);
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::create_dir_all(&grok_dir).unwrap();
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        std::fs::write(
+            grok_dir.join("summary.json"),
+            serde_json::json!({
+                "info": {
+                    "id": grok_session_id,
+                    "title": "Grok Question Session",
+                    "cwd": "/workspace/demo",
+                    "updatedAt": now_rfc3339
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_dir.join("events.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "type": "turn_started",
+                    "ts": now_ms - 500,
+                    "session_id": grok_session_id,
+                    "session_relationship": "primary",
+                    "turn_number": 1
+                }),
+                serde_json::json!({
+                    "type": "turn_ended",
+                    "ts": now_ms,
+                    "outcome": "completed"
+                })
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            grok_dir.join("updates.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "timestamp": now_ms - 200,
+                    "params": {
+                        "sessionId": grok_session_id,
+                        "_meta": { "promptId": "turn-1", "chunkId": "chunk-1" },
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "type": "text", "text": "请选择需要部署的目标环境：测试环境还是预发环境？" }
+                        }
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": now_ms,
+                    "params": {
+                        "sessionId": grok_session_id,
+                        "update": {
+                            "sessionUpdate": "turn_completed",
+                            "prompt_id": "turn-1",
+                            "stop_reason": "end_turn"
+                        }
+                    }
+                })
+            ),
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.paths.db_path = root.join("panel.sqlite");
+        let agg = super::aggregate_probe_status(&config);
+        assert!(
+            agg.active_sessions.iter().any(|s| s.provider == "grok"
+                && s.id == grok_session_id
+                && s.bucket == "reply_needed"),
+            "expected grok reply_needed in active_sessions, got {:?}",
+            agg.active_sessions
+        );
+
+        let platform =
+            PlatformPaths::for_kind_with_home(crate::platform::PlatformKind::Linux, &root);
+        let remove_plan = plan_probe_action(&config, &platform, ProbeAction::RemoveHooks).unwrap();
+        assert_eq!(remove_plan.action, ProbeAction::RemoveHooks);
+        assert_eq!(
+            remove_plan.job.as_ref().map(|j| j.kind.as_str()),
+            Some("probe_hooks_remove")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

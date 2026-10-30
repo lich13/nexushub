@@ -250,7 +250,17 @@ async fn run_probe_command(
         ProbeCommand::HooksInstall { dry_run } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&install_probe_hooks(config, dry_run).await?)?
+                serde_json::to_string_pretty(
+                    &install_probe_hooks(config, Some(config_path), dry_run).await?
+                )?
+            );
+        }
+        ProbeCommand::HooksRemove { dry_run } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &remove_probe_hooks(config, Some(config_path), dry_run).await?
+                )?
             );
         }
         ProbeCommand::NotifyCompletion { thread_id, turn_id } => {
@@ -317,15 +327,141 @@ async fn probe_thread_snapshot(
     }))
 }
 
-async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
-    install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
+async fn install_probe_hooks(
+    config: &Config,
+    config_path: Option<&Path>,
+    dry_run: bool,
+) -> Result<Value> {
+    let mut out = install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
         Ok(serde_json::to_value(
             nexushub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
                 platform, enabled,
             )?,
         )?)
     })
-    .await
+    .await?;
+    if !dry_run && !config.probe.hooks.manage_stop_hook {
+        if let Some(path) = config_path.filter(|p| p.exists()) {
+            let before = read_optional_text(path)?;
+            let patched = nexushub_core::config::patch_probe_config_toml(
+                &before,
+                &nexushub_core::config::ProbeConfigFilePatch {
+                    codex: None,
+                    probe: Some(nexushub_core::config::ProbeSettingsPatch {
+                        hooks: Some(nexushub_core::config::ProbeHooksConfigPatch {
+                            manage_stop_hook: Some(true),
+                            reload_app_server_after_install: None,
+                        }),
+                        ..Default::default()
+                    }),
+                },
+            )?;
+            if patched != before {
+                fs::write(path, patched)
+                    .with_context(|| format!("write probe config {}", path.display()))?;
+                out["changed"] = json!(true);
+                out["probe_config_changed"] = json!(true);
+            }
+        }
+    }
+    Ok(out)
+}
+
+async fn remove_probe_hooks(
+    config: &Config,
+    config_path: Option<&Path>,
+    dry_run: bool,
+) -> Result<Value> {
+    let resolved = resolve_codex_paths(&config.codex.home);
+    let hooks_path = resolved.home.join("hooks.json");
+    let codex_config_path = resolved.home.join("config.toml");
+    let had_hooks_file = hooks_path.exists();
+    let mut root = read_hooks_json(&hooks_path)?;
+    let hooks_json_changed =
+        had_hooks_file && nexushub_core::probe::remove_nexushub_managed_hooks(&mut root);
+    let config_before = read_optional_text(&codex_config_path)?;
+    let codex_config_after = prune_codex_hook_state_toml(&config_before)?;
+    let codex_config_changed = codex_config_after != config_before;
+    let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let backup_path = hooks_path.with_extension(format!("json.nexushub-probe-bak-{stamp}"));
+    let codex_config_backup_path =
+        codex_config_path.with_extension(format!("toml.nexushub-probe-bak-{stamp}"));
+    if hooks_json_changed && !dry_run {
+        fs::copy(&hooks_path, &backup_path).with_context(|| {
+            format!(
+                "backup hooks {} to {}",
+                hooks_path.display(),
+                backup_path.display()
+            )
+        })?;
+        fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
+            .with_context(|| format!("write hooks {}", hooks_path.display()))?;
+    }
+    if codex_config_changed && !dry_run {
+        if codex_config_path.exists() {
+            fs::copy(&codex_config_path, &codex_config_backup_path).with_context(|| {
+                format!(
+                    "backup codex config {} to {}",
+                    codex_config_path.display(),
+                    codex_config_backup_path.display()
+                )
+            })?;
+        }
+        fs::write(&codex_config_path, codex_config_after)
+            .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
+    }
+    let mut probe_config_changed = false;
+    if !dry_run {
+        if let Some(path) = config_path.filter(|p| p.exists()) {
+            let before = read_optional_text(path)?;
+            let patched = nexushub_core::config::patch_probe_config_toml(
+                &before,
+                &nexushub_core::config::ProbeConfigFilePatch {
+                    codex: None,
+                    probe: Some(nexushub_core::config::ProbeSettingsPatch {
+                        hooks: Some(nexushub_core::config::ProbeHooksConfigPatch {
+                            manage_stop_hook: Some(false),
+                            reload_app_server_after_install: None,
+                        }),
+                        ..Default::default()
+                    }),
+                },
+            )?;
+            if patched != before {
+                fs::write(path, patched)
+                    .with_context(|| format!("write probe config {}", path.display()))?;
+                probe_config_changed = true;
+            }
+        }
+    }
+    let changed = hooks_json_changed || codex_config_changed || probe_config_changed;
+    Ok(json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "changed": changed,
+        "hooks_json_changed": hooks_json_changed,
+        "codex_config_changed": codex_config_changed,
+        "probe_config_changed": probe_config_changed,
+        "hooks_json": hooks_path,
+        "codex_config": codex_config_path,
+        "resolved_codex_home": resolved.home,
+        "backup_path": if hooks_json_changed && had_hooks_file { Some(backup_path) } else { None },
+        "codex_config_backup_path": if codex_config_changed && codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
+    }))
+}
+
+fn prune_codex_hook_state_toml(text: &str) -> Result<String> {
+    if text.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let mut value: toml::Value = toml::from_str(text).context("parse Codex config.toml")?;
+    let Some(root) = value.as_table_mut() else {
+        return Ok(text.to_string());
+    };
+    if !prune_codex_hook_state(root) {
+        return Ok(text.to_string());
+    }
+    toml::to_string_pretty(&value).context("serialize Codex config.toml")
 }
 
 async fn install_probe_hooks_with_repair(
@@ -1609,6 +1745,39 @@ hooks = false
             fs::read(codex_home.join("hooks.json")).unwrap(),
             serde_json::to_vec_pretty(&hooks_json).unwrap()
         );
+
+        let third_party = "/usr/local/bin/custom-codex-hook --event stop";
+        let mut with_custom = hooks_json.clone();
+        with_custom["hooks"]["Stop"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": third_party}]
+            }));
+        fs::write(
+            codex_home.join("hooks.json"),
+            serde_json::to_vec_pretty(&with_custom).unwrap(),
+        )
+        .unwrap();
+        let probe_cfg_path = dir.join("config.toml");
+        fs::write(&probe_cfg_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+        let removed = remove_probe_hooks(&config, Some(&probe_cfg_path), false)
+            .await
+            .unwrap();
+        assert_eq!(removed["ok"], true);
+        assert_eq!(removed["hooks_json_changed"], true);
+        assert_eq!(removed["probe_config_changed"], true);
+        let after_remove: Value =
+            serde_json::from_slice(&fs::read(codex_home.join("hooks.json")).unwrap()).unwrap();
+        assert!(!after_remove.to_string().contains("probe hook-stop"));
+        assert!(!after_remove
+            .to_string()
+            .contains("probe hook-request-user-input"));
+        assert!(after_remove.to_string().contains(third_party));
+        let reloaded = Config::load(&probe_cfg_path).unwrap();
+        assert!(!reloaded.probe.hooks.manage_stop_hook);
 
         fs::remove_dir_all(&dir).unwrap();
     }

@@ -5,10 +5,12 @@ import {
   ArchiveRestore,
   ChevronRight,
   Copy,
+  FolderOpen,
   RefreshCw,
   Search,
   Trash2,
 } from "lucide-react";
+import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   threadDetailFromSlot,
@@ -321,6 +323,23 @@ function ThreadList({
               icon: <Copy size={15} />,
               run: () => {
                 void copy(threadResumeCommand(thread.id));
+              },
+            },
+            {
+              id: "reveal",
+              label: "在 Finder 中显示",
+              icon: <FolderOpen size={15} />,
+              disabled: !canRevealLocalPath() || !thread.rollout_path,
+              reason: !canRevealLocalPath()
+                ? "仅可在本机 Finder 中显示本机会话"
+                : !thread.rollout_path
+                  ? "当前会话暂无本地文件路径"
+                  : null,
+              run: () => {
+                if (!thread.rollout_path) return;
+                void revealLocalPath(thread.rollout_path).catch(() =>
+                  setMenuFeedback("无法在 Finder 中显示，请检查文件是否仍存在"),
+                );
               },
             },
             {

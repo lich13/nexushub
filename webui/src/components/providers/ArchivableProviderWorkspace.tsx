@@ -5,12 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  FolderOpen,
   Pencil,
   RefreshCw,
   Search,
   Trash2,
   X,
 } from "lucide-react";
+import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AgentBrandIcon } from "../common/AgentBrandIcon";
 import { groupProviderEvents, type ExecutionRenderItem } from "../../lib/domain/executionGroups";
@@ -403,6 +405,23 @@ export function ArchivableProviderWorkspace({
       },
     },
     {
+      id: "reveal",
+      label: "在 Finder 中显示",
+      icon: <FolderOpen size={15} />,
+      disabled: !canRevealLocalPath() || !item.path,
+      reason: !canRevealLocalPath()
+        ? "仅可在本机 Finder 中显示本机会话"
+        : !item.path
+          ? "当前会话暂无本地文件路径"
+          : null,
+      run: () => {
+        if (!item.path) return;
+        void revealLocalPath(item.path).catch(() =>
+          setFeedback("无法在 Finder 中显示，请检查文件是否仍存在"),
+        );
+      },
+    },
+    {
       id: "delete",
       label: "永久删除",
       icon: <Trash2 size={15} />,
@@ -695,6 +714,23 @@ export function ArchivableProviderWorkspace({
                       icon: <Copy size={15} />,
                       run: () => {
                         void copy(selected.path, "已复制路径");
+                      },
+                    },
+                    {
+                      id: "reveal",
+                      label: "在 Finder 中显示",
+                      icon: <FolderOpen size={15} />,
+                      disabled: !canRevealLocalPath() || !selected.path,
+                      reason: !canRevealLocalPath()
+                        ? "仅可在本机 Finder 中显示本机会话"
+                        : !selected.path
+                          ? "当前会话暂无本地文件路径"
+                          : null,
+                      run: () => {
+                        if (!selected.path) return;
+                        void revealLocalPath(selected.path).catch(() =>
+                          setFeedback("无法在 Finder 中显示，请检查文件是否仍存在"),
+                        );
                       },
                     },
                     {

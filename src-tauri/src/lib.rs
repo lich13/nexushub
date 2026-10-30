@@ -55,6 +55,7 @@ pub fn run() {
         commands::settings::getProbeEvents,
         commands::settings::probeBarkTest,
         commands::settings::probeInstallHooks,
+        commands::settings::probeRemoveHooks,
         commands::settings::claudeHooks,
         commands::settings::dryRunDshArchiveDelete,
         commands::settings::startDshArchiveDelete,

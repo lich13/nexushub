@@ -214,6 +214,7 @@ mod tests {
             command_path("settings", "getProbeEvents"),
             command_path("settings", "probeBarkTest"),
             command_path("settings", "probeInstallHooks"),
+            command_path("settings", "probeRemoveHooks"),
             command_path("settings", "dryRunArchiveDelete"),
             command_path("settings", "startArchiveDelete"),
             command_path("settings", "dryRunHiddenThreadDelete"),

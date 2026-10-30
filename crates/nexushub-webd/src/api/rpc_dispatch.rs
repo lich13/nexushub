@@ -318,6 +318,9 @@ pub(super) async fn rpc_dispatch(
         rpc_commands::PROBE_INSTALL_HOOKS => {
             start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
         }
+        rpc_commands::PROBE_REMOVE_HOOKS => {
+            start_probe_action(state, headers, probe_service::ProbeAction::RemoveHooks).await
+        }
         rpc_commands::CLEANUP_DSH_ARCHIVE_DRY_RUN => {
             dsh_archive_delete_dry_run(State(state), headers).await
         }
@@ -594,6 +597,7 @@ mod tests {
         for typed in [
             "rpc_commands::PROBE_BARK_TEST",
             "rpc_commands::PROBE_INSTALL_HOOKS",
+            "rpc_commands::PROBE_REMOVE_HOOKS",
             "rpc_commands::UPDATES_CHECK",
             "rpc_commands::UPDATES_INSTALL",
             "rpc_commands::UPDATES_PRUNE",

@@ -15,14 +15,7 @@ export { CleanupPagination };
 export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const { update, jobs } = useOpsQueries({ historyOpen });
-  const noop = () => {};
-  const opsActions = useOpsActions({
-    capabilities,
-    onArchiveDryRun: noop,
-    onArchiveExecute: noop,
-    onHiddenDryRun: noop,
-    onHiddenExecute: noop
-  });
+  const opsActions = useOpsActions({ capabilities });
   const jobMutation = opsActions.updateJob;
   const startedJob = useStartedJob(jobMutation.data?.job_id);
   const jobBusy =

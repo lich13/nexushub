@@ -24,6 +24,7 @@ export {
   getProbeEvents,
   runProbeBarkTest,
   runProbeHooksInstall,
+  runProbeHooksRemove,
   manageClaudeHooks,
 } from "./api/probe";
 export { getUpdateStatus, updates } from "./api/updates";

@@ -497,12 +497,47 @@ export function isProbeJob(job: JobRecord): boolean {
     || job.title.includes("Probe");
 }
 
+export type ProbeLiveSessionsByBucket = {
+  running: import("../../types").ProbeLiveSession[];
+  replyNeeded: import("../../types").ProbeLiveSession[];
+  recoverable: import("../../types").ProbeLiveSession[];
+};
+
+export function probeLiveSessionsByBucket(
+  status?: Pick<ProbeStatus, "active_sessions" | "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null
+): ProbeLiveSessionsByBucket {
+  if (Array.isArray(status?.active_sessions) && status.active_sessions.length > 0) {
+    return {
+      running: status.active_sessions.filter((item) => item.bucket === "running"),
+      replyNeeded: status.active_sessions.filter((item) => item.bucket === "reply_needed"),
+      recoverable: status.active_sessions.filter((item) => item.bucket === "recoverable")
+    };
+  }
+  const mapCodex = (threads: ThreadSummary[] | undefined, bucket: "running" | "reply_needed" | "recoverable") =>
+    (threads ?? []).map((thread) => ({
+      provider: "codex",
+      id: thread.id,
+      session_key: thread.id,
+      title: thread.title?.trim() ? thread.title : thread.id,
+      bucket,
+      updated_at: thread.updated_at,
+      cwd: thread.cwd
+    }));
+  return {
+    running: mapCodex(status?.running_threads, "running"),
+    replyNeeded: mapCodex(status?.reply_needed_threads, "reply_needed"),
+    recoverable: mapCodex(status?.recoverable_threads, "recoverable")
+  };
+}
+
 export function probeJobActionLabel(action: ProbeJobAction | undefined): string {
   switch (action) {
     case "bark-test":
       return "NexusHub 推送测试";
     case "hooks-install":
       return "Hook 安装";
+    case "hooks-remove":
+      return "Hook 移除";
     default:
       return "Probe job";
   }

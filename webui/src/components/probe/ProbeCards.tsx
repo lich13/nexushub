@@ -1,12 +1,123 @@
-import { CheckCircle2, Cloud, TerminalSquare } from "lucide-react";
-import { useRef } from "react";
+import { CheckCircle2, Cloud, TerminalSquare, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { AgentBrandIcon, type AgentBrandId } from "../common/AgentBrandIcon";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import { Metric } from "../common/Panel";
-import { probeEventCard, probeNumberInputDraftValue, type ProbeSettingsDraft } from "../../lib/probeUi";
-import { codexHomeStatusValue, logBytesDraftToMb, mbDraftToLogBytes, probeDiscoveryWarningsText, probeRunningCountValue, probeStateLabel } from "../../lib/domain/runtimeViewModel";
+import {
+  applyPlatformNotificationToggle,
+  isPlatformNotificationEnabled,
+  PROBE_NOTIFICATION_PLATFORMS,
+  probeEventCard,
+  probeNumberInputDraftValue,
+  type ProbeSettingsDraft,
+} from "../../lib/probeUi";
+import {
+  codexHomeStatusValue,
+  logBytesDraftToMb,
+  mbDraftToLogBytes,
+  probeDiscoveryWarningsText,
+  probeLiveSessionsByBucket,
+  probeStateLabel,
+} from "../../lib/domain/runtimeViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
-import type { ProbeEvent, ProbeSettings, ProbeStatus } from "../../types";
+import type { ProbeEvent, ProbeLiveSession, ProbeSettings, ProbeStatus } from "../../types";
 
 export type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
+
+function providerBrandId(provider: string): AgentBrandId {
+  switch (provider) {
+    case "claude_code":
+    case "claude":
+      return "claude";
+    case "grok":
+      return "grok";
+    case "antigravity":
+      return "antigravity";
+    case "dsh":
+      return "dsh";
+    default:
+      return "codex";
+  }
+}
+
+function providerShortLabel(provider: string): string {
+  switch (provider) {
+    case "claude_code":
+    case "claude":
+      return "Claude Code";
+    case "grok":
+      return "Grok Build";
+    case "antigravity":
+      return "Antigravity";
+    case "dsh":
+      return "DeepSeek Harness";
+    default:
+      return "Codex";
+  }
+}
+
+export function ProbeLiveOverviewCard({
+  status,
+  currentSettings,
+  serviceText,
+}: {
+  status?: ProbeStatus | null;
+  currentSettings?: ProbeSettings | null;
+  serviceText: string;
+}) {
+  const buckets = probeLiveSessionsByBucket(status);
+  const hostLabel = status?.host_label ?? currentSettings?.codex?.host_label ?? "本机";
+  const allHighlighted: { item: ProbeLiveSession; badge: string; tone: string }[] = [
+    ...buckets.replyNeeded.map(item => ({ item, badge: "待回复", tone: "warning" })),
+    ...buckets.recoverable.map(item => ({ item, badge: "异常", tone: "danger" })),
+    ...buckets.running.map(item => ({ item, badge: "运行中", tone: "info" })),
+  ];
+
+  return (
+    <div className="probe-card-stack probe-live-overview">
+      <div className="probe-live-summary-head">
+        <div>
+          <strong>五平台实时态势</strong>
+          <span>{serviceText} · {hostLabel}</span>
+        </div>
+        <div className="probe-live-kpis">
+          <span className="status-chip tone-info">运行中 {buckets.running.length}</span>
+          <span className="status-chip tone-warning">待回复 {buckets.replyNeeded.length}</span>
+          <span className="status-chip tone-danger">异常 {buckets.recoverable.length}</span>
+        </div>
+      </div>
+      {allHighlighted.length > 0 ? (
+        <div className="preview-list compact">
+          {allHighlighted.slice(0, 12).map(({ item, badge, tone }) => {
+            const brand = providerBrandId(item.provider);
+            return (
+              <article
+                className="preview-item probe-live-session-row"
+                key={`${item.provider}:${item.session_key}:${item.bucket}`}
+              >
+                <div className="probe-live-session-main">
+                  <span className="agent-brand-badge" data-agent={brand} aria-hidden="true">
+                    <AgentBrandIcon agent={brand} size={15} />
+                  </span>
+                  <div className="probe-live-session-copy">
+                    <strong>{item.title || item.id}</strong>
+                    <span>
+                      {providerShortLabel(item.provider)}
+                      {item.cwd ? ` · ${item.cwd}` : ""}
+                    </span>
+                  </div>
+                </div>
+                <span className={`status-chip tone-${tone}`}>{badge}</span>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="muted-row">当前所有已启用平台均无运行中、待回复或异常会话</div>
+      )}
+    </div>
+  );
+}
 
 export function ProbeBarkCard({
   draft,
@@ -17,7 +128,7 @@ export function ProbeBarkCard({
   testing,
   testStatus,
   onSave,
-  onTest
+  onTest,
 }: {
   draft: ProbeSettingsDraft;
   setDraft: (draft: ProbeSettingsDraft) => void;
@@ -30,27 +141,65 @@ export function ProbeBarkCard({
   onTest: () => void;
 }) {
   const deviceKeyInputRef = useRef<HTMLInputElement>(null);
-  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
+  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) =>
+    setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
   const handleSave = () => onSave(deviceKeyInputRef.current?.value ?? draft.notifications.device_key);
   return (
     <fieldset className="probe-card-stack" disabled={saving}>
-      <Metric label="配置状态" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
-      <label className="field-label">
-        Device Key
+      <div className="settings-meta-grid">
+        <Metric
+          label="通道状态"
+          value={draft.notifications.enabled ? "已启用" : "已停用"}
+          tone={draft.notifications.enabled ? "success" : "warning"}
+        />
+        <Metric
+          label="密钥状态"
+          value={configuredDeviceKey ? "已配置" : "未配置"}
+          tone={configuredDeviceKey ? "success" : "warning"}
+        />
+      </div>
+      <label className="toggle-row">
+        <span>启用 Bark 推送通道</span>
         <input
-          ref={deviceKeyInputRef}
-          type="password"
-          value={draft.notifications.device_key}
-          placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key"}
-          onChange={(event) => setNotifications({ device_key: event.target.value })}
+          type="checkbox"
+          checked={draft.notifications.enabled}
+          onChange={event => setNotifications({ enabled: event.target.checked })}
         />
       </label>
+      <div className="form-grid">
+        <label className="field-label">
+          Bark 服务 URL
+          <input
+            value={draft.notifications.server_url}
+            placeholder="https://api.day.app"
+            onChange={event => setNotifications({ server_url: event.target.value })}
+          />
+        </label>
+        <label className="field-label">
+          Device Key
+          <input
+            ref={deviceKeyInputRef}
+            type="password"
+            value={draft.notifications.device_key}
+            placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key"}
+            onChange={event => setNotifications({ device_key: event.target.value })}
+          />
+        </label>
+      </div>
       <div className="button-row">
-        <button className="primary-button" disabled={saving} onClick={handleSave}><CheckCircle2 size={17} />保存</button>
-        <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
+        <button className="primary-button" disabled={saving} onClick={handleSave}>
+          <CheckCircle2 size={17} />保存
+        </button>
+        <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}>
+          <Cloud size={17} />测试推送
+        </button>
       </div>
       {testStatus && <div role="status" className="muted-row">{testStatus}</div>}
-      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
+      {saveStatus && (
+        <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>
+          {saveStatus.message}
+        </div>
+      )}
     </fieldset>
   );
 }
@@ -64,7 +213,7 @@ export function ProbeRuntimeSettingsCard({
   status,
   settings,
   capabilities,
-  onSave
+  onSave,
 }: {
   draft: ProbeSettingsDraft;
   setDraft: (draft: ProbeSettingsDraft) => void;
@@ -76,83 +225,225 @@ export function ProbeRuntimeSettingsCard({
   capabilities: RuntimeCapabilityMatrix;
   onSave: () => void;
 }) {
-  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
-  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) => setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
-  const setHooks = (patch: Partial<ProbeSettingsDraft["hooks"]>) => setDraft({ ...draft, hooks: { ...draft.hooks, ...patch } });
-  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
-  const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
+  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) =>
+    setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
+  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) =>
+    setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
+  const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) =>
+    setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
+
+  const visiblePlatforms = PROBE_NOTIFICATION_PLATFORMS.filter(platform => {
+    if (platform.id === "antigravity") return Boolean(capabilities.antigravityNotifications);
+    if (platform.id === "dsh") return Boolean(capabilities.dshNotifications);
+    return true;
+  });
+
   return (
     <fieldset className="probe-card-stack" disabled={saving}>
       <div className="settings-meta-grid">
-        <Metric label="通知" value={draft.notifications.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled ? "success" : "warning"} />
-        <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
+        <Metric
+          label="探针"
+          value={draft.probe.enabled ? "已启用" : "已停用"}
+          tone={draft.probe.enabled ? "success" : "warning"}
+        />
+        <Metric
+          label="通知"
+          value={draft.notifications.enabled ? "已启用" : "已停用"}
+          tone={draft.notifications.enabled ? "success" : "warning"}
+        />
         <Metric label="错误监控" value={probeStateLabel(status?.error_monitor_status ?? (draft.probe.error_monitor.enabled ? "enabled" : "disabled"))} tone={draft.probe.error_monitor.enabled ? "success" : "warning"} />
         <Metric label="错误事件" value={String(status?.error_monitor_incident_count ?? 0)} />
-        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
-        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex?.discovery_warnings ?? settings?.discovery_warnings)} wide />
+        {capabilities.codexStatePaths && (
+          <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />
+        )}
+        <Metric
+          label="Discovery"
+          value={probeDiscoveryWarningsText(
+            status?.discovery_warnings ?? settings?.codex?.discovery_warnings ?? settings?.discovery_warnings,
+          )}
+          wide
+        />
       </div>
-      <div className="form-grid compact-three">
-        {capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
-        <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
-        <label className="field-label">通知事件保留天数<input type="number" min={1} max={3650} value={draft.observability.event_retention_days} onChange={(event) => setObservability({ event_retention_days: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">通知事件保留天数<input type="number" min={1} max={3650} value={draft.observability.event_retention_days} onChange={(event) => setObservability({ event_retention_days: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">Hook 事件行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">冷却行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">日志上限 MB<input type="number" min={1} max={10} value={logBytesDraftToMb(draft.observability.log_max_bytes)} onChange={(event) => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })} /></label>
+
+      <div className="probe-platform-switch-section">
+        <div className="probe-platform-switch-header">
+          <strong>平台通知一键开关</strong>
+          <span>按平台一键接管完成、待回复、授权与失败推送，无需逐项勾选细粒度事件</span>
+        </div>
+        <div className="probe-platform-switch-grid">
+          {visiblePlatforms.map(platform => {
+            const enabled = isPlatformNotificationEnabled(draft, platform.id);
+            const runtimeStats = status?.provider_notifications?.find(
+              entry => entry.provider === platform.id,
+            );
+            return (
+              <label
+                key={platform.id}
+                className={`probe-platform-switch-card ${enabled ? "is-enabled" : ""}`}
+              >
+                <span className="probe-platform-switch-brand">
+                  <span className="agent-brand-badge" data-agent={platform.brand} aria-hidden="true">
+                    <AgentBrandIcon agent={platform.brand} size={17} />
+                  </span>
+                  <span className="probe-platform-switch-copy">
+                    <strong>{platform.label}</strong>
+                    <small>
+                      {platform.subtitle}
+                      {runtimeStats ? ` · ${runtimeStats.streams} 个会话` : ""}
+                    </small>
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  aria-label={`${platform.label} 通知`}
+                  checked={enabled}
+                  onChange={event =>
+                    setDraft(applyPlatformNotificationToggle(draft, platform.id, event.target.checked))
+                  }
+                />
+              </label>
+            );
+          })}
+        </div>
       </div>
+
       <div className="probe-toggle-grid">
-        <label className="toggle-row"><span>启用 Probe</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>终止错误监控</span><input type="checkbox" checked={draft.probe.error_monitor.enabled} onChange={(event) => setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })} /></label>
-        <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Codex 通知</span><input type="checkbox" checked={draft.notifications.notify_codex} onChange={(event) => setNotifications({ notify_codex: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Codex 完成</span><input type="checkbox" checked={draft.notifications.notify_completion} onChange={(event) => setNotifications({ notify_completion: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Grok 通知</span><input type="checkbox" checked={draft.notifications.notify_grok} onChange={(event) => setNotifications({ notify_grok: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Grok 完成</span><input type="checkbox" checked={draft.notifications.notify_grok_completion} onChange={(event) => setNotifications({ notify_grok_completion: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Grok 失败</span><input type="checkbox" checked={draft.notifications.notify_grok_failure} onChange={(event) => setNotifications({ notify_grok_failure: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Claude Code 通知</span><input type="checkbox" checked={draft.notifications.notify_claude} onChange={(event) => setNotifications({ notify_claude: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Claude Code 完成</span><input type="checkbox" checked={draft.notifications.notify_claude_completion} onChange={(event) => setNotifications({ notify_claude_completion: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Claude Code 失败</span><input type="checkbox" checked={draft.notifications.notify_claude_failure} onChange={(event) => setNotifications({ notify_claude_failure: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Claude Code 回复通知</span><input type="checkbox" checked={draft.notifications.notify_claude_reply_needed} onChange={(event) => setNotifications({ notify_claude_reply_needed: event.target.checked })} /></label>
-        <label className="toggle-row"><span title="包含 Plan、进行中的同步或异步提问，以及最终回复中明确等待确认或反馈的请求">Codex 回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Codex 异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
-        {capabilities.antigravityNotifications && <>
-          <label className="toggle-row"><span>Antigravity 通知</span><input type="checkbox" checked={draft.notifications.notify_antigravity} onChange={(event) => setNotifications({ notify_antigravity: event.target.checked })} /></label>
-          <label className="toggle-row"><span>Antigravity 完成</span><input type="checkbox" checked={draft.notifications.notify_antigravity_completion} onChange={(event) => setNotifications({ notify_antigravity_completion: event.target.checked })} /></label>
-          <label className="toggle-row"><span>Antigravity 失败</span><input type="checkbox" checked={draft.notifications.notify_antigravity_failure} onChange={(event) => setNotifications({ notify_antigravity_failure: event.target.checked })} /></label>
-          <label className="toggle-row"><span>Antigravity 需要回复</span><input type="checkbox" checked={draft.notifications.notify_antigravity_reply_needed} onChange={(event) => setNotifications({ notify_antigravity_reply_needed: event.target.checked })} /></label>
-          <label className="toggle-row"><span>Antigravity 需要授权</span><input type="checkbox" checked={draft.notifications.notify_antigravity_authorization} onChange={(event) => setNotifications({ notify_antigravity_authorization: event.target.checked })} /></label>
-        </>}
-        {capabilities.dshNotifications && <>
-          <label className="toggle-row"><span>DSH 通知</span><input type="checkbox" checked={draft.notifications.notify_dsh} onChange={(event) => setNotifications({ notify_dsh: event.target.checked })} /></label>
-          <label className="toggle-row"><span>DSH 完成</span><input type="checkbox" checked={draft.notifications.notify_dsh_completion} onChange={(event) => setNotifications({ notify_dsh_completion: event.target.checked })} /></label>
-          <label className="toggle-row"><span>DSH 失败</span><input type="checkbox" checked={draft.notifications.notify_dsh_failure} onChange={(event) => setNotifications({ notify_dsh_failure: event.target.checked })} /></label>
-          <label className="toggle-row"><span>DSH 需要回复</span><input type="checkbox" checked={draft.notifications.notify_dsh_reply_needed} onChange={(event) => setNotifications({ notify_dsh_reply_needed: event.target.checked })} /></label>
-          <label className="toggle-row"><span>DSH 需要授权</span><input type="checkbox" checked={draft.notifications.notify_dsh_authorization} onChange={(event) => setNotifications({ notify_dsh_authorization: event.target.checked })} /></label>
-        </>}
-        <label className="toggle-row"><span>管理 Codex Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
+        <label className="toggle-row">
+          <span>启用 Probe</span>
+          <input
+            type="checkbox"
+            checked={draft.probe.enabled}
+            onChange={event => setProbe({ enabled: event.target.checked })}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>终止错误监控</span>
+          <input
+            type="checkbox"
+            checked={draft.probe.error_monitor.enabled}
+            onChange={event =>
+              setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })
+            }
+          />
+        </label>
       </div>
-      {status?.provider_notifications?.map((provider) => <div key={provider.provider} className="muted-row">{provider.provider.toUpperCase()} · {provider.enabled ? "监控中" : "已停用"} · {provider.streams} 个会话 · {provider.read_errors} 个读取异常 · {provider.failed_deliveries} 次投递失败</div>)}
+
+      <div className="form-grid compact-three">
+        {capabilities.codexStatePaths && (
+          <label className="field-label">
+            Codex Home
+            <input
+              value={draft.codex.home}
+              placeholder="auto"
+              onChange={event => setCodex({ home: event.target.value })}
+            />
+          </label>
+        )}
+        <label className="field-label">
+          主机标签
+          <input
+            value={draft.codex.host_label}
+            onChange={event => setCodex({ host_label: event.target.value })}
+          />
+        </label>
+        <label className="field-label">
+          轮询秒数
+          <input
+            type="number"
+            min={5}
+            max={3600}
+            value={draft.probe.poll_seconds}
+            onChange={event => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })}
+          />
+        </label>
+        <label className="field-label">
+          最近事件数
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={draft.probe.recent_limit}
+            onChange={event => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })}
+          />
+        </label>
+        <label className="field-label">
+          通知事件保留天数
+          <input
+            type="number"
+            min={1}
+            max={3650}
+            value={draft.observability.event_retention_days}
+            onChange={event =>
+              setObservability({ event_retention_days: probeNumberInputDraftValue(event.target.value) })
+            }
+          />
+        </label>
+        <label className="field-label">
+          Hook 事件行数
+          <input
+            type="number"
+            min={1}
+            max={5000}
+            value={draft.observability.hook_event_max_lines}
+            onChange={event =>
+              setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })
+            }
+          />
+        </label>
+        <label className="field-label">
+          冷却行数
+          <input
+            type="number"
+            min={1}
+            max={5000}
+            value={draft.observability.hook_cooldown_max_lines}
+            onChange={event =>
+              setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })
+            }
+          />
+        </label>
+        <label className="field-label">
+          日志上限 MB
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={logBytesDraftToMb(draft.observability.log_max_bytes)}
+            onChange={event => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })}
+          />
+        </label>
+      </div>
+
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
-      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存设置</button>
+      {saveStatus && (
+        <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>
+          {saveStatus.message}
+        </div>
+      )}
+      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}>
+        <CheckCircle2 size={17} />保存设置
+      </button>
     </fieldset>
   );
 }
 
-
 export function ProbeHookCard({
   status,
   draft,
+  setDraft,
   busy,
-  onInstall
+  onInstall,
+  onRemove,
 }: {
   status?: ProbeStatus | null;
   draft?: ProbeSettingsDraft | null;
+  setDraft?: (draft: ProbeSettingsDraft) => void;
   busy?: boolean;
   onInstall: () => void;
+  onRemove?: () => void;
 }) {
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const removeButtonRef = useRef<HTMLButtonElement>(null);
   const hookStatus = status?.hook_status;
   const managed = hookStatus === "managed";
   const needsRepair = hookStatus === "stale" || hookStatus === "missing";
@@ -160,22 +451,78 @@ export function ProbeHookCard({
   const actualCommandCount = status?.actual_commands?.length ?? 0;
   const staleCommandCount = status?.stale_command_count ?? 0;
   const emptyGroupCount = status?.empty_group_count ?? 0;
+  const canRemove = Boolean(onRemove) && (managed || actualCommandCount > 0 || staleCommandCount > 0);
   const actualSummary = `${actualCommandCount} 条${staleCommandCount > 0 ? ` · 旧 ${staleCommandCount}` : ""}${emptyGroupCount > 0 ? ` · 空 ${emptyGroupCount}` : ""}`;
+
   return (
-    <div className="probe-card-stack">
-      <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
-      <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
-      <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} />
-      <Metric label="动作" value={needsRepair ? "重新安装 Hook" : "固定 Hook 安装 job"} />
-      <button className="secondary-button" disabled={busy} onClick={onInstall}><TerminalSquare size={17} />{needsRepair ? "重新安装 Hook" : "安装 Hook"}</button>
-    </div>
+    <>
+      <div className="probe-card-stack">
+        <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
+        <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
+        <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} />
+        {draft && setDraft && (
+          <label className="toggle-row">
+            <span>管理 Codex Hook</span>
+            <input
+              type="checkbox"
+              checked={draft.hooks.manage_stop_hook}
+              onChange={event =>
+                setDraft({ ...draft, hooks: { ...draft.hooks, manage_stop_hook: event.target.checked } })
+              }
+            />
+          </label>
+        )}
+        <div className="button-row">
+          <button className="secondary-button" disabled={busy} onClick={onInstall}>
+            <TerminalSquare size={17} />
+            {needsRepair ? "修复 Hook" : managed ? "重新安装 Hook" : "安装 Hook"}
+          </button>
+          {onRemove && (
+            <button
+              ref={removeButtonRef}
+              className="secondary-button"
+              disabled={busy || !canRemove}
+              onClick={() => setConfirmRemove(true)}
+            >
+              <Trash2 size={17} />移除 Hook
+            </button>
+          )}
+        </div>
+      </div>
+      {confirmRemove && onRemove && (
+        <ConfirmDialog
+          labelledBy="codex-hooks-remove-confirm"
+          busy={Boolean(busy)}
+          returnFocus={removeButtonRef}
+          onCancel={() => setConfirmRemove(false)}
+        >
+          <h3 id="codex-hooks-remove-confirm">移除 Codex Hook</h3>
+          <p>移除 NexusHub 托管的 Codex 通知 Hook 并关闭自动修复，保留其他第三方 Hook 配置。</p>
+          <div className="button-row">
+            <button className="secondary-button" disabled={busy} onClick={() => setConfirmRemove(false)}>
+              取消
+            </button>
+            <button
+              className="danger-button"
+              disabled={busy}
+              onClick={() => {
+                setConfirmRemove(false);
+                onRemove();
+              }}
+            >
+              确认移除
+            </button>
+          </div>
+        </ConfirmDialog>
+      )}
+    </>
   );
 }
 
 export function ProbeEventsCard({
   events,
   available,
-  loading
+  loading,
 }: {
   events: ProbeEvent[];
   available: boolean;
@@ -185,11 +532,11 @@ export function ProbeEventsCard({
     return <div className="muted-row">{loading ? "正在读取事件" : "事件接口不可用"}</div>;
   }
   if (events.length === 0) {
-    return <div className="muted-row">暂无最近 Hook 事件</div>;
+    return <div className="muted-row">暂无最近通知与 Hook 事件</div>;
   }
   return (
     <div className="preview-list compact">
-      {events.map((event) => (
+      {events.map(event => (
         <ProbeEventRow event={event} key={event.id} />
       ))}
     </div>
@@ -208,7 +555,7 @@ function ProbeEventRow({ event }: { event: ProbeEvent }) {
       <div className="probe-event-detail-row">
         <span className={`status-chip tone-${card.bark.tone}`}>{card.bark.label}</span>
         <span className={`status-chip tone-${card.dedupe.tone}`}>{card.dedupe.label}</span>
-        {card.details.map((detail) => (
+        {card.details.map(detail => (
           <span key={`${detail.label}:${detail.value}`}>{detail.label}: {detail.value}</span>
         ))}
         <span>{card.time}</span>

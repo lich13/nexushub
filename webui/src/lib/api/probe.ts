@@ -71,10 +71,12 @@ export async function runProbeHooksInstall(): Promise<{ job_id: string }> {
   return startProbeCommand("probe.installHooks", "probe-hooks-install");
 }
 
-
+export async function runProbeHooksRemove(): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.removeHooks", "probe-hooks-remove");
+}
 
 async function startProbeCommand(
-  command: "probe.barkTest" | "probe.installHooks",
+  command: "probe.barkTest" | "probe.installHooks" | "probe.removeHooks",
   fallback: string,
   ): Promise<{ job_id: string }> {
   if (USE_DEMO) return (await import("./demo")).demoJobId(fallback);

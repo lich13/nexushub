@@ -175,6 +175,7 @@ impl ProbeRuntime {
             running_threads: aggregation.running_threads,
             reply_needed_threads: aggregation.reply_needed_threads,
             recoverable_threads: aggregation.recoverable_threads,
+            active_sessions: aggregation.active_sessions,
             config_path: self.paths.config_file.clone(),
             codex_home: resolved.home.clone(),
             configured_codex_home: resolved.configured_codex_home.clone(),
@@ -312,6 +313,30 @@ impl ProbeRuntime {
                 }),
                 requires_confirmation: true,
                 command: "nexushub-webd probe hooks-install".to_string(),
+            }),
+            ProbeActionPlanKind::RemoveHooks => Ok(ProbeActionPlan {
+                plan_id: format!("probe-hooks-remove-{suffix}"),
+                kind: "hooks-remove".to_string(),
+                title: "卸载探针 Hook".to_string(),
+                summary: "备份 hooks.json 后精确移除 NexusHub 托管的 Codex Stop 与 PreToolUse Hook，保留用户自定义第三方 Hook".to_string(),
+                steps: vec![
+                    format!(
+                        "备份 {} 后移除 NexusHub 托管 Hook",
+                        self.resolved_codex_paths()
+                            .home
+                            .join("hooks.json")
+                            .display()
+                    ),
+                    "清理空组并保留其他第三方 Hook".to_string(),
+                    "将 manage_stop_hook 置为 false".to_string(),
+                ],
+                payload: json!({
+                    "codex_home": self.resolved_codex_paths().home,
+                    "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
+                    "codex_home_source": self.resolved_codex_paths().codex_home_source,
+                }),
+                requires_confirmation: true,
+                command: "nexushub-webd probe hooks-remove".to_string(),
             }),
         }
     }
@@ -705,7 +730,7 @@ fn probe_hook_matches_expected(
         && hook.get("async").is_none()
 }
 
-fn is_nexushub_managed_hook_command(command: &str) -> bool {
+pub fn is_nexushub_managed_hook_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
     (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
         && (lowered.contains("nexushubd")
@@ -715,10 +740,69 @@ fn is_nexushub_managed_hook_command(command: &str) -> bool {
             || lowered.contains("codex-sentinel"))
 }
 
+pub fn remove_nexushub_managed_hooks(root: &mut Value) -> bool {
+    let Some(hooks_object) = root.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    let mut empty_events = Vec::new();
+    for (event, event_hooks) in hooks_object.iter_mut() {
+        let Some(groups) = event_hooks.as_array_mut() else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            let Some(items) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let before = items.len();
+            items.retain(|item| {
+                item.get("command")
+                    .and_then(Value::as_str)
+                    .is_none_or(|command| !is_nexushub_managed_hook_command(command))
+            });
+            if items.len() != before {
+                changed = true;
+            }
+        }
+        let before_groups = groups.len();
+        groups.retain(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        });
+        if groups.len() != before_groups {
+            changed = true;
+        }
+        if groups.is_empty() {
+            empty_events.push(event.clone());
+        }
+    }
+    for event in empty_events {
+        hooks_object.remove(&event);
+        changed = true;
+    }
+    changed
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbeActionPlanKind {
     InstallHooks,
+    RemoveHooks,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeLiveSession {
+    pub provider: String,
+    pub id: String,
+    pub session_key: String,
+    pub title: String,
+    pub bucket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -789,6 +873,8 @@ pub struct ProbeStatus {
     pub running_threads: Vec<ThreadSummary>,
     pub reply_needed_threads: Vec<ThreadSummary>,
     pub recoverable_threads: Vec<ThreadSummary>,
+    #[serde(default)]
+    pub active_sessions: Vec<ProbeLiveSession>,
     pub config_path: PathBuf,
     pub codex_home: PathBuf,
     pub configured_codex_home: Option<String>,
@@ -2773,5 +2859,61 @@ Authorization: Bearer secret-token";
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{unique}"))
+    }
+
+    #[test]
+    fn remove_nexushub_managed_hooks_preserves_third_party_hooks_and_prunes_empty_groups() {
+        let mut root = json!({
+            "hooks": {
+                "Stop": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushub-webd --config /opt/nexushub/config.toml probe hook-stop"
+                            },
+                            {
+                                "type": "command",
+                                "command": "/usr/local/bin/custom-audit-hook --event stop"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "'/Library/Application Support/NexusHub/nexushub-webd' probe hook-stop"
+                            }
+                        ]
+                    }
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "^(functions\\.)?request_user_input(_async)?$",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushub-webd probe hook-request-user-input",
+                                "timeout": 5
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert!(remove_nexushub_managed_hooks(&mut root));
+        let stop_groups = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop_groups.len(), 1);
+        let stop_hooks = stop_groups[0]["hooks"].as_array().unwrap();
+        assert_eq!(stop_hooks.len(), 1);
+        assert_eq!(
+            stop_hooks[0]["command"],
+            "/usr/local/bin/custom-audit-hook --event stop"
+        );
+        assert!(root["hooks"].get("PreToolUse").is_none());
+        assert!(!remove_nexushub_managed_hooks(&mut root));
     }
 }

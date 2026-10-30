@@ -104,6 +104,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "ProbeBarkTestResponse",
     "ProbeEventsResponse",
     "ProbeInstallHooksResponse",
+    "ProbeRemoveHooksResponse",
     "ProbeSettingsGetResponse",
     "ProbeSettingsSaveRequest",
     "ProbeSettingsSaveResponse",

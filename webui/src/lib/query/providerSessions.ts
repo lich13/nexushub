@@ -23,7 +23,7 @@ import {
 import { compareSessionMessageTime } from "../domain/sessionSelection";
 import { machineScope, useConnection } from "./connection";
 import { providerHistoryAdapter } from "./historyWindows";
-import { preservePreviousQueryData, visiblePollInterval } from "./shared";
+import { preservePreviousQueryData } from "./shared";
 import { usePagedHistory } from "./usePagedHistory";
 
 export type ArchivableProviderId = "antigravity" | "dsh";
@@ -61,7 +61,7 @@ export function useProviderSessions(
         .slice()
         .sort(compareSessionMessageTime),
     enabled: enabled && !connection.changing,
-    refetchInterval: enabled ? visiblePollInterval(5000) : false,
+    refetchInterval: enabled ? 5000 : false,
     placeholderData: preservePreviousQueryData,
   });
 }

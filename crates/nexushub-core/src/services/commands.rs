@@ -68,6 +68,7 @@ pub const PROBE_SETTINGS_SAVE: &str = "probe.settings.save";
 pub const PROBE_EVENTS: &str = "probe.events";
 pub const PROBE_BARK_TEST: &str = "probe.barkTest";
 pub const PROBE_INSTALL_HOOKS: &str = "probe.installHooks";
+pub const PROBE_REMOVE_HOOKS: &str = "probe.removeHooks";
 pub const UPDATES_STATUS: &str = "updates.status";
 pub const UPDATES_CHECK: &str = "updates.check";
 pub const UPDATES_INSTALL: &str = "updates.install";
@@ -105,6 +106,7 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     PROBE_EVENTS,
     PROBE_BARK_TEST,
     PROBE_INSTALL_HOOKS,
+    PROBE_REMOVE_HOOKS,
     UPDATES_STATUS,
     UPDATES_CHECK,
     UPDATES_INSTALL,
@@ -255,6 +257,7 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     PROBE_EVENTS,
     PROBE_BARK_TEST,
     PROBE_INSTALL_HOOKS,
+    PROBE_REMOVE_HOOKS,
     UPDATES_STATUS,
     UPDATES_CHECK,
     UPDATES_INSTALL,

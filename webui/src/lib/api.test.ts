@@ -459,7 +459,8 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
     await expect(api.runProbeBarkTest()).resolves.toEqual({ job_id: "bark-job-1" });
     await expect(api.runProbeHooksInstall()).resolves.toEqual({ job_id: "bark-job-1" });
-    expect(invokeMock.mock.calls.map(([path]) => path)).toEqual(["probe.barkTest", "probe.installHooks"]);
+    await expect(api.runProbeHooksRemove()).resolves.toEqual({ job_id: "bark-job-1" });
+    expect(invokeMock.mock.calls.map(([path]) => path)).toEqual(["probe.barkTest", "probe.installHooks", "probe.removeHooks"]);
     for (const name of ["getProbeLogsDbStatus", "runProbeLogsDbDryRun", "runProbeLogsDbExecute"]) expect(api).not.toHaveProperty(name);
   });
 
@@ -958,6 +959,7 @@ describe("archive delete API compatibility", () => {
       "probe.barkTest",
       "probe.events",
       "probe.installHooks",
+      "probe.removeHooks",
       "probe.settings.get",
       "probe.settings.save",
       "probe.status",

@@ -408,6 +408,7 @@ async fn rpc_probe_typed_commands_start_matching_jobs() {
     for (command, kind) in [
         ("probe.barkTest", "probe_bark_test"),
         ("probe.installHooks", "probe_hooks_install"),
+        ("probe.removeHooks", "probe_hooks_remove"),
     ] {
         let (state, api_key) = authenticated_test_state();
         let app = router(state.clone());
@@ -568,6 +569,7 @@ fn linux_probe_process_command_preserves_paths_as_literal_arguments() {
     let cases = [
         (ProbeAction::BarkTest, "bark-test"),
         (ProbeAction::InstallHooks, "hooks-install"),
+        (ProbeAction::RemoveHooks, "hooks-remove"),
     ];
 
     for (action, subcommand) in cases {
@@ -1121,9 +1123,6 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
 
 #[tokio::test]
 async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
-    let (state, api_key) = authenticated_test_state();
-    let app = router(state.clone());
-
     for (command, kind, title, forbidden_arg) in [
         (
             "probe.installHooks",
@@ -1132,13 +1131,21 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
             "codex-sentinel",
         ),
         (
+            "probe.removeHooks",
+            "probe_hooks_remove",
+            "探针 Hook 移除",
+            "codex-sentinel",
+        ),
+        (
             "probe.barkTest",
             "probe_bark_test",
             "NexusHub 推送测试",
             "device_key",
         ),
-    ] as [(&str, &str, &str, &str); 2]
+    ] as [(&str, &str, &str, &str); 3]
     {
+        let (state, api_key) = authenticated_test_state();
+        let app = router(state.clone());
         let invalid_key =
             request_rpc_status(app.clone(), command, "{}", Some("nhk_invalid_fixture")).await;
         assert_eq!(invalid_key, StatusCode::UNAUTHORIZED, "{command}");
@@ -1151,6 +1158,8 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         assert!(!job.output.contains(forbidden_arg));
     }
 
+    let (state, api_key) = authenticated_test_state();
+    let app = router(state);
     for command in [
         "probe.logsDb.status",
         "probe.logsDbDryRun",

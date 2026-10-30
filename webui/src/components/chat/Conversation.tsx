@@ -1,7 +1,8 @@
 import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
-import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, FolderOpen, Pencil, Trash2, X } from "lucide-react";
+import { canRevealLocalPath, revealLocalPath } from "../../lib/api/filePaths";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
@@ -253,6 +254,7 @@ export function Conversation(props: {
             <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
             <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
             <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
+            <button disabled={!canRevealLocalPath() || !detail.summary.rollout_path} title={!canRevealLocalPath() ? "仅可在本机 Finder 中显示本机会话" : !detail.summary.rollout_path ? "当前会话暂无本地文件路径" : undefined} onClick={() => { if (!detail.summary.rollout_path) return; void revealLocalPath(detail.summary.rollout_path).catch(() => setFeedback("无法在 Finder 中显示，请检查文件是否仍存在")); }}><FolderOpen size={15} />在 Finder 中显示</button>
             <button className="danger-menu-item" disabled={actions.isPending || deletion.busy} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
           </TaskMenu>
         </div>

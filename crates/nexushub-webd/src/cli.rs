@@ -87,6 +87,10 @@ pub(super) enum ProbeCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    HooksRemove {
+        #[arg(long)]
+        dry_run: bool,
+    },
     NotifyCompletion {
         #[arg(long)]
         thread_id: Option<String>,

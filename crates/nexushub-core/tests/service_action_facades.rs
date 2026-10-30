@@ -47,6 +47,14 @@ fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
         ProbeAction::InstallHooks.as_desktop_command(),
         commands::PROBE_INSTALL_HOOKS
     );
+    assert_eq!(
+        ProbeAction::RemoveHooks.as_rpc_action(),
+        commands::PROBE_REMOVE_HOOKS
+    );
+    assert_eq!(
+        ProbeAction::RemoveHooks.as_desktop_command(),
+        commands::PROBE_REMOVE_HOOKS
+    );
 
     assert_eq!(UpdateAction::Check.as_rpc_action(), commands::UPDATES_CHECK);
     assert_eq!(
@@ -80,6 +88,14 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
     assert_eq!(
         "installHooks".parse::<ProbeAction>().unwrap(),
         ProbeAction::InstallHooks
+    );
+    assert_eq!(
+        "removeHooks".parse::<ProbeAction>().unwrap(),
+        ProbeAction::RemoveHooks
+    );
+    assert_eq!(
+        "hooks-remove".parse::<ProbeAction>().unwrap(),
+        ProbeAction::RemoveHooks
     );
     assert!("unknown".parse::<ProbeAction>().is_err());
 

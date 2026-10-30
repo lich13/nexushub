@@ -703,12 +703,19 @@ describe("conversation helpers", () => {
     expect(conversationSource).not.toMatch(/管理员|Turnstile|setGoal|sendMessage|approvalAction/);
   });
 
-  test("probe workspace labels the paired lifecycle hooks as Codex Hook", () => {
+  test("probe workspace labels the paired lifecycle hooks as Codex Hook and supports hook removal, platform master toggles, and single retention input", async () => {
     const probeSource = extractProbeWorkspaceSource();
+    const { grokResumeCommand } = await import("./components/grok/GrokWorkspace");
 
     expect(probeSource).toContain('<Metric label="Codex Hook"');
     expect(probeSource).toContain("<span>管理 Codex Hook</span>");
+    expect(probeSource).toContain("移除 Hook");
+    expect(probeSource).toContain('"hooks-remove"');
+    expect(probeSource).toContain("平台通知一键开关");
+    expect(probeSource).not.toContain("probe-status-banner");
     expect(probeSource).not.toContain('<Metric label="Stop Hook"');
+    expect((probeCardsSource.match(/通知事件保留天数/g) ?? []).length).toBe(1);
+    expect(grokResumeCommand("/tmp/my work", "grok-123")).toBe("cd -- '/tmp/my work' && grok --resume 'grok-123'");
   });
 
   test("probe workspace exposes terminal error monitor controls and runtime status", () => {

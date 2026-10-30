@@ -484,6 +484,16 @@ export type PluginInfo = {
   invocation_template?: string | null;
 };
 
+export type ProbeLiveSession = {
+  provider: "codex" | "claude_code" | "grok" | "antigravity" | "dsh" | string;
+  id: string;
+  session_key: string;
+  title: string;
+  bucket: "running" | "reply_needed" | "recoverable" | string;
+  updated_at?: string | null;
+  cwd?: string | null;
+};
+
 export type ProbeStatus = {
   provider_notifications?: { provider: "grok" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
   label?: string | null;
@@ -506,6 +516,7 @@ export type ProbeStatus = {
   running_threads?: ThreadSummary[];
   reply_needed_threads?: ThreadSummary[];
   recoverable_threads?: ThreadSummary[];
+  active_sessions?: ProbeLiveSession[];
   config_path: string;
   lifecycle_status?: string | null;
   doctor_status?: string | null;
@@ -545,7 +556,7 @@ export type ProbeEventsResponse = {
   limit?: number | null;
 };
 
-export type ProbeJobAction = "bark-test" | "hooks-install";
+export type ProbeJobAction = "bark-test" | "hooks-install" | "hooks-remove";
 
 export type ProbeSettings = {
   codex: {
@@ -581,6 +592,7 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
+      notify_grok_reply_needed?: boolean;
     notify_claude?: boolean;
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;
@@ -621,6 +633,7 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
+      notify_grok_reply_needed?: boolean;
     notify_claude?: boolean;
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;

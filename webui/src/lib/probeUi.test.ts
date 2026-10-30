@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 import type { ProbeEvent, ProbeSettings } from "../types";
 import {
+  applyPlatformNotificationToggle,
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
+  isPlatformNotificationEnabled,
   PROBE_NAV_LABEL,
   probeEventCard,
   probeEventDisplay,
@@ -58,10 +60,10 @@ const settings: ProbeSettings = {
 };
 
 describe("Probe UI helpers", () => {
-  test("uses Chinese probe labels and only slim first-screen sections", () => {
+  test("uses Chinese probe labels and unified sections including Hooks management", () => {
     expect(PROBE_NAV_LABEL).toBe("Probe");
-    expect(probeSections.map((section) => section.id)).toEqual(["events", "settings"]);
-    expect(probeSections.map((section) => section.label)).toEqual(["最近事件", "通知配置"]);
+    expect(probeSections.map((section) => section.id)).toEqual(["events", "settings", "hooks"]);
+    expect(probeSections.map((section) => section.label)).toEqual(["最近事件", "通知配置", "Hooks 管理"]);
   });
 
   test("builds readable event display details without exposing secret payload values", () => {
@@ -398,6 +400,7 @@ describe("Probe UI helpers", () => {
           notify_grok: true,
           notify_grok_completion: true,
           notify_grok_failure: true,
+          notify_grok_reply_needed: true,
           notify_claude: true,
           notify_claude_completion: true,
           notify_claude_failure: true,
@@ -638,4 +641,26 @@ test("local providers default off and all four categories survive a settings rou
       expect(payload.probe.notifications?.[`notify_${provider}${suffix}`]).toBe(true);
     }
   }
+});
+
+test("one-click platform notification switches toggle all sub-events and grok reply_needed", () => {
+  let draft = buildProbeSettingsDraft(settings);
+  expect(draft.notifications.notify_grok_reply_needed).toBe(true);
+  expect(isPlatformNotificationEnabled(draft, "grok")).toBe(true);
+
+  draft = applyPlatformNotificationToggle(draft, "grok", false);
+  expect(isPlatformNotificationEnabled(draft, "grok")).toBe(false);
+  expect(draft.notifications.notify_grok).toBe(false);
+  expect(draft.notifications.notify_grok_completion).toBe(false);
+  expect(draft.notifications.notify_grok_failure).toBe(false);
+  expect(draft.notifications.notify_grok_reply_needed).toBe(false);
+
+  draft = applyPlatformNotificationToggle(draft, "antigravity", true);
+  expect(isPlatformNotificationEnabled(draft, "antigravity")).toBe(true);
+  expect(draft.notifications.notify_antigravity_reply_needed).toBe(true);
+  expect(draft.notifications.notify_antigravity_authorization).toBe(true);
+
+  draft = applyPlatformNotificationToggle(draft, "codex", false);
+  expect(isPlatformNotificationEnabled(draft, "codex")).toBe(false);
+  expect(draft.probe.error_monitor.enabled).toBe(false);
 });

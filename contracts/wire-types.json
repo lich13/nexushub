@@ -300,6 +300,10 @@
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
     },
+    "ProbeRemoveHooksResponse": {
+      "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
+      "inlineTs": "Existing inline generic or primitive payload; checked in wrapper AST and action registry."
+    },
     "ProbeSettingsGetResponse": {
       "rust": "crates/nexushub-core/src/services/settings.rs#SettingsView",
       "ts": "webui/src/types.ts#ProbeSettings"
@@ -2859,6 +2863,13 @@
             "type": "bool"
           },
           {
+            "name": "notify_grok_reply_needed",
+            "serde": [
+              "serde (default = \"default_true\")"
+            ],
+            "type": "bool"
+          },
+          {
             "name": "notify_claude",
             "serde": [
               "serde (default = \"default_true\")"
@@ -3019,6 +3030,11 @@
           },
           {
             "name": "notify_grok_failure",
+            "serde": [],
+            "type": "Option < bool >"
+          },
+          {
+            "name": "notify_grok_reply_needed",
             "serde": [],
             "type": "Option < bool >"
           },
@@ -4391,6 +4407,11 @@
             "fields": [],
             "name": "InstallHooks",
             "serde": []
+          },
+          {
+            "fields": [],
+            "name": "RemoveHooks",
+            "serde": []
           }
         ]
       },
@@ -4804,6 +4825,51 @@
         "kind": "struct",
         "serde": []
       },
+      "ProbeLiveSession": {
+        "fields": [
+          {
+            "name": "provider",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "id",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "session_key",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "title",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "bucket",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "cwd",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          }
+        ],
+        "kind": "struct",
+        "serde": []
+      },
       "ProbeStatus": {
         "fields": [
           {
@@ -4997,6 +5063,13 @@
             "name": "recoverable_threads",
             "serde": [],
             "type": "Vec < ThreadSummary >"
+          },
+          {
+            "name": "active_sessions",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Vec < ProbeLiveSession >"
           },
           {
             "name": "config_path",
@@ -7532,6 +7605,13 @@
             "serde": [
               "serde (rename = \"installHooks\" , alias = \"hooks-install\")"
             ]
+          },
+          {
+            "fields": [],
+            "name": "RemoveHooks",
+            "serde": [
+              "serde (rename = \"removeHooks\" , alias = \"hooks-remove\")"
+            ]
           }
         ]
       },
@@ -8471,6 +8551,11 @@
             "type": "Option < bool >"
           },
           {
+            "name": "notify_grok_reply_needed",
+            "serde": [],
+            "type": "Option < bool >"
+          },
+          {
             "name": "notify_claude_reply_needed",
             "serde": [],
             "type": "Option < bool >"
@@ -8620,6 +8705,11 @@
           },
           {
             "name": "notify_grok_failure",
+            "serde": [],
+            "type": "bool"
+          },
+          {
+            "name": "notify_grok_reply_needed",
             "serde": [],
             "type": "bool"
           },
@@ -11052,6 +11142,9 @@
         "fn plan_probe_action_with_config_path (config : & Config , platform : & PlatformPaths , action : ProbeAction , config_path : impl AsRef < Path > ,) -> Result < ProbeActionPlan >",
         "fn plan_probe_action_with_device_key (config : & Config , platform : & PlatformPaths , action : ProbeAction , device_key_configured : bool ,) -> Result < ProbeActionPlan >",
         "fn plan_probe_action_with_device_key_and_config_path (config : & Config , platform : & PlatformPaths , action : ProbeAction , device_key_configured : bool , config_path : impl AsRef < Path > ,) -> Result < ProbeActionPlan >",
+        "fn resolve_provider_sandbox_root (config : & Config) -> Option < std :: path :: PathBuf >",
+        "fn native_stream_live_bucket (stream : & crate :: native_probe :: NativeStreamSnapshot , now_ms : i64 ,) -> Option < & 'static str >",
+        "fn aggregate_active_sessions (config : & Config , limit : usize , running_threads : & [ThreadSummary] , reply_needed_threads : & [ThreadSummary] , recoverable_threads : & [ThreadSummary] ,) -> Vec < probe_core :: ProbeLiveSession >",
         "fn aggregate_probe_status (config : & Config) -> ProbeStatusAggregation",
         "fn probe_threads_for_status (config : & Config , status : & str , limit : usize ,) -> Result < Vec < ThreadSummary > >",
         "fn probe_threads_for_status_with_paths (paths : & CodexPaths , panel_db_path : & Path , status : & str , limit : usize ,) -> Result < Vec < ThreadSummary > >",
@@ -11553,6 +11646,7 @@
         "fn saveProbeSettings (state : tauri :: State < '_ , DesktopState > , settings : ProbeSettingsSaveRequest ,) -> Result < DesktopProbeSettings , String >",
         "fn probeBarkTest (state : tauri :: State < '_ , DesktopState > ,) -> Result < DesktopActionResponse , String >",
         "fn probeInstallHooks (state : tauri :: State < '_ , DesktopState > ,) -> Result < DesktopActionResponse , String >",
+        "fn probeRemoveHooks (state : tauri :: State < '_ , DesktopState > ,) -> Result < DesktopActionResponse , String >",
         "fn getProbeEvents (state : tauri :: State < '_ , DesktopState > , limit : Option < u32 > ,) -> Result < DesktopProbeEventsResponse , String >",
         "fn dryRunArchiveDelete (state : tauri :: State < '_ , DesktopState > ,) -> Result < nexushub_core :: archive :: ArchiveDeletePlan , String >",
         "fn startArchiveDelete (state : tauri :: State < '_ , DesktopState > , request : DesktopCleanupExecuteRequest ,) -> Result < nexushub_core :: archive :: ArchiveDeleteResult , String >",
@@ -11875,6 +11969,7 @@
         "callCommand<ProbeEventsResponse|OptionalResult<ProbeEventsResponse>>(\"probe.events\",{limit})",
         "startProbeCommand(\"probe.barkTest\",\"probe-bark-test\")",
         "startProbeCommand(\"probe.installHooks\",\"probe-hooks-install\")",
+        "startProbeCommand(\"probe.removeHooks\",\"probe-hooks-remove\")",
         "callCommand<{job_id?:string|null;jobId?:string|null}>(command,{})",
         "callCommand(\"claude.hooks\",{request:{action,confirmed}})"
       ]
@@ -12047,11 +12142,12 @@
         "AgentProviderInfo": "exporttypeAgentProviderInfo={id:\"codex\"|\"grok_build\"|\"cursor\"|\"gemini\"|string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;description?:string;capabilities?:string[];safety?:string;};",
         "PlatformOverview": "exporttypePlatformOverview={kind:\"linux\"|\"macos\"|\"windows\"|string;data_dir:string;config_file:string;log_dir:string;service_name:string;service_kind:string;};",
         "PluginInfo": "exporttypePluginInfo={id:string;label:string;status:\"ready\"|\"preview\"|\"planned\"|string;kind:\"builtin\"|\"external\"|string;description?:string|null;unavailable_reason?:string|null;invocation_template?:string|null;};",
-        "ProbeStatus": "exporttypeProbeStatus={provider_notifications?:{provider:\"grok\"|\"claude_code\";enabled:boolean;last_scan_at:number;streams:number;read_errors:number;failed_deliveries:number;pending_deliveries:number;failure_supported:boolean}[];label?:string|null;enabled:boolean;available?:boolean|null;platform:\"linux\"|\"macos\"|\"windows\"|string;service_kind:string;service_name:string;flavor?:string|null;hook_status:string;hook_command?:string|null;actual_commands?:string[]|null;stale_command_count?:number|null;empty_group_count?:number|null;bark_status:string;recent_event_count:number;running_count:number;reply_needed_count:number;recoverable_count:number;running_threads?:ThreadSummary[];reply_needed_threads?:ThreadSummary[];recoverable_threads?:ThreadSummary[];config_path:string;lifecycle_status?:string|null;doctor_status?:string|null;runtime_version?:string|null;codex_home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;host_label?:string|null;snapshot_age_seconds?:number|null;is_refreshing?:boolean|null;snapshot_status?:string|null;error_monitor_enabled?:boolean|null;error_monitor_status?:string|null;error_monitor_last_scan_at?:string|number|null;error_monitor_last_error?:string|null;error_monitor_incident_count?:number|null;};",
+        "ProbeLiveSession": "exporttypeProbeLiveSession={provider:\"codex\"|\"claude_code\"|\"grok\"|\"antigravity\"|\"dsh\"|string;id:string;session_key:string;title:string;bucket:\"running\"|\"reply_needed\"|\"recoverable\"|string;updated_at?:string|null;cwd?:string|null;};",
+        "ProbeStatus": "exporttypeProbeStatus={provider_notifications?:{provider:\"grok\"|\"claude_code\";enabled:boolean;last_scan_at:number;streams:number;read_errors:number;failed_deliveries:number;pending_deliveries:number;failure_supported:boolean}[];label?:string|null;enabled:boolean;available?:boolean|null;platform:\"linux\"|\"macos\"|\"windows\"|string;service_kind:string;service_name:string;flavor?:string|null;hook_status:string;hook_command?:string|null;actual_commands?:string[]|null;stale_command_count?:number|null;empty_group_count?:number|null;bark_status:string;recent_event_count:number;running_count:number;reply_needed_count:number;recoverable_count:number;running_threads?:ThreadSummary[];reply_needed_threads?:ThreadSummary[];recoverable_threads?:ThreadSummary[];active_sessions?:ProbeLiveSession[];config_path:string;lifecycle_status?:string|null;doctor_status?:string|null;runtime_version?:string|null;codex_home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;host_label?:string|null;snapshot_age_seconds?:number|null;is_refreshing?:boolean|null;snapshot_status?:string|null;error_monitor_enabled?:boolean|null;error_monitor_status?:string|null;error_monitor_last_scan_at?:string|number|null;error_monitor_last_error?:string|null;error_monitor_incident_count?:number|null;};",
         "ProbeEvent": "exporttypeProbeEvent={id:string;kind:string;thread_id?:string|null;title?:string|null;message?:string|null;dedupe_key?:string|null;source:string;payload:Record<string,unknown>;created_at:string|number;handled_at?:string|number|null;};",
         "ProbeEventsResponse": "exporttypeProbeEventsResponse={events:ProbeEvent[];limit?:number|null;};",
-        "ProbeJobAction": "exporttypeProbeJobAction=\"bark-test\"|\"hooks-install\";",
-        "ProbeSettings": "exporttypeProbeSettings={codex:{home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;workspace?:string|null;host_label:string;};probe:Record<string,unknown>&{enabled?:boolean;poll_seconds?:number;recent_limit?:number;hooks?:Record<string,unknown>&{manage_stop_hook?:boolean;};error_monitor?:Record<string,unknown>&{enabled?:boolean;};notifications?:Record<string,unknown>&{enabled?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};observability?:Record<string,unknown>&{event_retention_days?:number;hook_event_max_lines?:number;hook_cooldown_max_lines?:number;log_max_bytes?:number;};};discovery_warnings?:string[]|null;notifications:Record<string,unknown>&{enabled?:boolean;device_key?:string;device_key_configured?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};};",
+        "ProbeJobAction": "exporttypeProbeJobAction=\"bark-test\"|\"hooks-install\"|\"hooks-remove\";",
+        "ProbeSettings": "exporttypeProbeSettings={codex:{home?:string|null;configured_codex_home?:string|null;resolved_codex_home?:string|null;codex_home_source?:string|null;logs_db_source?:string|null;discovery_warnings?:string[]|null;workspace?:string|null;host_label:string;};probe:Record<string,unknown>&{enabled?:boolean;poll_seconds?:number;recent_limit?:number;hooks?:Record<string,unknown>&{manage_stop_hook?:boolean;};error_monitor?:Record<string,unknown>&{enabled?:boolean;};notifications?:Record<string,unknown>&{enabled?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};observability?:Record<string,unknown>&{event_retention_days?:number;hook_event_max_lines?:number;hook_cooldown_max_lines?:number;log_max_bytes?:number;};};discovery_warnings?:string[]|null;notifications:Record<string,unknown>&{enabled?:boolean;device_key?:string;device_key_configured?:boolean;server_url?:string;sound?:string|null;group?:string;url?:string|null;notify_completion?:boolean;notify_reply_needed?:boolean;notify_recoverable?:boolean;notify_codex?:boolean;notify_grok?:boolean;notify_grok_completion?:boolean;notify_grok_failure?:boolean;notify_grok_reply_needed?:boolean;notify_claude?:boolean;notify_claude_completion?:boolean;notify_claude_failure?:boolean;notify_claude_reply_needed?:boolean;notify_antigravity?:boolean;notify_antigravity_completion?:boolean;notify_antigravity_failure?:boolean;notify_antigravity_reply_needed?:boolean;notify_antigravity_authorization?:boolean;notify_dsh?:boolean;notify_dsh_completion?:boolean;notify_dsh_failure?:boolean;notify_dsh_reply_needed?:boolean;notify_dsh_authorization?:boolean;};};",
         "CodexConfig": "exporttypeCodexConfig={model?:string|null;service_tier?:string|null;reasoning_effort?:string|null;cwd?:string|null;permission_profile?:string|null;approval_policy?:string|null;sandbox_mode?:string|null;network_access?:boolean|null;collaboration_mode?:string|null;};",
         "ClaudeHooksAction": "exporttypeClaudeHooksAction=\"status\"|\"install\"|\"remove\";",
         "ClaudeHooksRequest": "exporttypeClaudeHooksRequest={action:ClaudeHooksAction;confirmed?:boolean};",
