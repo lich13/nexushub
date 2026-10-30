@@ -17,6 +17,10 @@ import type {
   ThreadBlockPage,
   ThreadDetail,
   ThreadSummary,
+  UnifiedCleanupDryRunRequest,
+  UnifiedCleanupExecuteRequest,
+  UnifiedCleanupPlan,
+  UnifiedCleanupResult,
   UpdateStatus
 } from "../../types";
 import {
@@ -441,6 +445,141 @@ export function demoHiddenThreadDeleteResult(): HiddenThreadDeleteResult {
     hidden_threads: 0,
     integrity: "ok",
     deleted_rollout_files: 4
+  };
+}
+
+export function demoUnifiedCleanupPlan(
+  fixture: DemoFixtureKey = "macos-tauri",
+  request?: UnifiedCleanupDryRunRequest
+): UnifiedCleanupPlan {
+  const scanHidden = request?.includeCodexHidden !== false || Boolean(request?.scopes?.includes("codex_hidden"));
+  const macos = fixture === "macos-tauri";
+  const allScopes = [
+    {
+      scope: "codex_archived",
+      provider: "codex",
+      label: "Codex 已归档线程",
+      supported: true,
+      scanned: true,
+      unavailableReason: null,
+      candidateCount: 2,
+      deletableCount: 2,
+      estimatedBytes: 24576,
+      candidates: [
+        { id: "019e-demo-a", title: "旧归档线程 A", estimatedBytes: 12288, blockedReason: null },
+        { id: "019e-demo-b", title: "旧归档线程 B", estimatedBytes: 12288, blockedReason: null }
+      ],
+      issues: []
+    },
+    {
+      scope: "codex_hidden",
+      provider: "codex",
+      label: "Codex 隐藏线程",
+      supported: true,
+      scanned: scanHidden,
+      unavailableReason: null,
+      candidateCount: scanHidden ? 4 : 0,
+      deletableCount: scanHidden ? 4 : 0,
+      estimatedBytes: scanHidden ? 16384 : 0,
+      candidates: scanHidden
+        ? ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"].map((id) => ({
+            id,
+            title: id,
+            estimatedBytes: 4096,
+            blockedReason: null
+          }))
+        : [],
+      issues: []
+    },
+    {
+      scope: "antigravity_archived",
+      provider: "antigravity",
+      label: "Antigravity 已归档线程",
+      supported: macos,
+      scanned: macos,
+      unavailableReason: macos ? null : "仅本机 macOS 支持 Antigravity 会话清理",
+      candidateCount: macos ? 1 : 0,
+      deletableCount: macos ? 1 : 0,
+      estimatedBytes: macos ? 8192 : 0,
+      candidates: macos
+        ? [{ id: "ag:ag-archived-demo", title: "Antigravity 历史归档会话", estimatedBytes: 8192, blockedReason: null }]
+        : [],
+      issues: []
+    },
+    {
+      scope: "dsh_archived",
+      provider: "dsh",
+      label: "DeepSeek Harness 已归档线程",
+      supported: true,
+      scanned: true,
+      unavailableReason: null,
+      candidateCount: 1,
+      deletableCount: 1,
+      estimatedBytes: 6144,
+      candidates: [{ id: "dsh-archived-demo", title: "DSH 历史归档会话", estimatedBytes: 6144, blockedReason: null }],
+      issues: []
+    },
+    {
+      scope: "claude_empty",
+      provider: "claude",
+      label: "Claude Code 空残余会话",
+      supported: true,
+      scanned: true,
+      unavailableReason: null,
+      candidateCount: 1,
+      deletableCount: 1,
+      estimatedBytes: 1024,
+      candidates: [{ id: "claude:empty-demo", title: "空会话残余", estimatedBytes: 1024, blockedReason: null }],
+      issues: []
+    },
+    {
+      scope: "grok_empty",
+      provider: "grok",
+      label: "Grok Build 空残余会话",
+      supported: true,
+      scanned: true,
+      unavailableReason: null,
+      candidateCount: 0,
+      deletableCount: 0,
+      estimatedBytes: 0,
+      candidates: [],
+      issues: []
+    }
+  ];
+  const scopes = request?.scopes?.length
+    ? allScopes.filter((item) => request.scopes!.includes(item.scope))
+    : allScopes;
+  return {
+    totalCandidates: scopes.reduce((sum, item) => sum + item.candidateCount, 0),
+    totalDeletable: scopes.reduce((sum, item) => sum + item.deletableCount, 0),
+    totalEstimatedBytes: scopes.reduce((sum, item) => sum + item.estimatedBytes, 0),
+    scopes
+  };
+}
+
+export function demoUnifiedCleanupResult(request?: UnifiedCleanupExecuteRequest): UnifiedCleanupResult {
+  const plan = demoUnifiedCleanupPlan("macos-tauri", { includeCodexHidden: true });
+  const selected = request?.scopes?.length
+    ? plan.scopes.filter((item) => request.scopes!.includes(item.scope))
+    : plan.scopes.filter((item) => item.deletableCount > 0);
+  const scopes = selected.map((item) => ({
+    scope: item.scope,
+    provider: item.provider,
+    label: item.label,
+    deletedCount: item.deletableCount,
+    skippedCount: 0,
+    failedCount: 0,
+    deletedBytes: item.estimatedBytes,
+    residuals: [],
+    issues: []
+  }));
+  return {
+    deletedCount: scopes.reduce((sum, item) => sum + item.deletedCount, 0),
+    skippedCount: 0,
+    failedCount: 0,
+    deletedBytes: scopes.reduce((sum, item) => sum + item.deletedBytes, 0),
+    stoppedEarly: false,
+    scopes
   };
 }
 

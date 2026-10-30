@@ -1,53 +1,51 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
+import type { UnifiedCleanupPlan, UnifiedCleanupResult } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
-import { CleanupPagination, OpsWorkspace } from "./OpsWorkspace";
+import { CleanupPagination, UnifiedThreadCleanup } from "./UnifiedThreadCleanup";
 
 const harness = vi.hoisted(() => ({
   index: 0,
   cells: new Map<number, unknown>(),
-  opsInput: null as any,
-  opsActions: null as any
+  unifiedInput: null as any,
+  unifiedActions: null as any
 }));
 
-vi.mock("./DshArchiveCleanup", () => ({ DshArchiveCleanup: () => null }));
-
-vi.mock("react", async importOriginal => {
+vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
     ...actual,
     useState: (initial: unknown) => {
       const index = harness.index++;
       if (!harness.cells.has(index)) {
-        harness.cells.set(index, typeof initial === "function" ? (initial as () => unknown)() : initial);
+        harness.cells.set(
+          index,
+          typeof initial === "function" ? (initial as () => unknown)() : initial
+        );
       }
-      return [harness.cells.get(index), (value: unknown) => {
-        const current = harness.cells.get(index);
-        harness.cells.set(index, typeof value === "function"
-          ? (value as (previous: unknown) => unknown)(current)
-          : value);
-      }];
+      return [
+        harness.cells.get(index),
+        (value: unknown) => {
+          const current = harness.cells.get(index);
+          harness.cells.set(
+            index,
+            typeof value === "function"
+              ? (value as (previous: unknown) => unknown)(current)
+              : value
+          );
+        }
+      ];
     }
   };
 });
 
 vi.mock("../../lib/query/ops", () => ({
-  useOpsQueries: () => ({
-    update: { data: null, isPending: false, error: null },
-    jobs: { data: [], error: null }
-  }),
-  useOpsActions: (input: unknown) => {
-    harness.opsInput = input;
-    return harness.opsActions;
+  useUnifiedCleanupActions: (input: unknown) => {
+    harness.unifiedInput = input;
+    return harness.unifiedActions;
   }
 }));
-
-vi.mock("../../lib/query/jobs", async importOriginal => {
-  const actual = await importOriginal<typeof import("../../lib/query/jobs")>();
-  return { ...actual, useStartedJob: () => ({ data: undefined, error: null }) };
-});
 
 const capabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
@@ -72,42 +70,70 @@ function mutation() {
   };
 }
 
-function hiddenPlan(count: number): HiddenThreadDeletePlan {
+function unifiedPlan(count: number): UnifiedCleanupPlan {
   const candidates = Array.from({ length: count }, (_, index) => {
     const id = "candidate-" + String(index).padStart(3, "0");
-    return { id, title: id, fingerprint: "fixture-fingerprint", allowed: true, reason: null };
+    return { id, title: id, estimatedBytes: 1024, blockedReason: null };
   });
   return {
-    total_threads: count + 1,
-    visible_threads: 1,
-    hidden_threads: count,
-    archived_threads: 0,
-    session_index_lines: count + 1,
-    rollout_files: count + 1,
-    hidden_ids: candidates.map(item => item.id),
-    candidates,
-    hidden_source_counts: { subagent: count },
-    integrity: "ok"
+    totalCandidates: count + 1,
+    totalDeletable: count + 1,
+    totalEstimatedBytes: (count + 1) * 1024,
+    scopes: [
+      {
+        scope: "codex_hidden",
+        provider: "codex",
+        label: "Codex 隐藏线程",
+        supported: true,
+        scanned: true,
+        unavailableReason: null,
+        candidateCount: count,
+        deletableCount: count,
+        estimatedBytes: count * 1024,
+        candidates,
+        issues: []
+      },
+      {
+        scope: "antigravity_archived",
+        provider: "antigravity",
+        label: "Antigravity 已归档线程",
+        supported: true,
+        scanned: true,
+        unavailableReason: null,
+        candidateCount: 1,
+        deletableCount: 1,
+        estimatedBytes: 1024,
+        candidates: [{ id: "ag:demo", title: "AG 归档", estimatedBytes: 1024, blockedReason: null }],
+        issues: []
+      }
+    ]
   };
 }
 
-function failedResult(plan: HiddenThreadDeletePlan): HiddenThreadDeleteResult {
-  const items = plan.candidates.map(item => ({ id: item.id, status: "failed" as const, reason: "fixture failure" }));
+function failedUnifiedResult(count: number): UnifiedCleanupResult {
+  const issues = Array.from(
+    { length: count },
+    (_, index) => `candidate-${String(index).padStart(3, "0")}：fixture failure`
+  );
   return {
-    skipped_threads: 0,
-    failed_threads: items.length,
-    items,
-    before: plan,
-    deleted_threads: 0,
-    after_total_threads: plan.total_threads,
-    after_visible_threads: plan.visible_threads,
-    after_hidden_threads: plan.hidden_threads,
-    after_archived_threads: plan.archived_threads,
-    after_integrity: "ok",
-    visible_threads: plan.visible_threads,
-    hidden_threads: plan.hidden_threads,
-    integrity: "ok",
-    deleted_rollout_files: 0
+    deletedCount: 1,
+    skippedCount: 0,
+    failedCount: count,
+    deletedBytes: 1024,
+    stoppedEarly: true,
+    scopes: [
+      {
+        scope: "codex_hidden",
+        provider: "codex",
+        label: "Codex 隐藏线程",
+        deletedCount: 1,
+        skippedCount: 0,
+        failedCount: count,
+        deletedBytes: 1024,
+        residuals: ["/isolated/residual-rollout.jsonl"],
+        issues
+      }
+    ]
   };
 }
 
@@ -121,7 +147,7 @@ function elements(node: ReactNode): Element[] {
 
 function renderTree(): ReactElement {
   harness.index = 0;
-  return OpsWorkspace({ capabilities }) as unknown as ReactElement;
+  return UnifiedThreadCleanup({ capabilities }) as unknown as ReactElement;
 }
 
 function markup(tree: ReactElement): string {
@@ -129,7 +155,9 @@ function markup(tree: ReactElement): string {
 }
 
 function pagination(tree: ReactElement, label: string): Element {
-  const found = elements(tree).find(element => element.type === CleanupPagination && element.props.label === label);
+  const found = elements(tree).find(
+    (element) => element.type === CleanupPagination && element.props.label === label
+  );
   if (!found) throw new Error("Expected " + label + " pagination");
   return found;
 }
@@ -138,13 +166,19 @@ function page(paginationElement: Element, index: number) {
   (paginationElement.props.onChange as (page: number) => void)(index);
 }
 
+function clickButton(tree: ReactElement, label: string) {
+  const found = elements(tree).find(
+    (element) => element.type === "button" && renderToStaticMarkup(element).includes(label)
+  );
+  if (!found || found.props.disabled) throw new Error(`Button unavailable: ${label}`);
+  found.props.onClick();
+}
+
 function createActions() {
   return {
-    updateJob: mutation(),
-    archiveDryRun: mutation(),
-    archiveExecute: mutation(),
+    unifiedDryRun: mutation(),
     hiddenDryRun: mutation(),
-    hiddenExecute: mutation(),
+    unifiedExecute: mutation(),
     stopHiddenScan: vi.fn()
   };
 }
@@ -152,19 +186,19 @@ function createActions() {
 beforeEach(() => {
   harness.index = 0;
   harness.cells.clear();
-  harness.opsInput = null;
-  harness.opsActions = createActions();
+  harness.unifiedInput = null;
+  harness.unifiedActions = createActions();
 });
 
-describe("OpsWorkspace cleanup pagination", () => {
-  test("renders no more than 100 hidden candidates on each page", () => {
-    const plan = hiddenPlan(205);
+describe("UnifiedThreadCleanup workbench", () => {
+  test("renders no more than 100 candidates on each page", () => {
+    const plan = unifiedPlan(205);
     renderTree();
-    harness.opsInput.onHiddenDryRun(plan);
+    harness.unifiedInput.onUnifiedDryRun(plan);
 
     let tree = renderTree();
     let html = markup(tree);
-    expect((html.match(/<li\b/g) ?? [])).toHaveLength(100);
+    expect(html.match(/<li\b/g) ?? []).toHaveLength(100);
     expect(html).toContain("candidate-000");
     expect(html).toContain("candidate-099");
     expect(html).not.toContain("candidate-100");
@@ -172,41 +206,69 @@ describe("OpsWorkspace cleanup pagination", () => {
     page(pagination(tree, "候选"), 1);
     tree = renderTree();
     html = markup(tree);
-    expect((html.match(/<li\b/g) ?? [])).toHaveLength(100);
+    expect(html.match(/<li\b/g) ?? []).toHaveLength(100);
     expect(html).toContain("candidate-100");
     expect(html).toContain("candidate-199");
     expect(html).not.toContain("candidate-200");
 
     page(pagination(tree, "候选"), 2);
     html = markup(renderTree());
-    expect((html.match(/<li\b/g) ?? [])).toHaveLength(5);
+    expect(html.match(/<li\b/g) ?? []).toHaveLength(5);
     expect(html).toContain("candidate-204");
   });
 
-  test("renders no more than 100 unsuccessful delete results on each page", () => {
-    const plan = hiddenPlan(205);
+  test("renders no more than 100 unsuccessful delete results on each page and separates reclaimed bytes", () => {
+    const plan = unifiedPlan(205);
     renderTree();
-    harness.opsInput.onHiddenDryRun(plan);
+    harness.unifiedInput.onUnifiedDryRun(plan);
     renderTree();
-    harness.opsInput.onHiddenExecute(failedResult(plan));
+    harness.unifiedInput.onUnifiedExecute(failedUnifiedResult(205));
 
     let tree = renderTree();
     let html = markup(tree);
-    expect((html.match(/<p>candidate-/g) ?? [])).toHaveLength(100);
+    expect(html).toContain("已删除 <strong>1</strong> 项");
+    expect(html).toContain("实际回收 <strong>1.0 KiB</strong>");
+    expect(html).toContain("/isolated/residual-rollout.jsonl");
+    expect(html.match(/cleanup-result-item/g) ?? []).toHaveLength(100);
     expect(html).toContain("candidate-099：fixture failure");
     expect(html).not.toContain("candidate-100：fixture failure");
 
     page(pagination(tree, "清理结果"), 1);
     tree = renderTree();
     html = markup(tree);
-    expect((html.match(/<p>candidate-/g) ?? [])).toHaveLength(100);
+    expect(html.match(/cleanup-result-item/g) ?? []).toHaveLength(100);
     expect(html).toContain("candidate-100：fixture failure");
     expect(html).toContain("candidate-199：fixture failure");
     expect(html).not.toContain("candidate-200：fixture failure");
 
     page(pagination(tree, "清理结果"), 2);
     html = markup(renderTree());
-    expect((html.match(/<p>candidate-/g) ?? [])).toHaveLength(5);
+    expect(html.match(/cleanup-result-item/g) ?? []).toHaveLength(5);
     expect(html).toContain("candidate-204：fixture failure");
+  });
+
+  test("auto-selects cleanable scopes, supports scope deselection, and requires two-step confirmation", () => {
+    const plan = unifiedPlan(3);
+    renderTree();
+    harness.unifiedInput.onUnifiedDryRun(plan);
+
+    let tree = renderTree();
+    const agCheckbox = elements(tree).find(
+      (element) =>
+        element.type === "input" &&
+        element.props["aria-label"] === "选择 Antigravity 已归档线程"
+    );
+    expect(agCheckbox?.props.checked).toBe(true);
+    agCheckbox!.props.onChange();
+
+    tree = renderTree();
+    clickButton(tree, "一键清理所选平台");
+    expect(harness.unifiedActions.unifiedExecute.mutate).not.toHaveBeenCalled();
+
+    tree = renderTree();
+    clickButton(tree, "确认清理所选");
+    expect(harness.unifiedActions.unifiedExecute.mutate).toHaveBeenCalledWith({
+      scopes: ["codex_hidden"]
+    });
   });
 });

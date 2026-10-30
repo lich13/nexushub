@@ -5,15 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  Layers,
   Pencil,
   RefreshCw,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AgentBrandIcon } from "../common/AgentBrandIcon";
 import { groupProviderEvents, type ExecutionRenderItem } from "../../lib/domain/executionGroups";
 import { foldProcessSequence, thinkingStepFromText } from "../../lib/domain/processGroups";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
@@ -84,7 +83,6 @@ export function ArchivableProviderWorkspace({
   capabilities: RuntimeCapabilityMatrix;
 }) {
   const label = provider === "antigravity" ? "Antigravity" : "DeepSeek Harness";
-  const EmptyIcon = provider === "antigravity" ? Sparkles : Layers;
   const supported =
     provider === "antigravity"
       ? capabilities.antigravitySessions
@@ -497,7 +495,12 @@ export function ArchivableProviderWorkspace({
     <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
       <aside className="provider-list">
         <header className="workspace-heading">
-          <h1>{label}</h1>
+          <div className="workspace-title-brand">
+            <span className="agent-brand-badge" data-agent={provider} aria-hidden="true">
+              <AgentBrandIcon agent={provider} size={16} />
+            </span>
+            <h1>{label}</h1>
+          </div>
           <button
             className="icon-button"
             disabled={!queryEnabled}
@@ -601,7 +604,9 @@ export function ArchivableProviderWorkspace({
       <main className="provider-detail">
         {!selected && (
           <div className="empty-state">
-            <EmptyIcon size={26} />
+            <span className="empty-brand-badge" data-agent={provider} aria-hidden="true">
+              <AgentBrandIcon agent={provider} size={26} />
+            </span>
             <strong>
               {supported === false
                 ? `升级远程服务后即可浏览 ${label} 会话`

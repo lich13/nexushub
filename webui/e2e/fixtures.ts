@@ -139,6 +139,8 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "cleanup.archiveExecute": demo.demoArchiveDeleteResult,
         "cleanup.hiddenDryRun": demo.demoHiddenThreadDeletePlan,
         "cleanup.hiddenExecute": demo.demoHiddenThreadDeleteResult,
+        "cleanup.unifiedDryRun": () => demo.demoUnifiedCleanupPlan(fixture(), args.request),
+        "cleanup.unifiedExecute": () => demo.demoUnifiedCleanupResult(args.request),
         "probe.events": demo.demoProbeEvents,
         "grok.list": () => grok.filter((item) => item.title.includes(args.q ?? "")),
         "grok.detail": () => ({ summary: grok[0], events: [{ kind: "user_message_chunk", text: "Check the isolated fixture." }, { kind: "assistant_message_chunk", text: "## Result\n\nReadable response with a [link](https://example.com).\n\n```sh\nprintf test\n```" }] }),

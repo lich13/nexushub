@@ -1,9 +1,10 @@
 import { SessionSize } from "../common/SessionSize";
+import { AgentBrandIcon } from "../common/AgentBrandIcon";
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
@@ -159,7 +160,12 @@ export function GrokWorkspace({}: {}) {
     <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>
       <aside className="provider-list">
         <header className="workspace-heading">
-          <h1>Grok Build</h1>
+          <div className="workspace-title-brand">
+            <span className="agent-brand-badge" data-agent="grok" aria-hidden="true">
+              <AgentBrandIcon agent="grok" size={16} />
+            </span>
+            <h1>Grok Build</h1>
+          </div>
           <button
             className="icon-button"
             onClick={() => {
@@ -231,7 +237,14 @@ export function GrokWorkspace({}: {}) {
         <SessionBatchControls batch={batch} operations={["delete"]} />
       </aside>
       <main className="provider-detail">
-        {!selected && <div className="empty-state"><Terminal size={26} /><strong>选择一个 Grok 任务</strong></div>}
+        {!selected && (
+          <div className="empty-state">
+            <span className="empty-brand-badge" data-agent="grok" aria-hidden="true">
+              <AgentBrandIcon agent="grok" size={26} />
+            </span>
+            <strong>选择一个 Grok 任务</strong>
+          </div>
+        )}
         {selected && (
           <>
             <header className="conversation-header" data-timeline-id="session">

@@ -56,35 +56,32 @@ test("Probe rejects duplicate save events before pending state renders", async (
   expect(saves).toBe(1);
 });
 
-test("archive and hidden cleanup require previews, explicit confirmation, and visible failure", async ({ page }) => {
-  const calls = await mockApi(page);
-  const executed: Record<string, number>[] = [];
-  await mockCommand(page, "cleanup.archiveExecute", args => {
+test("unified cross-platform cleanup requires preview, explicit confirmation, and visible failure", async ({ page }) => {
+  await mockApi(page);
+  const executed: Array<{ confirmed: boolean; scopes?: string[] }> = [];
+  await mockCommand(page, "cleanup.unifiedExecute", args => {
     executed.push(args.request);
     return Promise.reject(new Error("Fixture count changed; run a new preview"));
   });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
-  const archive = page.locator(".panel").filter({ has: page.getByText("归档线程清理", { exact: true }) });
-  await expect(archive.getByRole("button", { name: "清理归档", exact: true })).toBeDisabled();
-  await archive.getByRole("button", { name: "Dry-run", exact: true }).click();
-  await archive.getByRole("button", { name: "清理归档", exact: true }).click();
+  const cleanup = page.locator(".panel").filter({ has: page.getByText("全平台线程清理", { exact: true }) });
+  await expect(cleanup.getByRole("button", { name: "一键清理所选平台", exact: true })).toBeDisabled();
+  await cleanup.getByRole("button", { name: "全平台扫描预览", exact: true }).click();
+  await expect(cleanup.getByRole("button", { name: "一键清理所选平台", exact: true })).toBeEnabled();
+  await cleanup.getByLabel("选择 Antigravity 已归档线程", { exact: true }).uncheck();
+  await cleanup.getByRole("button", { name: "一键清理所选平台", exact: true }).click();
   expect(executed).toHaveLength(0);
-  await archive.getByRole("button", { name: "取消", exact: true }).click();
+  await cleanup.getByRole("button", { name: "取消", exact: true }).click();
   expect(executed).toHaveLength(0);
-  await archive.getByRole("button", { name: "清理归档", exact: true }).click();
-  await archive.getByRole("button", { name: "确认清理归档", exact: true }).click();
-  await expect(archive.locator(".form-error")).toContainText("Fixture count changed");
+  await cleanup.getByRole("button", { name: "一键清理所选平台", exact: true }).click();
+  await cleanup.getByRole("button", { name: "确认清理所选", exact: true }).click();
+  await expect(cleanup.locator(".form-error")).toContainText("Fixture count changed");
   expect(executed).toHaveLength(1);
-  expect(executed[0].candidates.length).toBeGreaterThan(0);
-  const hidden = page.locator(".panel").filter({ has: page.getByText("隐藏线程清理", { exact: true }) });
-  await expect(hidden.getByRole("button", { name: "清理隐藏线程", exact: true })).toBeDisabled();
-  await hidden.getByRole("button", { name: "扫描隐藏线程", exact: true }).click();
-  await hidden.getByRole("button", { name: "清理隐藏线程", exact: true }).click();
-  expect(calls).not.toContain("cleanup.hiddenExecute");
-  await hidden.getByRole("button", { name: "取消", exact: true }).click();
-  expect(calls).not.toContain("cleanup.hiddenExecute");
+  expect(executed[0].confirmed).toBe(true);
+  expect(executed[0].scopes).not.toContain("antigravity_archived");
+  expect(executed[0].scopes?.length).toBeGreaterThan(0);
   await assertContrast(page, ".form-error, .status-chip, .danger-button");
 });
 

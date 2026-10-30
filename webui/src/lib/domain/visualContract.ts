@@ -24,6 +24,9 @@ export const sharedActionLabels = contractVisual.actionLabels as {
   hiddenDryRun: string;
   hiddenCleanup: string;
   hiddenConfirm: string;
+  unifiedDryRun: string;
+  unifiedCleanup: string;
+  unifiedConfirm: string;
 };
 
 export const sharedDisabledStates = contractVisual.disabledStates as {
@@ -58,16 +61,13 @@ export function visualContractForRuntime(input?: RuntimeCapabilityMatrix): Visua
   return {
     sharedNavigation: [...sharedNavigationLabels],
     sharedPanels: sharedCorePanelTitles.filter((title) => (
-      capabilities.threadCleanup || (title !== OPS_PANEL_TITLES.archivedCleanup && title !== OPS_PANEL_TITLES.hiddenCleanup)
+      capabilities.threadCleanup || title !== OPS_PANEL_TITLES.unifiedCleanup
     )),
     sharedActions: [
       ...(capabilities.threadCleanup ? [
-        sharedActionLabels.dryRun,
-        sharedActionLabels.archiveCleanup,
-        sharedActionLabels.archiveConfirm,
-        sharedActionLabels.hiddenDryRun,
-        sharedActionLabels.hiddenCleanup,
-        sharedActionLabels.hiddenConfirm
+        sharedActionLabels.unifiedDryRun,
+        sharedActionLabels.unifiedCleanup,
+        sharedActionLabels.unifiedConfirm
       ] : [])
     ],
     disabledStates: [

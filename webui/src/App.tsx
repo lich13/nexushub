@@ -1,17 +1,13 @@
 import {
   Activity,
-  Bot,
-  Layers,
   Menu,
-  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   SlidersHorizontal,
-  Sparkles,
-  TriangleAlert,
-  Zap
+  TriangleAlert
 } from "lucide-react";
 import { Component, ErrorInfo, ReactNode, Suspense, lazy, useState } from "react";
+import { AgentBrandIcon } from "./components/common/AgentBrandIcon";
 import { MachineButton, RemoteConnectionSettings } from "./components/connection/RemoteConnection";
 import { useConnection } from "./lib/query/connection";
 import { PROBE_NAV_LABEL } from "./lib/probeUi";
@@ -39,11 +35,11 @@ const ClaudeWorkspace = lazy(() => import("./components/claude/ClaudeWorkspace")
 const AntigravityWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.AntigravityWorkspace })));
 const DshWorkspace = lazy(() => import("./components/providers/ArchivableProviderWorkspace").then(module => ({ default: module.DshWorkspace })));
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
-  { id: "codex", label: "Codex", icon: <MessageSquare /> },
-  { id: "claude", label: "Claude Code", icon: <Bot /> },
-  { id: "grok", label: "Grok Build", icon: <Zap /> },
-  { id: "antigravity", label: "Antigravity", icon: <Sparkles /> },
-  { id: "dsh", label: "DeepSeek Harness", icon: <Layers /> },
+  { id: "codex", label: "Codex", icon: <AgentBrandIcon agent="codex" /> },
+  { id: "claude", label: "Claude Code", icon: <AgentBrandIcon agent="claude" /> },
+  { id: "grok", label: "Grok Build", icon: <AgentBrandIcon agent="grok" /> },
+  { id: "antigravity", label: "Antigravity", icon: <AgentBrandIcon agent="antigravity" /> },
+  { id: "dsh", label: "DeepSeek Harness", icon: <AgentBrandIcon agent="dsh" /> },
   { id: "probe", label: PROBE_NAV_LABEL, icon: <Activity /> },
   { id: "ops", label: "设置", icon: <SlidersHorizontal /> }
 ];
@@ -175,7 +171,7 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
 }
 
 function NavButton({ navId, icon, active, onClick, children }: { navId: View; icon: ReactNode; active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button data-nav-id={navId} className={`nav-button ${active ? "active" : ""}`} title={String(children)} aria-label={String(children)} aria-current={active ? "page" : undefined} onClick={onClick}>{icon}<span>{children}</span></button>;
+  return <button data-nav-id={navId} className={`nav-button ${active ? "active" : ""}`} title={String(children)} aria-label={String(children)} aria-current={active ? "page" : undefined} onClick={onClick}><i className="nav-icon-badge" aria-hidden="true">{icon}</i><span>{children}</span></button>;
 }
 
 function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {

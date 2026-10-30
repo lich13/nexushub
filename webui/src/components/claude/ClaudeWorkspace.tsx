@@ -1,4 +1,5 @@
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
+import { AgentBrandIcon } from "../common/AgentBrandIcon";
 import { ToolOutput, MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
@@ -159,7 +160,12 @@ export function ClaudeWorkspace() {
     <div className={`provider-workspace ${selectedKey ? "has-selection" : ""}`}>
       <aside className="provider-list">
         <header className="workspace-heading">
-          <h1>Claude Code</h1>
+          <div className="workspace-title-brand">
+            <span className="agent-brand-badge" data-agent="claude" aria-hidden="true">
+              <AgentBrandIcon agent="claude" size={16} />
+            </span>
+            <h1>Claude Code</h1>
+          </div>
           <button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={15} /></button>
         </header>
         <label className="search-box">
@@ -199,7 +205,14 @@ export function ClaudeWorkspace() {
         <SessionBatchControls batch={batch} operations={["delete"]} />
       </aside>
       <main className="provider-detail">
-        {!selected && <div className="empty-state"><Terminal size={26} /><strong>选择一个 Claude Code 任务</strong></div>}
+        {!selected && (
+          <div className="empty-state">
+            <span className="empty-brand-badge" data-agent="claude" aria-hidden="true">
+              <AgentBrandIcon agent="claude" size={26} />
+            </span>
+            <strong>选择一个 Claude Code 任务</strong>
+          </div>
+        )}
         {selected && (
           <>
             <header className="conversation-header" data-timeline-id="session">

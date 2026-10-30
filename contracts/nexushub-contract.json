@@ -73,9 +73,7 @@
     "corePanelTitles": [
       "更新与维护",
       "执行记录",
-      "归档任务清理",
-      "隐藏任务清理",
-      "DSH 归档清理"
+      "全平台线程清理"
     ],
     "actionLabels": {
       "dryRun": "Dry-run",
@@ -84,6 +82,9 @@
       "hiddenDryRun": "扫描隐藏线程",
       "hiddenCleanup": "清理隐藏线程",
       "hiddenConfirm": "确认清理隐藏",
+      "unifiedDryRun": "全平台扫描预览",
+      "unifiedCleanup": "一键清理所选平台",
+      "unifiedConfirm": "确认清理所选",
       "copyThreadId": "复制线程 ID"
     },
     "disabledStates": {

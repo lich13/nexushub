@@ -1,10 +1,10 @@
 import { SessionSize } from "../common/SessionSize";
+import { AgentBrandIcon } from "../common/AgentBrandIcon";
 import {
   Archive,
   ArchiveRestore,
   ChevronRight,
   Copy,
-  MessageSquare,
   RefreshCw,
   Search,
   Trash2,
@@ -175,7 +175,9 @@ export function ChatWorkspace({
           />
         ) : (
           <div className="empty-state">
-            <MessageSquare size={26} />
+            <span className="empty-brand-badge" data-agent="codex" aria-hidden="true">
+              <AgentBrandIcon agent="codex" size={26} />
+            </span>
             <strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong>
           </div>
         )}
@@ -353,7 +355,10 @@ function ThreadList({
   return (
     <div className="thread-list">
       <div className="section-title thread-title-row">
-        <div>
+        <div className="workspace-title-brand">
+          <span className="agent-brand-badge" data-agent="codex" aria-hidden="true">
+            <AgentBrandIcon agent="codex" size={16} />
+          </span>
           <strong>Codex</strong>
         </div>
         <div className="thread-title-actions">

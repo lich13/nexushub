@@ -47,14 +47,14 @@ describe("runtime capability rendering", () => {
     expect(linuxContract.sharedPanels).toEqual(expect.arrayContaining([...sharedCorePanelTitles]));
     expect(macContract.sharedPanels).toEqual([...sharedCorePanelTitles]);
     expect(linuxContract.sharedActions).toEqual(expect.arrayContaining([
-      sharedActionLabels.dryRun,
-      sharedActionLabels.archiveConfirm,
-      sharedActionLabels.hiddenConfirm
+      sharedActionLabels.unifiedDryRun,
+      sharedActionLabels.unifiedCleanup,
+      sharedActionLabels.unifiedConfirm
     ]));
     expect(macContract.sharedActions).toEqual(expect.arrayContaining([
-      sharedActionLabels.dryRun,
-      sharedActionLabels.archiveConfirm,
-      sharedActionLabels.hiddenConfirm
+      sharedActionLabels.unifiedDryRun,
+      sharedActionLabels.unifiedCleanup,
+      sharedActionLabels.unifiedConfirm
     ]));
 
     expect(linuxContract.cleanupRequiresDryRun).toBe(true);
@@ -84,7 +84,7 @@ describe("runtime capability rendering", () => {
     expect(visibleCopy).toMatch(/本机 App 更新|检查更新/);
     expect(visibleCopy).not.toContain("系统状态");
     expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
-    expect(visibleCopy).toMatch(/归档线程清理|隐藏线程清理|Job History/);
+    expect(visibleCopy).toMatch(/全平台线程清理|全平台扫描预览|Job History/);
     expect(contract.updateActions).toEqual(["检查更新"]);
     expect(contract.desktopTauriOnly).toEqual([]);
     expect(contract.forbidden).toEqual([...macosForbiddenVisualSurfaces]);

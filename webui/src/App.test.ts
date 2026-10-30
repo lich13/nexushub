@@ -6,6 +6,7 @@ import conversationSource from "./components/chat/Conversation.tsx?raw";
 import jobListSource from "./components/jobs/JobList.tsx?raw";
 import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
+import unifiedThreadCleanupSource from "./components/ops/UnifiedThreadCleanup.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
 import probeCardsSource from "./components/probe/ProbeCards.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
@@ -188,12 +189,13 @@ describe("conversation helpers", () => {
   });
 
   test("OpsWorkspace surfaces cleanup mutation errors instead of leaving confirm buttons silent", () => {
-    const opsSource = extractFunctionSource("OpsWorkspace");
+    const opsSource = `${extractFunctionSource("OpsWorkspace")}\n${unifiedThreadCleanupSource}`;
+    expectSourceToAvoidTokens(unifiedThreadCleanupSource, "UnifiedThreadCleanup", forbiddenComponentTokens);
 
-    expect(opsSource).toContain("archiveCleanupError");
+    expect(opsSource).toContain("unifiedCleanupError");
     expect(opsSource).toContain("hiddenCleanupError");
-    expect(opsSource).toContain("executeDelete.error");
-    expect(opsSource).toContain("executeHiddenDelete.error");
+    expect(opsSource).toContain("unifiedExecute.error");
+    expect(opsSource).toContain("unifiedDryRun.error");
     expect(opsSource).toContain("cleanup-error");
   });
 
@@ -659,19 +661,20 @@ describe("conversation helpers", () => {
 
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
       "本机 App 更新",
-      "DSH 归档清理",
+      "Job History"
+    ]);
+    expect(app.opsWorkspacePanelTitles?.(macosDesktopCapabilities)).toEqual([
+      "本机 App 更新",
+      "全平台线程清理",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
       "远程服务更新",
-      "归档线程清理",
-      "隐藏线程清理",
-      "DSH 归档清理",
+      "全平台线程清理",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual(expect.arrayContaining([
-      "归档线程清理",
-      "隐藏线程清理"
+      "全平台线程清理"
     ]));
     expect(app.opsWorkspacePanelTitles?.()).not.toEqual(expect.arrayContaining([
       retiredCodexPanel,
@@ -679,8 +682,9 @@ describe("conversation helpers", () => {
       "归档清理"
     ]));
     const visibleCopy = app.opsWorkspaceVisibleCopy?.(remoteCapabilities).join("\n") ?? "";
-    expect(visibleCopy).toContain("归档线程清理");
-    expect(visibleCopy).toContain("隐藏线程清理");
+    expect(visibleCopy).toContain("全平台线程清理");
+    expect(visibleCopy).toContain("全平台扫描预览");
+    expect(visibleCopy).toContain("一键清理所选平台");
     expect(visibleCopy).not.toContain(retiredCodexPanel);
     expect(visibleCopy).not.toContain(retiredClaudePanel);
     expect(visibleCopy).not.toContain(retiredReadyCopy);

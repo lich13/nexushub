@@ -89,20 +89,13 @@ export async function startDshArchiveDelete(request: DshArchiveDeleteRequest): P
 }
 
 export async function dryRunUnifiedCleanup(request?: UnifiedCleanupDryRunRequest): Promise<UnifiedCleanupPlan> {
-  if (USE_DEMO) return { totalCandidates: 0, totalDeletable: 0, totalEstimatedBytes: 0, scopes: [] };
+  if (USE_DEMO) return (await import("./demo")).demoUnifiedCleanupPlan(undefined, request);
   return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun", request ? { request } : {});
 }
 
 export async function startUnifiedCleanup(request: UnifiedCleanupExecuteRequest): Promise<UnifiedCleanupResult> {
   if (USE_DEMO) {
-    return {
-      deletedCount: 0,
-      skippedCount: 0,
-      failedCount: 0,
-      deletedBytes: 0,
-      stoppedEarly: false,
-      scopes: []
-    };
+    return (await import("./demo")).demoUnifiedCleanupResult(request);
   }
   return callCommand<UnifiedCleanupResult>("cleanup.unifiedExecute", { request });
 }

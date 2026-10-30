@@ -1,6 +1,7 @@
 import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
+  HiddenScanProgress,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
@@ -10,6 +11,9 @@ import type {
   ProbeStatus,
   ThreadDetail,
   ThreadSummary,
+  UnifiedCleanupPlan,
+  UnifiedCleanupResult,
+  UnifiedCleanupScopePlan,
   UpdateStatus
 } from "../../types";
 import { runtimeCapabilitiesForRuntime, type RuntimeCapabilityMatrix } from "./capabilities";
@@ -25,18 +29,78 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 
 export const OPS_PANEL_TITLES = {
   updates: "本机 App 更新",
+  unifiedCleanup: "全平台线程清理",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
   dshArchiveCleanup: "DSH 归档清理",
   jobs: "Job History"
 } as const;
 
+export type UnifiedCleanupScopeMeta = {
+  scope: string;
+  provider: "codex" | "claude" | "grok" | "antigravity" | "dsh";
+  agentTitle: string;
+  scopeBadge: string;
+  label: string;
+  description: string;
+};
+
+export const UNIFIED_CLEANUP_SCOPES: readonly UnifiedCleanupScopeMeta[] = [
+  {
+    scope: "codex_archived",
+    provider: "codex",
+    agentTitle: "Codex",
+    scopeBadge: "已归档线程",
+    label: "Codex 已归档线程",
+    description: "归档主线程及已验证子代理闭包"
+  },
+  {
+    scope: "codex_hidden",
+    provider: "codex",
+    agentTitle: "Codex",
+    scopeBadge: "隐藏线程",
+    label: "Codex 隐藏线程",
+    description: "内部 exec 与子代理隐藏会话文件"
+  },
+  {
+    scope: "antigravity_archived",
+    provider: "antigravity",
+    agentTitle: "Antigravity",
+    scopeBadge: "已归档线程",
+    label: "Antigravity 已归档线程",
+    description: "本机已归档会话及子代理目录闭包"
+  },
+  {
+    scope: "dsh_archived",
+    provider: "dsh",
+    agentTitle: "DeepSeek Harness",
+    scopeBadge: "已归档线程",
+    label: "DeepSeek Harness 已归档线程",
+    description: "已归档主会话及子会话存储文件"
+  },
+  {
+    scope: "claude_empty",
+    provider: "claude",
+    agentTitle: "Claude Code",
+    scopeBadge: "空残余会话",
+    label: "Claude Code 空残余会话",
+    description: "0 消息且无进程占用的空残余会话"
+  },
+  {
+    scope: "grok_empty",
+    provider: "grok",
+    agentTitle: "Grok Build",
+    scopeBadge: "空残余会话",
+    label: "Grok Build 空残余会话",
+    description: "0 消息且非活跃状态的空会话目录"
+  }
+];
+
 export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[] {
   const capabilities = capabilitiesForInput(input);
   return [
     updatePanelTitle(capabilities),
-    ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
-    OPS_PANEL_TITLES.dshArchiveCleanup,
+    ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.unifiedCleanup] : []),
     OPS_PANEL_TITLES.jobs
   ];
 }
@@ -48,21 +112,13 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
     "当前版本",
     ...opsUpdateActionView(null, capabilities).map((action) => action.label),
     ...(capabilities.threadCleanup ? [
-      "Dry-run",
-      "清理归档",
-      "确认清理归档",
-      "扫描隐藏线程",
-      "清理隐藏线程",
-      "确认清理隐藏",
-      "active",
-      "archived",
-      "integrity",
-      "session index",
-      "rollout 文件",
-      "visible",
-      "hidden",
-      "sources",
-      "rollout 删除结果"
+      "全平台扫描预览",
+      "深度扫描隐藏线程",
+      "一键清理所选平台",
+      "确认清理所选",
+      "可清理会话",
+      "预计释放空间",
+      "已选平台范围"
     ] : []),
     failureCategoryLabel("systemd_failure", capabilities),
     failureCategoryLabel("nginx_failure", capabilities),
@@ -592,6 +648,163 @@ function numberInputDraftValue(value: string): number | "" {
   if (!trimmed) return "";
   const numeric = Number(trimmed);
   return Number.isFinite(numeric) ? Math.trunc(numeric) : "";
+}
+
+export function formatCleanupBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  return formatFileSize(bytes);
+}
+
+const SCAN_PHASE_LABELS: Record<HiddenScanProgress["phase"], string> = {
+  preparing: "正在准备",
+  scanning: "正在扫描",
+  complete: "扫描完成",
+  stopping: "正在停止",
+  stopped: "已停止",
+  failed: "扫描失败"
+};
+
+export function unifiedCleanupStageView(input: {
+  hasPlan: boolean;
+  dryRunPending: boolean;
+  armed: boolean;
+  executePending: boolean;
+  executableCount: number;
+  hiddenScan?: HiddenScanProgress | null;
+}): CleanupStageView {
+  if (input.executePending) return { label: "执行中", tone: "warning" };
+  if (input.armed) return { label: "等待确认", tone: "danger" };
+  if (input.hiddenScan && input.hiddenScan.phase !== "complete") {
+    const label = `${SCAN_PHASE_LABELS[input.hiddenScan.phase]} · ${input.hiddenScan.processed} / ${input.hiddenScan.total}`;
+    const tone = input.hiddenScan.phase === "failed" ? "danger" : "warning";
+    return { label, tone };
+  }
+  return cleanupStageLabel({
+    hasPlan: input.hasPlan,
+    dryRunPending: input.dryRunPending,
+    armed: input.armed,
+    executePending: input.executePending,
+    executableCount: input.executableCount
+  });
+}
+
+export function mergeHiddenScanIntoUnifiedPlan(
+  current: UnifiedCleanupPlan | null,
+  hiddenPlan: HiddenThreadDeletePlan
+): UnifiedCleanupPlan {
+  const scanComplete = !hiddenPlan.scan || (
+    hiddenPlan.scan.phase === "complete"
+    && !hiddenPlan.scan.hasMore
+    && hiddenPlan.candidates.length === hiddenPlan.scan.total
+  );
+  const candidates = hiddenPlan.candidates.map((item) => ({
+    id: item.id,
+    title: item.title || item.id,
+    estimatedBytes: 0,
+    blockedReason: item.allowed ? null : (item.reason ?? "当前线程暂不可清理")
+  }));
+  const deletableCount = candidates.filter((item) => !item.blockedReason).length;
+  const hiddenScope: UnifiedCleanupScopePlan = {
+    scope: "codex_hidden",
+    provider: "codex",
+    label: "Codex 隐藏线程",
+    supported: true,
+    scanned: scanComplete,
+    unavailableReason: null,
+    candidateCount: candidates.length,
+    deletableCount,
+    estimatedBytes: 0,
+    candidates,
+    issues: []
+  };
+  const existing = new Map((current?.scopes ?? []).map((item) => [item.scope, item]));
+  existing.set("codex_hidden", hiddenScope);
+  const scopes = UNIFIED_CLEANUP_SCOPES.map((meta) => (
+    existing.get(meta.scope) ?? {
+      scope: meta.scope,
+      provider: meta.provider,
+      label: meta.label,
+      supported: true,
+      scanned: false,
+      unavailableReason: null,
+      candidateCount: 0,
+      deletableCount: 0,
+      estimatedBytes: 0,
+      candidates: [],
+      issues: []
+    }
+  ));
+  return {
+    totalCandidates: scopes.reduce((sum, item) => sum + item.candidateCount, 0),
+    totalDeletable: scopes.reduce((sum, item) => sum + item.deletableCount, 0),
+    totalEstimatedBytes: scopes.reduce((sum, item) => sum + item.estimatedBytes, 0),
+    scopes
+  };
+}
+
+export function unifiedPlanAfterExecute(
+  current: UnifiedCleanupPlan | null,
+  result: UnifiedCleanupResult
+): UnifiedCleanupPlan | null {
+  if (!current) return current;
+  const byScope = new Map(result.scopes.map((item) => [item.scope, item]));
+  const scopes = current.scopes.map((scope) => {
+    const executed = byScope.get(scope.scope);
+    if (!executed || executed.deletedCount === 0) return scope;
+    if (executed.failedCount === 0 && executed.skippedCount === 0 && executed.residuals.length === 0) {
+      return {
+        ...scope,
+        candidateCount: 0,
+        deletableCount: 0,
+        estimatedBytes: 0,
+        candidates: []
+      };
+    }
+    const remainingDeletable = Math.max(0, scope.deletableCount - executed.deletedCount);
+    const remainingCount = Math.max(remainingDeletable, scope.candidateCount - executed.deletedCount);
+    return {
+      ...scope,
+      candidateCount: remainingCount,
+      deletableCount: remainingDeletable,
+      estimatedBytes: Math.max(0, scope.estimatedBytes - executed.deletedBytes)
+    };
+  });
+  return {
+    totalCandidates: scopes.reduce((sum, item) => sum + item.candidateCount, 0),
+    totalDeletable: scopes.reduce((sum, item) => sum + item.deletableCount, 0),
+    totalEstimatedBytes: scopes.reduce((sum, item) => sum + item.estimatedBytes, 0),
+    scopes
+  };
+}
+
+export type UnifiedCleanupUnsuccessfulEntry = {
+  key: string;
+  text: string;
+  residuals: string[];
+};
+
+export function unifiedCleanupUnsuccessfulItems(
+  result: UnifiedCleanupResult | null
+): UnifiedCleanupUnsuccessfulEntry[] {
+  if (!result) return [];
+  const entries: UnifiedCleanupUnsuccessfulEntry[] = [];
+  for (const scope of result.scopes) {
+    scope.issues.forEach((issue, index) => {
+      entries.push({
+        key: `${scope.scope}:issue:${index}`,
+        text: `${scope.label} · ${issue}`,
+        residuals: index === 0 ? scope.residuals : []
+      });
+    });
+    if (scope.issues.length === 0 && scope.residuals.length > 0) {
+      entries.push({
+        key: `${scope.scope}:residuals`,
+        text: `${scope.label} · 存在未清理残留路径`,
+        residuals: scope.residuals
+      });
+    }
+  }
+  return entries;
 }
 
 function formatFileSize(bytes: number): string {

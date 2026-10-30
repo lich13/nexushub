@@ -3,7 +3,9 @@ import { useEffect, useRef } from "react";
 import {
   dryRunArchiveDelete,
   dryRunDshArchiveDelete,
+  dryRunUnifiedCleanup,
   startDshArchiveDelete,
+  startUnifiedCleanup,
   dryRunHiddenThreadDelete,
   getUpdateStatus,
   listJobs,
@@ -13,7 +15,15 @@ import {
   type RuntimeCapabilityMatrix,
   type UnifiedUpdateAction
 } from "../api";
-import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
+import type {
+  ArchiveDeletePlan,
+  ArchiveDeleteResult,
+  HiddenThreadDeletePlan,
+  HiddenThreadDeleteResult,
+  UnifiedCleanupDryRunRequest,
+  UnifiedCleanupPlan,
+  UnifiedCleanupResult
+} from "../../types";
 import { backgroundJobKey } from "./jobs";
 import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
 import { HiddenScanRunner } from "./hiddenScan";
@@ -151,6 +161,91 @@ export function useDshArchiveActions(input: {
     execute: useMutation({
       mutationFn: (request: import("../../types").DshArchiveDeleteRequest) => { requireSupport(); return startDshArchiveDelete(request); },
       onSuccess: input.onExecute
+    })
+  };
+}
+
+export function useUnifiedCleanupActions(input: {
+  capabilities: RuntimeCapabilityMatrix;
+  onUnifiedDryRun: (plan: UnifiedCleanupPlan) => void;
+  onUnifiedExecute: (result: UnifiedCleanupResult) => void;
+  onHiddenDryRun: (plan: HiddenThreadDeletePlan) => void;
+}) {
+  const qc = useQueryClient();
+  const { capabilities } = input;
+  const scan = useRef<HiddenScanRunner | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    const abandon = async () => {
+      generation.current += 1;
+      await scan.current?.stop();
+    };
+    const unsubscribe = beforeMachineChange(abandon);
+    return () => {
+      unsubscribe();
+      void abandon();
+    };
+  }, []);
+  const requireThreadCleanup = () => {
+    if (!capabilities.threadCleanup) {
+      throw new Error("当前运行时不支持线程清理动作");
+    }
+  };
+  const invalidateAllCleanedProviders = () => {
+    for (const key of [
+      opsQueryKeys.jobs,
+      opsQueryKeys.threads,
+      ["claude_code"] as const,
+      ["grok"] as const,
+      ["antigravity"] as const,
+      ["dsh"] as const
+    ]) {
+      void qc.invalidateQueries({ queryKey: key });
+    }
+  };
+
+  return {
+    stopHiddenScan: () => scan.current?.stop(),
+    unifiedDryRun: useMutation({
+      mutationFn: (request?: UnifiedCleanupDryRunRequest) => {
+        requireThreadCleanup();
+        return dryRunUnifiedCleanup(
+          request ?? { includeCodexHidden: capabilities.hiddenCleanupScan !== true }
+        );
+      },
+      onSuccess: input.onUnifiedDryRun
+    }),
+    hiddenDryRun: useMutation({
+      mutationFn: async () => {
+        requireThreadCleanup();
+        const current = ++generation.current;
+        const revision = connectionSnapshot().revision;
+        const valid = () => generation.current === current && connectionSnapshot().revision === revision;
+        await scan.current?.stop();
+        if (!valid()) throw new Error("连接已变化，已停止旧扫描");
+        const runner = new HiddenScanRunner(dryRunHiddenThreadDelete, (plan) => {
+          if (valid()) input.onHiddenDryRun(plan);
+        });
+        scan.current = runner;
+        try {
+          const result = await runner.run(capabilities.hiddenCleanupScan === true);
+          if (valid()) input.onHiddenDryRun(result);
+          return result;
+        } catch (error) {
+          void runner.stop();
+          throw error;
+        }
+      }
+    }),
+    unifiedExecute: useMutation({
+      mutationFn: ({ scopes }: { scopes: string[] }) => {
+        requireThreadCleanup();
+        return startUnifiedCleanup({ confirmed: true, scopes });
+      },
+      onSuccess: (result) => {
+        input.onUnifiedExecute(result);
+        invalidateAllCleanedProviders();
+      }
     })
   };
 }
