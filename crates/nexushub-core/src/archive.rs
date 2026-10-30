@@ -124,16 +124,37 @@ pub fn plan_delete_archived(paths: &CodexPaths) -> Result<ArchiveDeletePlan> {
     })
 }
 
+fn existing_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
+    let db = paths.state_db();
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", db.display()))?;
+    let mut stmt = conn.prepare("SELECT id FROM threads")?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    Ok(ids)
+}
+
 pub fn execute_delete_archived(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
 ) -> Result<ArchiveDeleteResult> {
-    let before = plan_delete_archived(paths).unwrap_or_else(|_| ArchiveDeletePlan {
-        archived_ids: candidates.iter().map(|c| c.id.clone()).collect(),
-        integrity: "unavailable".into(),
-        ..Default::default()
-    });
-    let (items, deleted_rollout_files) = delete_candidates(paths, candidates);
+    let before = plan_delete_archived(paths)?;
+    let existing = existing_thread_ids(paths)?;
+    let allowed: HashSet<&str> = before.archived_ids.iter().map(String::as_str).collect();
+    let (items, deleted_rollout_files) =
+        delete_candidates(paths, candidates, |candidate| -> Result<()> {
+            crate::session_delete::valid_id(&candidate.id)?;
+            if allowed.contains(candidate.id.as_str()) {
+                return Ok(());
+            }
+            if !existing.contains(&candidate.id)
+                && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
+            {
+                return Ok(());
+            }
+            anyhow::bail!("目标不属于已归档线程允许集合或不存在")
+        });
     let counts =
         Connection::open_with_flags(paths.state_db(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(anyhow::Error::from)
@@ -160,6 +181,7 @@ pub fn execute_delete_archived(
 fn delete_candidates(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
+    authorize: impl Fn(&HiddenThreadSelection) -> Result<()>,
 ) -> (Vec<HiddenThreadItemResult>, u64) {
     let mut items = Vec::new();
     let mut files = 0;
@@ -168,27 +190,40 @@ fn delete_candidates(
         if !seen.insert(&candidate.id) {
             continue;
         }
-        match crate::selected_codex::tree::execute_ids(paths, std::slice::from_ref(&candidate.id)) {
-            Ok(result) => {
-                files += result.deleted_files;
-                items.push(HiddenThreadItemResult {
-                    id: candidate.id.clone(),
-                    status: if result.error.is_none() {
-                        "deleted"
-                    } else {
-                        "failed"
-                    }
-                    .into(),
-                    reason: result.error,
-                    residuals: result.residuals,
-                });
-            }
-            Err(error) => items.push(HiddenThreadItemResult {
+        if let Err(error) = authorize(candidate).and_then(|()| {
+            crate::selected_codex::tree::ensure_tree_not_running(paths, &candidate.id)
+        }) {
+            items.push(HiddenThreadItemResult {
                 id: candidate.id.clone(),
                 status: "failed".into(),
                 reason: Some(error.to_string()),
                 residuals: vec![],
-            }),
+            });
+            break;
+        }
+        match crate::selected_codex::tree::execute_ids(paths, std::slice::from_ref(&candidate.id)) {
+            Ok(result) => {
+                files += result.deleted_files;
+                let failed = result.error.is_some() || !result.residuals.is_empty();
+                items.push(HiddenThreadItemResult {
+                    id: candidate.id.clone(),
+                    status: if failed { "failed" } else { "deleted" }.into(),
+                    reason: result.error,
+                    residuals: result.residuals,
+                });
+                if failed {
+                    break;
+                }
+            }
+            Err(error) => {
+                items.push(HiddenThreadItemResult {
+                    id: candidate.id.clone(),
+                    status: "failed".into(),
+                    reason: Some(error.to_string()),
+                    residuals: vec![],
+                });
+                break;
+            }
         }
     }
     (items, files)
@@ -202,12 +237,41 @@ pub fn execute_delete_hidden(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
 ) -> Result<HiddenThreadDeleteResult> {
-    let before = plan_delete_hidden(paths).unwrap_or_else(|_| HiddenThreadDeletePlan {
-        hidden_ids: candidates.iter().map(|c| c.id.clone()).collect(),
-        integrity: "unavailable".into(),
-        ..Default::default()
-    });
-    let (items, deleted_rollout_files) = delete_candidates(paths, candidates);
+    let before = plan_delete_hidden(paths)?;
+    let existing = existing_thread_ids(paths)?;
+    let allowed: BTreeMap<&str, &HiddenThreadCandidate> = before
+        .candidates
+        .iter()
+        .map(|c| (c.id.as_str(), c))
+        .collect();
+    let (items, deleted_rollout_files) =
+        delete_candidates(paths, candidates, |candidate| -> Result<()> {
+            crate::session_delete::valid_id(&candidate.id)?;
+            if let Some(plan_cand) = allowed.get(candidate.id.as_str()) {
+                if !plan_cand.allowed {
+                    anyhow::bail!(
+                        "{}",
+                        plan_cand
+                            .reason
+                            .as_deref()
+                            .unwrap_or("隐藏线程当前不允许清理")
+                    );
+                }
+                if let (Some(req_fp), Some(cur_fp)) = (
+                    candidate.fingerprint.as_deref().filter(|s| !s.is_empty()),
+                    plan_cand.fingerprint.as_deref().filter(|s| !s.is_empty()),
+                ) {
+                    anyhow::ensure!(req_fp == cur_fp, "隐藏线程指纹已变化，请重新预览");
+                }
+                return Ok(());
+            }
+            if !existing.contains(&candidate.id)
+                && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
+            {
+                return Ok(());
+            }
+            anyhow::bail!("目标不属于隐藏线程允许集合或不存在")
+        });
     let after = plan_delete_hidden(paths).unwrap_or_else(|_| HiddenThreadDeletePlan {
         integrity: "unavailable".into(),
         ..Default::default()
@@ -810,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_delete_continues_after_a_single_item_database_failure() {
+    fn hidden_delete_stops_after_a_single_item_database_failure() {
         let root = hidden_cleanup_fixture("item-database-failure");
         let paths = CodexPaths::new(&root);
         let plan = plan_delete_hidden(&paths).unwrap();
@@ -826,18 +890,93 @@ mod tests {
         let result = execute_delete_hidden(&paths, &candidates).unwrap();
 
         assert_eq!(result.failed_threads, 1);
-        assert_eq!(result.deleted_threads, 1);
+        assert_eq!(result.deleted_threads, 0);
+        assert!(!result.items[0].residuals.is_empty());
         let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
         assert!(thread_exists(&conn, "hidden-internal"));
-        assert!(!thread_exists(&conn, "hidden-subagent"));
+        assert!(thread_exists(&conn, "hidden-subagent"));
         assert!(!root
             .join("sessions")
             .join("rollout-hidden-internal.jsonl")
             .exists());
-        assert!(!root
+        assert!(root
             .join("sessions")
             .join("rollout-hidden-subagent.jsonl")
             .exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn execute_delete_archived_and_hidden_reject_out_of_bounds_and_running_targets_and_stop_early()
+    {
+        let root = hidden_cleanup_fixture("execution-side-guards");
+        let paths = CodexPaths::new(&root);
+
+        // 1. Out-of-bounds / visible ID rejected and stops subsequent archived deletion.
+        let bad_archived = super::execute_delete_archived(
+            &paths,
+            &[
+                HiddenThreadSelection {
+                    id: "main-visible".into(),
+                    fingerprint: None,
+                },
+                HiddenThreadSelection {
+                    id: "archived-hidden".into(),
+                    fingerprint: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(bad_archived.items.len(), 1);
+        assert_eq!(bad_archived.items[0].status, "failed");
+        let conn = Connection::open(paths.state_db()).unwrap();
+        assert!(thread_exists(&conn, "main-visible"));
+        assert!(thread_exists(&conn, "archived-hidden"));
+
+        // 2. Nonexistent forged ID rejected in hidden delete without touching subsequent valid item.
+        let bad_hidden = execute_delete_hidden(
+            &paths,
+            &[
+                HiddenThreadSelection {
+                    id: "forged-nonexistent-id".into(),
+                    fingerprint: None,
+                },
+                HiddenThreadSelection {
+                    id: "hidden-internal".into(),
+                    fingerprint: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(bad_hidden.failed_threads, 1);
+        assert_eq!(bad_hidden.deleted_threads, 0);
+        assert!(thread_exists(&conn, "hidden-internal"));
+
+        // 3. Running target (active agent_job_items) rejected and stops subsequent deletion.
+        conn.execute(
+            "UPDATE agent_job_items SET status='running' WHERE id='job-hidden-subagent'",
+            [],
+        )
+        .unwrap();
+        let running_res = execute_delete_hidden(
+            &paths,
+            &[
+                HiddenThreadSelection {
+                    id: "hidden-subagent".into(),
+                    fingerprint: None,
+                },
+                HiddenThreadSelection {
+                    id: "hidden-internal".into(),
+                    fingerprint: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(running_res.failed_threads, 1);
+        assert_eq!(running_res.deleted_threads, 0);
+        assert!(thread_exists(&conn, "hidden-subagent"));
+        assert!(thread_exists(&conn, "hidden-internal"));
+
         let _ = fs::remove_dir_all(root);
     }
 

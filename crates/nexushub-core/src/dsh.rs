@@ -459,6 +459,27 @@ pub fn preview(paths: &DshPaths) -> Result<DshArchiveDeletePlan> {
     Ok(inventory(paths)?.plan)
 }
 
+pub(crate) fn preview_with_bytes(
+    paths: &DshPaths,
+) -> Result<(DshArchiveDeletePlan, BTreeMap<String, u64>)> {
+    let inv = inventory(paths)?;
+    let mut sizes = BTreeMap::new();
+    let cache_dir = paths.home.join("storages/session_projcache/sessions");
+    for candidate in &inv.plan.candidates {
+        let mut target_paths = Vec::new();
+        if let Some(session) = inv.sessions.get(&candidate.id) {
+            target_paths.extend(session.directories.iter().cloned());
+        }
+        let cache_file = cache_dir.join(format!("{}.json", candidate.id));
+        if cache_file.exists() {
+            target_paths.push(cache_file);
+        }
+        let (_, bytes) = crate::session_delete::size(&target_paths);
+        sizes.insert(candidate.id.clone(), bytes);
+    }
+    Ok((inv.plan, sizes))
+}
+
 fn dsh_command(command: &str) -> bool {
     let command = command.trim();
     let mut words = command.split_whitespace();
@@ -719,6 +740,7 @@ fn execute_checked(
                     item.status = "failed".into();
                     item.reason = Some("部分 DSH 线程数据未清理，请重试".into());
                     item.residuals = outcome.residuals;
+                    stopped = item.reason.clone();
                 }
             }
         } else {

@@ -395,6 +395,22 @@ impl<'a> CleanupUseCases<'a> {
         crate::dsh::execute(paths, request)
     }
 
+    pub fn unified_dry_run(
+        self,
+        paths: &cleanup::UnifiedCleanupPaths,
+        request: cleanup::UnifiedCleanupDryRunRequest,
+    ) -> Result<cleanup::UnifiedCleanupPlan> {
+        cleanup::dry_run_unified_with_capability(self.platform, paths, request)
+    }
+
+    pub fn unified_execute(
+        self,
+        paths: &cleanup::UnifiedCleanupPaths,
+        request: cleanup::UnifiedCleanupExecuteRequest,
+    ) -> Result<cleanup::UnifiedCleanupResult> {
+        cleanup::execute_unified_with_capability(self.platform, paths, request)
+    }
+
     pub fn dry_run_hidden(
         self,
         paths: &crate::codex::CodexPaths,

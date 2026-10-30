@@ -58,6 +58,8 @@ pub fn run() {
         commands::settings::claudeHooks,
         commands::settings::dryRunDshArchiveDelete,
         commands::settings::startDshArchiveDelete,
+        commands::settings::dryRunUnifiedCleanup,
+        commands::settings::startUnifiedCleanup,
         commands::settings::dryRunArchiveDelete,
         commands::settings::startArchiveDelete,
         commands::settings::dryRunHiddenThreadDelete,

@@ -7,7 +7,11 @@ import type {
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
-  OptionalResult
+  OptionalResult,
+  UnifiedCleanupDryRunRequest,
+  UnifiedCleanupExecuteRequest,
+  UnifiedCleanupPlan,
+  UnifiedCleanupResult
 } from "../../types";
 import { callCommand } from "./transport";
 import { normalizeOptionalResult, USE_DEMO } from "./shared";
@@ -90,4 +94,23 @@ export async function dryRunDshArchiveDelete(): Promise<DshArchiveDeletePlan> {
 export async function startDshArchiveDelete(request: DshArchiveDeleteRequest): Promise<DshArchiveDeleteResult> {
   if (USE_DEMO) return { items: [], deletedThreads: 0, deletedBytes: 0 };
   return callCommand<DshArchiveDeleteResult>("cleanup.dshArchiveExecute", { request });
+}
+
+export async function dryRunUnifiedCleanup(request?: UnifiedCleanupDryRunRequest): Promise<UnifiedCleanupPlan> {
+  if (USE_DEMO) return { totalCandidates: 0, totalDeletable: 0, totalEstimatedBytes: 0, scopes: [] };
+  return callCommand<UnifiedCleanupPlan>("cleanup.unifiedDryRun", request ? { request } : {});
+}
+
+export async function startUnifiedCleanup(request: UnifiedCleanupExecuteRequest): Promise<UnifiedCleanupResult> {
+  if (USE_DEMO) {
+    return {
+      deletedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      deletedBytes: 0,
+      stoppedEarly: false,
+      scopes: []
+    };
+  }
+  return callCommand<UnifiedCleanupResult>("cleanup.unifiedExecute", { request });
 }

@@ -928,6 +928,8 @@ describe("archive delete API compatibility", () => {
       "antigravity.restore",
       "cleanup.dshArchiveDryRun",
       "cleanup.dshArchiveExecute",
+      "cleanup.unifiedDryRun",
+      "cleanup.unifiedExecute",
       "cleanup.archiveDryRun",
       "cleanup.archiveExecute",
       "cleanup.hiddenDryRun",

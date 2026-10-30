@@ -2266,3 +2266,70 @@ fn failure_evidence_written_after_the_hook_is_not_resumed_execution() {
     );
     assert!(context.stream.events.is_empty());
 }
+
+#[test]
+fn execute_claude_delete_rejects_out_of_bounds_running_and_stops_on_partial_failure() {
+    let f = Fixture::new();
+    f.complete();
+
+    // 1. Out-of-bounds / forged session_key is rejected.
+    assert!(execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: "claude:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .is_err());
+
+    // 2. Actively running Claude session is rejected without deleting files.
+    let cwd = f.root.join("workspace");
+    activity::test_owner(Some("native-fixture"), &cwd);
+    let err = execute_claude_delete(
+        &f.paths,
+        ClaudeDeleteRequest {
+            session_key: f.key(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    );
+    activity::test_owner(None, Path::new("/fixture"));
+    assert!(err.is_err());
+    assert!(f.file.exists());
+
+    // 3. Partial failure stops immediately and preserves subsequent sidecar / shared index targets.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } != 0 {
+        use std::os::unix::fs::PermissionsExt;
+        let locked_sidecar = f.file.with_extension("");
+        fs::create_dir_all(&locked_sidecar).unwrap();
+        let locked_child = locked_sidecar.join("locked.txt");
+        fs::write(&locked_child, "locked").unwrap();
+        let later_debug = f.paths.config.join("debug/native-fixture.txt");
+        fs::create_dir_all(later_debug.parent().unwrap()).unwrap();
+        fs::write(&later_debug, "preserved-after-stop").unwrap();
+        let history = f.paths.config.join("history.jsonl");
+        fs::write(&history, "{\"sessionId\":\"native-fixture\"}\n").unwrap();
+        fs::set_permissions(&locked_sidecar, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let partial = execute_claude_delete(
+            &f.paths,
+            ClaudeDeleteRequest {
+                session_key: f.key(),
+                confirmed: true,
+                fingerprint: String::new(),
+            },
+        )
+        .unwrap();
+        fs::set_permissions(&locked_sidecar, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!partial.deleted);
+        assert!(!partial.residuals.is_empty());
+        assert!(locked_child.exists());
+        assert!(later_debug.exists());
+        assert!(fs::read_to_string(&history)
+            .unwrap()
+            .contains("native-fixture"));
+    }
+}

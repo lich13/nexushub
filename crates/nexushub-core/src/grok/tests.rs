@@ -843,3 +843,75 @@ fn handoff_path_prefers_chat_history_and_reconciles_omitted_initial_cli_user_tur
 
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn execute_grok_delete_rejects_out_of_bounds_running_and_stops_on_partial_failure() {
+    let (paths, id, path) = fixture();
+    // 1. Out-of-bounds traversal ID is rejected before any filesystem operation.
+    assert!(execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id: "../outside".into(),
+            confirmed: true,
+            fingerprint: String::new(),
+        }
+    )
+    .is_err());
+
+    // 2. Running / open session is rejected and preserved on disk.
+    let summary = resolve_session(&paths, &id).unwrap();
+    activity::test_owner(Some(&id), &summary.cwd);
+    let running_err = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id: id.clone(),
+            confirmed: true,
+            fingerprint: String::new(),
+        },
+    )
+    .expect_err("running Grok session must not be deleted");
+    activity::test_owner(None, "");
+    assert!(running_err.to_string().contains("正在运行"));
+    assert!(path.exists());
+
+    // 3. Partial failure in first workspace stops before deleting second workspace or index.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let second_ws = paths.sessions().join("zzz-second-workspace").join(&id);
+        fs::create_dir_all(&second_ws).unwrap();
+        fs::write(second_ws.join("updates.jsonl"), "").unwrap();
+        fs::write(
+            paths.home.join("active_sessions.json"),
+            serde_json::json!([{ "session_id": id, "pid": 999999 }]).to_string(),
+        )
+        .unwrap();
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+        let partial = execute_grok_delete(
+            &paths,
+            GrokDeleteRequest {
+                id: id.clone(),
+                confirmed: true,
+                fingerprint: String::new(),
+            },
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!partial.deleted);
+        assert!(!partial.residuals.is_empty());
+        assert!(
+            second_ws.exists(),
+            "second workspace directory must remain untouched when first workspace deletion fails"
+        );
+        assert!(
+            fs::read_to_string(paths.home.join("active_sessions.json"))
+                .unwrap()
+                .contains(&id),
+            "active_sessions.json must not be modified after partial deletion failure"
+        );
+    }
+
+    fs::remove_dir_all(paths.home).unwrap();
+}

@@ -1058,25 +1058,121 @@ impl<'a> DeletionContext<'a> {
     }
 }
 
+pub(crate) fn find_empty_inactive_sessions(
+    paths: &GrokPaths,
+) -> Result<Vec<(GrokSessionSummary, u64)>> {
+    let root = paths.sessions();
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let snapshot = activity::Snapshot::capture(paths);
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for workspace in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
+        let workspace = workspace?;
+        if !workspace.file_type()?.is_dir() {
+            continue;
+        }
+        for session in fs::read_dir(workspace.path())? {
+            let session = session?;
+            if !session.file_type()?.is_dir() {
+                continue;
+            }
+            let session_path = session.path();
+            if !crate::session_delete::within(&root, &session_path) {
+                continue;
+            }
+            let Some(mut summary) = read_summary(&session_path).ok().flatten() else {
+                continue;
+            };
+            if crate::session_delete::valid_id(&summary.id).is_err()
+                || !seen.insert(summary.id.clone())
+            {
+                continue;
+            }
+            snapshot.update_summary(&mut summary);
+            if summary.message_count != 0
+                || summary.status != "recent"
+                || snapshot.ownership(&summary) != activity::Ownership::Inactive
+            {
+                continue;
+            }
+            let Ok(located) = locate_sessions(paths, &summary.id) else {
+                continue;
+            };
+            if located.is_empty()
+                || located.iter().any(|p| {
+                    !crate::session_delete::within(&root, p) || {
+                        let s = read_summary(p)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| fallback_summary(p));
+                        snapshot.ownership(&s) != activity::Ownership::Inactive
+                    }
+                })
+            {
+                continue;
+            }
+            if grok_session_detail(paths, &summary.id, None)
+                .map(|detail| !detail.events.is_empty())
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let (_, bytes) = crate::session_delete::size(&located);
+            out.push((summary, bytes));
+        }
+    }
+    Ok(out)
+}
+
 pub fn execute_grok_delete(
     paths: &GrokPaths,
     request: GrokDeleteRequest,
 ) -> Result<GrokDeleteResult> {
     ensure!(request.confirmed, "Grok deletion requires confirmation");
-    let mut outcome = crate::session_delete::Outcome::default();
-    for path in locate_sessions(paths, &request.id)? {
-        outcome.remove(&path);
+    crate::session_delete::valid_id(&request.id)?;
+    let sessions_root = paths.sessions();
+    let located = locate_sessions(paths, &request.id)?;
+    let snapshot = activity::Snapshot::capture(paths);
+    for path in &located {
+        ensure!(
+            crate::session_delete::within(&sessions_root, path),
+            "Grok 会话路径越界，拒绝删除"
+        );
+        let summary = read_summary(path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fallback_summary(path));
+        ensure!(
+            snapshot.ownership(&summary) != activity::Ownership::Open,
+            "Grok 会话正在运行，请先退出后再删除"
+        );
     }
-    let index = paths.home.join("active_sessions.json");
-    let ids = std::collections::BTreeSet::from([request.id.clone()]);
-    outcome.attempt(&index, || {
-        crate::session_delete::edit_json(&index, |value| match value {
-            Value::Array(rows) => rows.retain(|row| !crate::session_delete::has_id(row, &ids)),
-            Value::Object(rows) => rows
-                .retain(|key, row| !ids.contains(key) && !crate::session_delete::has_id(row, &ids)),
-            _ => {}
-        })
-    });
+    let mut outcome = crate::session_delete::Outcome::default();
+    for (idx, path) in located.iter().enumerate() {
+        if !outcome.remove_strict(path) {
+            for rem in &located[idx + 1..] {
+                if fs::symlink_metadata(rem).is_ok() {
+                    outcome.residuals.push(rem.display().to_string());
+                }
+            }
+            break;
+        }
+    }
+    if outcome.residuals.is_empty() {
+        let index = paths.home.join("active_sessions.json");
+        let ids = std::collections::BTreeSet::from([request.id.clone()]);
+        outcome.attempt(&index, || {
+            crate::session_delete::edit_json(&index, |value| match value {
+                Value::Array(rows) => rows.retain(|row| !crate::session_delete::has_id(row, &ids)),
+                Value::Object(rows) => rows.retain(|key, row| {
+                    !ids.contains(key) && !crate::session_delete::has_id(row, &ids)
+                }),
+                _ => {}
+            })
+        });
+    }
     outcome.finish();
     Ok(GrokDeleteResult {
         id: request.id,

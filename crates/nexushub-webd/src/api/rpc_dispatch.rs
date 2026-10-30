@@ -10,8 +10,8 @@ use super::{
     grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute, job_detail,
     list_jobs, list_providers, patch_probe_settings, platform_overview, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
-    system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
-    ProbeEventsQuery, ProbeStatusQuery,
+    system_update_status, system_version, thread_blocks, thread_detail, unified_cleanup_dry_run,
+    unified_cleanup_execute, ApiResponse, GrokListQuery, ProbeEventsQuery, ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
@@ -323,6 +323,22 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::CLEANUP_DSH_ARCHIVE_EXECUTE => {
             dsh_archive_delete_execute(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::CLEANUP_UNIFIED_DRY_RUN => {
+            let request = if args.is_null() || args.as_object().is_some_and(|m| m.is_empty()) {
+                Default::default()
+            } else {
+                rpc_wrapped_payload(&args, &["request"])?
+            };
+            unified_cleanup_dry_run(State(state), headers, Json(request)).await
+        }
+        rpc_commands::CLEANUP_UNIFIED_EXECUTE => {
+            unified_cleanup_execute(
                 State(state),
                 headers,
                 Json(rpc_wrapped_payload(&args, &["request"])?),

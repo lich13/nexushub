@@ -248,6 +248,137 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
     result
 }
 
+pub(crate) fn has_orphan_artifacts(paths: &CodexPaths, id: &str) -> bool {
+    if session_delete::valid_id(id).is_err() {
+        return false;
+    }
+    let ids = BTreeSet::from([id.to_string()]);
+    let inv = inventory(paths, &ids);
+    if inv
+        .files
+        .iter()
+        .any(|path| fs::symlink_metadata(path).is_ok())
+    {
+        return true;
+    }
+    for shared in [paths.session_index(), paths.home.join("history.jsonl")] {
+        if let Ok(file) = fs::File::open(shared) {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                if let Ok(row) = serde_json::from_str::<Value>(&line) {
+                    if session_delete::has_id(&row, &ids) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+pub(crate) fn is_writer_locked(paths: &CodexPaths, id: &str) -> bool {
+    let lock_path = paths
+        .home
+        .join("thread-writer-locks")
+        .join(format!("{id}.lock"));
+    if !lock_path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+        let Ok(file) = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lock_path)
+        else {
+            return false;
+        };
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+        if rc == 0 {
+            unsafe {
+                let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
+            false
+        } else {
+            let err = std::io::Error::last_os_error();
+            matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            )
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+pub(crate) fn ensure_tree_not_running(paths: &CodexPaths, root_id: &str) -> Result<()> {
+    let tree_ids = descendants(paths, &[root_id.to_string()])?;
+    for id in &tree_ids {
+        ensure!(
+            !is_writer_locked(paths, id),
+            "线程 {id} 仍持有写入锁，无法清理"
+        );
+    }
+    if paths.state_db().exists() {
+        let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        for id in &tree_ids {
+            if let Some(row) = row_value(&conn, "threads", "id", id)? {
+                for field in [
+                    "active_turn_id",
+                    "activeTurnId",
+                    "active_job_id",
+                    "activeJobId",
+                    "running_job_id",
+                    "runningJobId",
+                ] {
+                    ensure!(
+                        row.get(field).is_none_or(|v| {
+                            v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())
+                        }),
+                        "线程 {id} 仍有活动任务，无法清理"
+                    );
+                }
+                for field in ["status", "state"] {
+                    ensure!(
+                        !row.get(field).and_then(Value::as_str).is_some_and(|s| {
+                            matches!(
+                                s.to_ascii_lowercase().as_str(),
+                                "running"
+                                    | "active"
+                                    | "in_progress"
+                                    | "inprogress"
+                                    | "pending"
+                                    | "submitting"
+                            )
+                        }),
+                        "线程 {id} 正在运行，无法清理"
+                    );
+                }
+            }
+            for (table, key) in [
+                ("jobs", "thread_id"),
+                ("agent_job_items", "assigned_thread_id"),
+            ] {
+                let cols = crate::archive::table_columns(&conn, table)?;
+                if cols.contains(key) && cols.contains("status") {
+                    let active: bool = conn.query_row(
+                        &format!(
+                            "SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"
+                        ),
+                        [id],
+                        |r| r.get(0),
+                    )?;
+                    ensure!(!active, "线程 {id} 仍有关联的运行任务，无法清理");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Result<TreePreview> {
     session_delete::valid_id(id)?;
     let (ids, relation_error) = if include_descendants {
@@ -357,50 +488,81 @@ pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutc
         residuals: inventory.errors,
         ..Default::default()
     };
-    for path in &inventory.files {
+    let files: Vec<_> = inventory.files.iter().cloned().collect();
+    for (idx, path) in files.iter().enumerate() {
         if session_delete::within(&paths.home, path) {
-            outcome.remove(path);
+            if !outcome.remove_strict(path) {
+                for rem in &files[idx + 1..] {
+                    if fs::symlink_metadata(rem).is_ok() {
+                        outcome.residuals.push(rem.display().to_string());
+                    }
+                }
+                break;
+            }
         } else {
             outcome
                 .residuals
                 .push(format!("无法定位线程文件: {}", path.display()));
-        }
-    }
-    let index = paths.session_index();
-    outcome.attempt(&index, || {
-        session_delete::filter_jsonl(&index, |row| {
-            row["id"].as_str().is_some_and(|id| ids.contains(id))
-        })
-    });
-    let history = paths.home.join("history.jsonl");
-    outcome.attempt(&history, || {
-        session_delete::filter_jsonl(&history, |row| session_delete::has_id(row, &ids))
-    });
-    let database = paths.state_db();
-    outcome.attempt(&database, || {
-        delete_database(&database, &ids, &inventory.rollouts, &inventory.files)
-    });
-    match fs::read_dir(&paths.home) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        outcome.residuals.push(error.to_string());
-                        continue;
-                    }
-                };
-                if entry.file_name().to_str().is_some_and(|name| {
-                    name.starts_with("thread_history_") && name.ends_with(".sqlite")
-                }) {
-                    outcome.attempt(&entry.path(), || {
-                        delete_database(&entry.path(), &ids, &inventory.rollouts, &inventory.files)
-                    });
+            for rem in &files[idx + 1..] {
+                if fs::symlink_metadata(rem).is_ok() {
+                    outcome.residuals.push(rem.display().to_string());
                 }
             }
+            break;
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => outcome.residuals.push(e.to_string()),
+    }
+    if outcome.residuals.is_empty() {
+        let index = paths.session_index();
+        outcome.attempt(&index, || {
+            session_delete::filter_jsonl(&index, |row| {
+                row["id"].as_str().is_some_and(|id| ids.contains(id))
+            })
+        });
+    }
+    if outcome.residuals.is_empty() {
+        let history = paths.home.join("history.jsonl");
+        outcome.attempt(&history, || {
+            session_delete::filter_jsonl(&history, |row| session_delete::has_id(row, &ids))
+        });
+    }
+    if outcome.residuals.is_empty() {
+        let database = paths.state_db();
+        outcome.attempt(&database, || {
+            delete_database(&database, &ids, &inventory.rollouts, &inventory.files)
+        });
+    }
+    let database = paths.state_db();
+    if outcome.residuals.is_empty() {
+        match fs::read_dir(&paths.home) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            outcome.residuals.push(error.to_string());
+                            break;
+                        }
+                    };
+                    if entry.file_name().to_str().is_some_and(|name| {
+                        name.starts_with("thread_history_") && name.ends_with(".sqlite")
+                    }) {
+                        outcome.attempt(&entry.path(), || {
+                            delete_database(
+                                &entry.path(),
+                                &ids,
+                                &inventory.rollouts,
+                                &inventory.files,
+                            )
+                        });
+                        if !outcome.residuals.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => outcome.residuals.push(e.to_string()),
+        }
     }
     outcome.finish();
     let deleted_ids = if database.exists() {

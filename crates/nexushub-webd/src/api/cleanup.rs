@@ -121,3 +121,54 @@ pub(crate) async fn dsh_archive_delete_execute(
         Ok(result)
     }).await.map_err(anyhow::Error::from)??)
 }
+
+pub(crate) async fn unified_cleanup_dry_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<nexushub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let codex = state.codex_paths();
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex);
+        NexusHubUseCases::new(&http_update_platform())
+            .cleanup()
+            .unified_dry_run(&paths, request)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
+}
+
+pub(crate) async fn unified_cleanup_execute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<nexushub_core::services::cleanup::UnifiedCleanupExecuteRequest>,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let codex = state.codex_paths();
+    ok(
+        nexushub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let paths =
+                nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex);
+            let result = NexusHubUseCases::new(&http_update_platform())
+                .cleanup()
+                .unified_execute(&paths, request)?;
+            state.db.record_audit(
+                Some(&auth.admin_id),
+                "unified_cleanup.execute",
+                Some("unified_cleanup"),
+                None,
+                None,
+                serde_json::json!({
+                    "deleted_count": result.deleted_count,
+                    "deleted_bytes": result.deleted_bytes,
+                    "failed_count": result.failed_count,
+                    "stopped_early": result.stopped_early,
+                }),
+            )?;
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
+}

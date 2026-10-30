@@ -74,6 +74,8 @@ pub const UPDATES_INSTALL: &str = "updates.install";
 pub const UPDATES_PRUNE: &str = "updates.prune";
 pub const CLEANUP_DSH_ARCHIVE_DRY_RUN: &str = "cleanup.dshArchiveDryRun";
 pub const CLEANUP_DSH_ARCHIVE_EXECUTE: &str = "cleanup.dshArchiveExecute";
+pub const CLEANUP_UNIFIED_DRY_RUN: &str = "cleanup.unifiedDryRun";
+pub const CLEANUP_UNIFIED_EXECUTE: &str = "cleanup.unifiedExecute";
 pub const CLEANUP_ARCHIVE_DRY_RUN: &str = "cleanup.archiveDryRun";
 pub const CLEANUP_ARCHIVE_EXECUTE: &str = "cleanup.archiveExecute";
 pub const CLEANUP_HIDDEN_DRY_RUN: &str = "cleanup.hiddenDryRun";
@@ -109,6 +111,8 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     UPDATES_PRUNE,
     CLEANUP_DSH_ARCHIVE_DRY_RUN,
     CLEANUP_DSH_ARCHIVE_EXECUTE,
+    CLEANUP_UNIFIED_DRY_RUN,
+    CLEANUP_UNIFIED_EXECUTE,
     CLEANUP_ARCHIVE_DRY_RUN,
     CLEANUP_ARCHIVE_EXECUTE,
     CLEANUP_HIDDEN_DRY_RUN,
@@ -158,6 +162,7 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | PROBE_EVENTS
             | UPDATES_STATUS
             | CLEANUP_DSH_ARCHIVE_DRY_RUN
+            | CLEANUP_UNIFIED_DRY_RUN
             | CLEANUP_HIDDEN_DRY_RUN
             | GROK_LIST
             | GROK_DETAIL
@@ -256,6 +261,8 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     UPDATES_PRUNE,
     CLEANUP_DSH_ARCHIVE_DRY_RUN,
     CLEANUP_DSH_ARCHIVE_EXECUTE,
+    CLEANUP_UNIFIED_DRY_RUN,
+    CLEANUP_UNIFIED_EXECUTE,
     CLEANUP_ARCHIVE_DRY_RUN,
     CLEANUP_ARCHIVE_EXECUTE,
     CLEANUP_HIDDEN_DRY_RUN,

@@ -242,6 +242,54 @@ pub fn rename_claude_session(
     );
     Ok(result)
 }
+pub(crate) fn find_empty_inactive_sessions(
+    paths: &ClaudePaths,
+) -> Result<Vec<(ClaudeSessionSummary, String, u64)>> {
+    if !paths.available() {
+        return Ok(Vec::new());
+    }
+    let snapshot = activity::Snapshot::capture(paths);
+    let mut out = Vec::new();
+    for path in files(paths)? {
+        if checked_path(paths, &path).is_err() {
+            continue;
+        }
+        let Ok(parsed) = reader::read(&path) else {
+            continue;
+        };
+        if !parsed.issues.is_empty()
+            || parsed.turn_open
+            || parsed.message_count != 0
+            || !parsed.events.is_empty()
+        {
+            continue;
+        }
+        let Ok(assessment) = deletion_assessment(&parsed, &path, &snapshot) else {
+            continue;
+        };
+        if assessment.ownership != activity::Ownership::Inactive {
+            continue;
+        }
+        let Ok(fp) = fingerprint(&path) else {
+            continue;
+        };
+        let Ok(sum) = summary(paths, &path, &parsed, &snapshot) else {
+            continue;
+        };
+        let file_id = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| sum.id.clone());
+        let (targets, warnings) = delete_paths(paths, &path, &file_id);
+        if !warnings.is_empty() {
+            continue;
+        }
+        let (_, bytes) = crate::session_delete::size(&targets);
+        out.push((sum, fp, bytes));
+    }
+    Ok(out)
+}
+
 pub fn execute_claude_delete(
     paths: &ClaudePaths,
     request: ClaudeDeleteRequest,
@@ -256,81 +304,164 @@ pub fn execute_claude_delete(
         .context("会话文件名缺失")?
         .to_string_lossy()
         .into_owned();
-    let ids = BTreeSet::from([id.clone()]);
-    let mut outcome = crate::session_delete::Outcome::default();
     let projects = paths
         .projects
         .canonicalize()
         .unwrap_or_else(|_| paths.projects.clone());
+    ensure!(
+        crate::session_delete::within(&projects, &main),
+        "Claude 会话路径越界"
+    );
+    let snapshot = activity::Snapshot::capture(paths);
+    match fs::symlink_metadata(&main) {
+        Ok(_) => {
+            checked_path(paths, &main)?;
+            if !request.fingerprint.is_empty() {
+                ensure!(
+                    fingerprint(&main)? == request.fingerprint,
+                    "Claude 会话已变化，请重新预览"
+                );
+            }
+            let parsed = read_or_warning(&main, false);
+            let assessment = deletion_assessment(&parsed, &main, &snapshot)?;
+            if assessment.ownership == activity::Ownership::Open {
+                anyhow::bail!(
+                    "{}",
+                    assessment
+                        .block_reason()
+                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(
+                request.fingerprint.is_empty(),
+                "Claude 会话文件已不存在，请重新预览"
+            );
+            let fallback = Parsed {
+                id: id.clone(),
+                ..Default::default()
+            };
+            let assessment = deletion_assessment(&fallback, &main, &snapshot)?;
+            if assessment.ownership == activity::Ownership::Open {
+                anyhow::bail!(
+                    "{}",
+                    assessment
+                        .block_reason()
+                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
+                );
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let ids = BTreeSet::from([id.clone()]);
+    let mut outcome = crate::session_delete::Outcome::default();
     let (targets, errors) = delete_paths(paths, &main, &id);
-    outcome.residuals.extend(errors);
-    for path in targets {
-        if crate::session_delete::within(&paths.config, &path)
-            || crate::session_delete::within(&projects, &path)
+    if !errors.is_empty() {
+        outcome.residuals.extend(errors);
+        outcome.finish();
+        return Ok(ClaudeDeleteResult {
+            session_key: request.session_key,
+            deleted: false,
+            bytes: 0,
+            residuals: outcome.residuals,
+        });
+    }
+    for (idx, path) in targets.iter().enumerate() {
+        if crate::session_delete::within(&paths.config, path)
+            || crate::session_delete::within(&projects, path)
         {
-            outcome.remove(&path);
+            if !outcome.remove_strict(path) {
+                for rem in &targets[idx + 1..] {
+                    if fs::symlink_metadata(rem).is_ok() {
+                        outcome.residuals.push(rem.display().to_string());
+                    }
+                }
+                break;
+            }
         } else {
             outcome
                 .residuals
                 .push(format!("无法定位会话文件: {}", path.display()));
-        }
-    }
-    let index = main
-        .parent()
-        .context("会话项目目录缺失")?
-        .join("sessions-index.json");
-    outcome.attempt(&index, || {
-        crate::session_delete::edit_json(&index, |value| {
-            if let Some(entries) = value.get_mut("entries").and_then(Value::as_array_mut) {
-                entries.retain(|row| !crate::session_delete::has_id(row, &ids));
-            }
-        })
-    });
-    let history = paths.config.join("history.jsonl");
-    outcome.attempt(&history, || {
-        crate::session_delete::filter_jsonl(&history, |row| {
-            crate::session_delete::has_id(row, &ids)
-        })
-    });
-    let registrations = paths.config.join("sessions");
-    match fs::read_dir(&registrations).and_then(|entries| {
-        if fs::symlink_metadata(&registrations)?
-            .file_type()
-            .is_symlink()
-        {
-            Err(std::io::Error::other("会话登记目录是链接"))
-        } else {
-            Ok(entries)
-        }
-    }) {
-        Ok(entries) => {
-            for entry in entries {
-                match entry {
-                    Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "json") => {
-                        let path = entry.path();
-                        match open_regular(&path)
-                            .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
-                        {
-                            Ok(row) if crate::session_delete::has_id(&row, &ids) => {
-                                outcome.remove(&path)
-                            }
-                            Ok(_) => {}
-                            Err(error) => outcome
-                                .residuals
-                                .push(format!("{}: {error}", path.display())),
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => outcome
-                        .residuals
-                        .push(format!("{}: {error}", registrations.display())),
+            for rem in &targets[idx + 1..] {
+                if fs::symlink_metadata(rem).is_ok() {
+                    outcome.residuals.push(rem.display().to_string());
                 }
             }
+            break;
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => outcome
-            .residuals
-            .push(format!("{}: {error}", registrations.display())),
+    }
+    if outcome.residuals.is_empty() {
+        let index = main
+            .parent()
+            .context("会话项目目录缺失")?
+            .join("sessions-index.json");
+        outcome.attempt(&index, || {
+            crate::session_delete::edit_json(&index, |value| {
+                if let Some(entries) = value.get_mut("entries").and_then(Value::as_array_mut) {
+                    entries.retain(|row| !crate::session_delete::has_id(row, &ids));
+                }
+            })
+        });
+    }
+    if outcome.residuals.is_empty() {
+        let history = paths.config.join("history.jsonl");
+        outcome.attempt(&history, || {
+            crate::session_delete::filter_jsonl(&history, |row| {
+                crate::session_delete::has_id(row, &ids)
+            })
+        });
+    }
+    if outcome.residuals.is_empty() {
+        let registrations = paths.config.join("sessions");
+        match fs::read_dir(&registrations).and_then(|entries| {
+            if fs::symlink_metadata(&registrations)?
+                .file_type()
+                .is_symlink()
+            {
+                Err(std::io::Error::other("会话登记目录是链接"))
+            } else {
+                Ok(entries)
+            }
+        }) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "json") => {
+                            let path = entry.path();
+                            match open_regular(&path)
+                                .and_then(|file| Ok(serde_json::from_reader::<_, Value>(file)?))
+                            {
+                                Ok(row) if crate::session_delete::has_id(&row, &ids) => {
+                                    if !outcome.remove_strict(&path) {
+                                        break;
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    outcome
+                                        .residuals
+                                        .push(format!("{}: {error}", path.display()));
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            outcome
+                                .residuals
+                                .push(format!("{}: {error}", registrations.display()));
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => outcome
+                .residuals
+                .push(format!("{}: {error}", registrations.display())),
+        }
     }
     outcome.finish();
     Ok(ClaudeDeleteResult {

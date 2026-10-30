@@ -666,3 +666,50 @@ export type DshArchiveCandidate = DshArchiveSelection & { parentId: string | nul
 export type DshArchiveDeletePlan = { available: boolean; archivedThreads: number; candidates: DshArchiveCandidate[]; issues: string[] };
 export type DshArchiveDeleteRequest = { confirmed: boolean; targets: DshArchiveSelection[] };
 export type DshArchiveDeleteResult = { items: HiddenThreadItemResult[]; deletedThreads: number; deletedBytes: number };
+
+export type UnifiedCleanupDryRunRequest = { scopes?: string[]; includeCodexHidden?: boolean };
+export type UnifiedCleanupCandidate = {
+  id: string;
+  title: string;
+  estimatedBytes: number;
+  blockedReason: string | null;
+};
+export type UnifiedCleanupScopePlan = {
+  scope: string;
+  provider: string;
+  label: string;
+  supported: boolean;
+  scanned: boolean;
+  unavailableReason: string | null;
+  candidateCount: number;
+  deletableCount: number;
+  estimatedBytes: number;
+  candidates: UnifiedCleanupCandidate[];
+  issues: string[];
+};
+export type UnifiedCleanupPlan = {
+  totalCandidates: number;
+  totalDeletable: number;
+  totalEstimatedBytes: number;
+  scopes: UnifiedCleanupScopePlan[];
+};
+export type UnifiedCleanupExecuteRequest = { confirmed: boolean; scopes?: string[] };
+export type UnifiedCleanupScopeResult = {
+  scope: string;
+  provider: string;
+  label: string;
+  deletedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  deletedBytes: number;
+  residuals: string[];
+  issues: string[];
+};
+export type UnifiedCleanupResult = {
+  deletedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  deletedBytes: number;
+  stoppedEarly: boolean;
+  scopes: UnifiedCleanupScopeResult[];
+};

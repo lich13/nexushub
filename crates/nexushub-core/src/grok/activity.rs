@@ -38,8 +38,41 @@ pub(super) struct Snapshot {
     processes: Option<HashMap<u32, Process>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_SNAPSHOT: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn test_owner(id: Option<&str>, cwd: &str) {
+    TEST_SNAPSHOT.with(|slot| {
+        *slot.borrow_mut() = id.map(|id| (id.to_owned(), cwd.to_owned()));
+    });
+}
+
 impl Snapshot {
     pub(super) fn capture(paths: &GrokPaths) -> Self {
+        #[cfg(test)]
+        if let Some((id, cwd)) = TEST_SNAPSHOT.with(|slot| slot.borrow().clone()) {
+            let mut processes = HashMap::new();
+            processes.insert(
+                42,
+                Process {
+                    started_at: Some(100),
+                    zombie: false,
+                    native: Some(true),
+                },
+            );
+            return Self {
+                registrations: Some(vec![Registration {
+                    id,
+                    pid: Some(42),
+                    opened_at: Some(200),
+                    cwd: Some(cwd),
+                }]),
+                processes: Some(processes),
+            };
+        }
         let registrations = read_registrations(&paths.home.join("active_sessions.json"));
         let pids: HashSet<_> = registrations
             .iter()
@@ -170,7 +203,11 @@ fn same_path(left: &str, right: &str) -> bool {
 }
 
 fn read_registrations(path: &Path) -> Option<Vec<Registration>> {
-    let file = File::open(path).ok()?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
     if file.metadata().ok()?.len() > 1024 * 1024 {
         return None;
     }

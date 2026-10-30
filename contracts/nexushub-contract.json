@@ -409,6 +409,30 @@
       "responseDto": "DshArchiveDeleteResult"
     },
     {
+      "id": "cleanup.unifiedDryRun",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "cleanup.unifiedDryRun",
+      "linuxRpc": "cleanup.unifiedDryRun",
+      "tauriCommand": "commands::settings::dryRunUnifiedCleanup",
+      "webuiWrapper": "dryRunUnifiedCleanup",
+      "dtoOwner": "cleanup",
+      "requestDto": "UnifiedCleanupDryRunRequest",
+      "responseDto": "UnifiedCleanupPlan"
+    },
+    {
+      "id": "cleanup.unifiedExecute",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "cleanup.unifiedExecute",
+      "linuxRpc": "cleanup.unifiedExecute",
+      "tauriCommand": "commands::settings::startUnifiedCleanup",
+      "webuiWrapper": "startUnifiedCleanup",
+      "dtoOwner": "cleanup",
+      "requestDto": "UnifiedCleanupExecuteRequest",
+      "responseDto": "UnifiedCleanupResult"
+    },
+    {
       "id": "cleanup.archiveDryRun",
       "kind": "rpc",
       "scope": "shared",
@@ -1413,6 +1437,34 @@
     "DshArchiveDeleteResult": {
       "core": "DshArchiveDeleteResult",
       "webui": "DshArchiveDeleteResult"
+    },
+    "UnifiedCleanupDryRunRequest": {
+      "core": "UnifiedCleanupDryRunRequest",
+      "webui": "UnifiedCleanupDryRunRequest"
+    },
+    "UnifiedCleanupCandidate": {
+      "core": "UnifiedCleanupCandidate",
+      "webui": "UnifiedCleanupCandidate"
+    },
+    "UnifiedCleanupScopePlan": {
+      "core": "UnifiedCleanupScopePlan",
+      "webui": "UnifiedCleanupScopePlan"
+    },
+    "UnifiedCleanupPlan": {
+      "core": "UnifiedCleanupPlan",
+      "webui": "UnifiedCleanupPlan"
+    },
+    "UnifiedCleanupExecuteRequest": {
+      "core": "UnifiedCleanupExecuteRequest",
+      "webui": "UnifiedCleanupExecuteRequest"
+    },
+    "UnifiedCleanupScopeResult": {
+      "core": "UnifiedCleanupScopeResult",
+      "webui": "UnifiedCleanupScopeResult"
+    },
+    "UnifiedCleanupResult": {
+      "core": "UnifiedCleanupResult",
+      "webui": "UnifiedCleanupResult"
     },
     "ProviderListRequest": {
       "core": "ProviderListRequest",

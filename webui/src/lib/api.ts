@@ -43,6 +43,8 @@ export {
   dryRunArchiveDelete,
   dryRunDshArchiveDelete,
   startDshArchiveDelete,
+  dryRunUnifiedCleanup,
+  startUnifiedCleanup,
   startArchiveDelete,
   dryRunHiddenThreadDelete,
   startHiddenThreadDelete,

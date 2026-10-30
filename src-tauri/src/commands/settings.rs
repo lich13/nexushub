@@ -147,3 +147,41 @@ pub async fn startDshArchiveDelete(
     .await
     .map_err(|_| "DSH 归档清理任务未完成".to_string())?
 }
+
+#[tauri::command(rename = "cleanup.unifiedDryRun")]
+pub async fn dryRunUnifiedCleanup(
+    state: tauri::State<'_, DesktopState>,
+    request: Option<nexushub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
+) -> Result<nexushub_core::services::cleanup::UnifiedCleanupPlan, String> {
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
+            state.codex_paths(),
+        );
+        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+            .cleanup()
+            .unified_dry_run(&paths, request.unwrap_or_default())
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|_| "全平台清理预览任务未完成".to_string())?
+}
+
+#[tauri::command(rename = "cleanup.unifiedExecute")]
+pub async fn startUnifiedCleanup(
+    state: tauri::State<'_, DesktopState>,
+    request: nexushub_core::services::cleanup::UnifiedCleanupExecuteRequest,
+) -> Result<nexushub_core::services::cleanup::UnifiedCleanupResult, String> {
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(
+            state.codex_paths(),
+        );
+        nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+            .cleanup()
+            .unified_execute(&paths, request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|_| "全平台清理任务未完成".to_string())?
+}
