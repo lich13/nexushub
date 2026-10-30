@@ -492,7 +492,7 @@ export function ArchivableProviderWorkspace({
           menuActions={rowMenuActions(item, targetBatch)}
         >
           <strong>{providerSessionLabel(item)}</strong>
-          {item.cwd && <span>{item.cwd}</span>}
+          {item.cwd && <span className="provider-session-path">{item.cwd}</span>}
           <span>{item.id}</span>
           <span className="session-status-row">
             {item.status === "running" ? (
@@ -519,6 +519,11 @@ export function ArchivableProviderWorkspace({
               <AgentBrandIcon agent={provider} size={16} />
             </span>
             <h1>{label}</h1>
+            {queryEnabled && !sessions.isLoading && sessions.data && (
+              <span className="workspace-count-pill" aria-hidden="true">
+                {sessions.data.length}
+              </span>
+            )}
           </div>
           <button
             className="icon-button"
@@ -631,6 +636,7 @@ export function ArchivableProviderWorkspace({
                 ? `升级远程服务后即可浏览 ${label} 会话`
                 : `选择一个 ${label} 任务`}
             </strong>
+            <small>支持重命名、归档与恢复、批量清理以及消息时间线定位</small>
           </div>
         )}
         {selected && (
@@ -645,6 +651,11 @@ export function ArchivableProviderWorkspace({
               </button>
               <div className="conversation-title-copy">
                 <h1 className="conversation-title">{providerSessionLabel(selected)}</h1>
+                {selected.cwd && (
+                  <span className="conversation-subtitle" title={selected.cwd}>
+                    {selected.cwd}
+                  </span>
+                )}
               </div>
               {selected.archived ? (
                 <span className="status-chip tone-neutral">已归档</span>

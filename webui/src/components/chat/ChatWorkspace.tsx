@@ -181,6 +181,7 @@ export function ChatWorkspace({
               <AgentBrandIcon agent="codex" size={26} />
             </span>
             <strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong>
+            <small>从左侧选择或新建会话，浏览完整消息流与命令执行时间线</small>
           </div>
         )}
       </section>
@@ -379,6 +380,11 @@ function ThreadList({
             <AgentBrandIcon agent="codex" size={16} />
           </span>
           <strong>Codex</strong>
+          {!loading && (
+            <span className="workspace-count-pill" aria-hidden="true">
+              {threads.length}
+            </span>
+          )}
         </div>
         <div className="thread-title-actions">
           {newThread}

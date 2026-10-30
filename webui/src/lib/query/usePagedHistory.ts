@@ -59,6 +59,7 @@ export async function refreshHistory<Page>(previous: HistoryData<Page> | undefin
   let next = adapter.merge(previous, { pages: [combined, ...previous.pages.slice(1)], pageParams: previous.pageParams });
   const headIds = new Set(adapter.ids(combined));
   const refreshed = new Set(headIds);
+  let updatedOlderPage = false;
   for (let index = 0; index < previous.pages.length; index++) {
     const page = previous.pages[index];
     const ids = adapter.ids(page);
@@ -76,13 +77,16 @@ export async function refreshHistory<Page>(previous: HistoryData<Page> | undefin
       // loop forever when an older service cannot resolve the retained cursor.
       if (!updateIds.includes(id)) return single(adapter.invalidate?.(head) ?? head);
       updateIds.forEach(item => refreshed.add(item));
+      updatedOlderPage = true;
       next = { ...next, pages: next.pages.map((oldPage, pageIndex) => pageIndex === index ? adapter.merge(single(oldPage), single(update)).pages[0] : oldPage) };
       while (pending.length && refreshed.has(pending[pending.length - 1])) pending.pop();
     }
   }
   // Historical pages carry their own older summary; the newest snapshot stays
   // authoritative even when an old tool result was refreshed in the head cache.
-  next = adapter.merge(next, { ...next, pages: [combined, ...next.pages.slice(1)] });
+  if (updatedOlderPage) {
+    next = adapter.merge(next, { ...next, pages: [combined, ...next.pages.slice(1)] });
+  }
   return next;
 }
 

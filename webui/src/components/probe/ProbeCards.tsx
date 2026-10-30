@@ -159,7 +159,7 @@ export function ProbeBarkCard({
         />
       </div>
       <label className="toggle-row">
-        <span>启用 Bark 推送通道</span>
+        <span>启用 Bark</span>
         <input
           type="checkbox"
           checked={draft.notifications.enabled}
@@ -295,7 +295,7 @@ export function ProbeRuntimeSettingsCard({
                 </span>
                 <input
                   type="checkbox"
-                  aria-label={`${platform.label} 通知`}
+                  aria-label={platform.id === "grok" ? "Grok 通知" : `${platform.label} 通知`}
                   checked={enabled}
                   onChange={event =>
                     setDraft(applyPlatformNotificationToggle(draft, platform.id, event.target.checked))

@@ -1,6 +1,6 @@
 import { RENDER_CACHE_BUDGET } from "../../lib/domain/resourceBudgets";
 import { Check, Copy } from "lucide-react";
-import { memo, useContext, useMemo, useState, type ComponentProps } from "react";
+import { memo, useContext, useMemo, useState, type ComponentProps, type ReactElement } from "react";
 import Markdown, { defaultUrlTransform, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { instructionSegments, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
@@ -13,7 +13,7 @@ type Element = { tagName?: string; children?: Element[] };
 
 type RemarkPlugin = Extract<NonNullable<Options["remarkPlugins"]>[number], (...args: never[]) => unknown>;
 type MarkdownParser = NonNullable<ThisParameterType<RemarkPlugin>["parser"]>;
-const compiledMarkdown = new Map<string, { json: string; bytes: number }>();
+const compiledMarkdown = new Map<string, { json: string; bytes: number; element?: ReactElement }>();
 let compiledMarkdownBytes = 0;
 const compiledMarkdownLimit = RENDER_CACHE_BUDGET.markdownBytes;
 
@@ -78,12 +78,27 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
 }
 
 const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }) {
-  return <Markdown remarkPlugins={[remarkGfm, reuseMarkdownParse]} rehypePlugins={[omitMemoryElements, reuseMarkdownTree]} urlTransform={(url, key, node) => key === "href" && node.tagName === "a" && fileLinkTarget(url) ? url : defaultUrlTransform(url)} components={{
-    pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
-    a: ({ node: _node, href, children, ...props }) => href && fileLinkTarget(href)
-      ? <FilePathLink href={href}>{children}</FilePathLink>
-      : <a {...props} href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a>
-  }}>{text}</Markdown>;
+  const cached = compiledMarkdown.get(text);
+  if (cached?.element) {
+    compiledMarkdown.delete(text);
+    compiledMarkdown.set(text, cached);
+    return cached.element;
+  }
+  const element = Markdown({
+    remarkPlugins: [remarkGfm, reuseMarkdownParse],
+    rehypePlugins: [omitMemoryElements, reuseMarkdownTree],
+    urlTransform: (url, key, node) => key === "href" && node.tagName === "a" && fileLinkTarget(url) ? url : defaultUrlTransform(url),
+    components: {
+      pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
+      a: ({ node: _node, href, children, ...props }) => href && fileLinkTarget(href)
+        ? <FilePathLink href={href}>{children}</FilePathLink>
+        : <a {...props} href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a>
+    },
+    children: text
+  });
+  const entry = compiledMarkdown.get(text);
+  if (entry) entry.element = element;
+  return element;
 });
 
 export const MarkdownContent = memo(function MarkdownContent({ text, activityId = "message", timelineAliases = [], foldInstructions = false }: { text: string; activityId?: string; timelineAliases?: string[]; foldInstructions?: boolean }) {

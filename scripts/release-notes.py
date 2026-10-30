@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.8.0": [
+        "支持保存多台自定义名称远程机器并自动无损迁移钥匙串凭据，Probe 升级为五大平台一键通知开关、统一 Hooks 卸载与五平台状态对齐，全平台清理严格按预览目标指纹取交集",
+        "提取本机五大 Agent 官方原生高保真品牌图标并全量重写三层 macOS 桌面界面，同时补齐 Grok／Claude 轻量巡检缓存、详情内存收敛与全仓库隐私边界加固。",
+    ],
     "1.7.0": [
         "修复 Antigravity 线程中间提问 Bark 漏推与执行段原数据核验，整合覆盖五大 Agent 六大分类的「全平台线程清理」工作台并全面加固执行端删除边界。",
         "全面换装五大 Agent 官方原生品牌图标与高对比原生配色，深度重写 macOS 原生质感界面，并精简服务端 SQLite／内存缓存／HTTP 压缩与前端轮询包体。",
@@ -227,6 +231,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.8.0":
+        sections = {
+            "版本概览": [
+                "新增多台命名远程机器管理与钥匙串凭据无损迁移，升级 Probe 跨五平台实时态势、五大平台通知一键开关、Codex Hook 安全卸载与五平台工作区能力对齐，加固全平台清理预览目标指纹交集与受控残留防护，提取五大 Agent 官方原生品牌图标并全量深度重写前端界面；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "多远程主机管理：支持保存多台自定义名称远程主机、侧栏一键切换与独立编辑移除，API Key 按机器 ID 独立存储于系统钥匙串，旧版单远程配置首次启动时自动无损迁移，不同主机切换自动隔离前端查询作用域。",
+                "Probe 与五平台向 Codex 对齐：移除顶部冗余横幅，通知配置精简为五大 Agent 平台一键开关并修复保留天数重复字段；新增 `probe.removeHooks` 支持安全卸载 Codex Hook 并统一整合 Codex／Claude Hooks 管理面板；补齐 Grok `reply_needed` 提问提醒、跨五平台实时活跃态势以及五工作区状态芯片、复制答复与本机 Finder 显示能力（清理前端废弃死代码与冗余轮询包装）。",
+                "五大 Agent 原生品牌图标与全量界面深度重写：从本机官方应用包精确提取与矢量化 Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness 原生图标，全量重写 `styles.css` 三层 macOS 原生表面体系、七工作区官方品牌色盘、胶囊搜索、原生滑动拨杆开关、过程折叠卡片、多远程管理台与空间占比清理工作台。",
+            ],
+            "问题修复": [
+                "清理安全边界加固：`cleanup.unifiedExecute` 强制将当下重算允许集与用户预览目标 ID 及非空指纹取交集（预览后新增项零误删，Codex 隐藏线程改为按目标 ID 定向重验）；移除 `archive.rs` 无条件孤儿文件放行分支，仅允许受控部分失败残留重试。",
+                "服务端性能与资源收敛：为 Grok 与 Claude 巡检建立 32 MiB 轻量文件身份快照缓存，解除后台巡检对重型详情缓存的常驻占用；Grok 列表改为元数据排序截断；详情缓存总预算收紧约 68% 且闲置 TTL 缩短至 5 分钟；监控守护进程复用配置文件与数据库连接，通知历史裁剪后自动执行 `wal_checkpoint(TRUNCATE)` 回收磁盘体积。",
+                "Antigravity、提问识别与去重隔离修复：Antigravity 允许已落定 `reply_needed` 闲置流命中缓存、增量拉取 `ExecutorMetadatas` 尾部段，并按进程树／窄启动时间窗／命令行精确匹配未跟踪子进程；`trailing_user_question` 收紧为仅检查末段尾句；为仍在最近 N 列表内的跨 7 天未答提问自动续期去重标记；补齐集成测试独立临时主目录隔离与全仓库历史对象隐私门禁。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；新增 `probe.removeHooks` 命令、统一清理 `targets` 指纹列表与多远程主机列表字段，连接旧版远端服务时自动兼容回退。",
+                "旧版单台远程主机配置与系统钥匙串凭据在升级后首次读取时自动迁移至多主机结构，无需手工重新输入 API Key。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App；随后核验五大 Agent 原生品牌图标与新界面、「设置 → 远程连接」多机器保存与切换、Probe 平台通知一键开关与 Hooks 卸载，以及「全平台线程清理」预览与勾选执行流程。",
+                "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.7.0":
         sections = {

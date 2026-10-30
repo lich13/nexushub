@@ -288,8 +288,18 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
   return (
     <div className="probe-layout">
       <div className="probe-header">
-        <div>
+        <div className="probe-header-meta">
           <h1>{PROBE_NAV_LABEL}</h1>
+          <div className="probe-header-pills">
+            <span className={`status-chip tone-${probeView.availability.tone}`}>
+              {probeView.serviceText}
+            </span>
+            {currentSettings?.codex?.host_label && (
+              <span className="status-chip tone-neutral">
+                {currentSettings.codex.host_label}
+              </span>
+            )}
+          </div>
         </div>
         <div className="button-row">
           <button className="icon-button" title="刷新 Probe" onClick={probeActions.refresh}>

@@ -6,7 +6,7 @@ import {
   SlidersHorizontal,
   TriangleAlert
 } from "lucide-react";
-import { Component, ErrorInfo, ReactNode, Suspense, lazy, useState } from "react";
+import { Component, ErrorInfo, Fragment, ReactNode, Suspense, lazy, useState } from "react";
 import { AgentBrandIcon } from "./components/common/AgentBrandIcon";
 import { MachineButton, RemoteConnectionSettings } from "./components/connection/RemoteConnection";
 import { useConnection } from "./lib/query/connection";
@@ -98,7 +98,7 @@ export default function App() {
             {view === "dsh" && <DshWorkspace capabilities={capabilities} />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}
             {view === "ops" && <div className="settings-workspace">
-              <header className="settings-header"><h1>设置</h1><div className="settings-tabs" role="tablist">
+              <header className="settings-header"><div className="settings-header-copy"><h1>设置</h1><span className="muted-text">管理工作站版本更新、全平台会话清理与多台远程主机连接</span></div><div className="settings-tabs" role="tablist">
                 <button role="tab" aria-selected={settingsSection === "maintenance"} onClick={() => setSettingsSection("maintenance")}>更新与维护</button>
                 <button role="tab" aria-selected={settingsSection === "remote"} onClick={() => setSettingsSection("remote")}>远程连接</button>
               </div></header>
@@ -161,9 +161,12 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
       <MachineButton collapsed={collapsed} onConfigure={onConfigure} />
       <nav>
         {items.map((item) => (
-          <NavButton key={item.id} navId={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
-            {item.label}
-          </NavButton>
+          <Fragment key={item.id}>
+            {item.id === "probe" && <div className="nav-section-divider" aria-hidden="true" />}
+            <NavButton navId={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
+              {item.label}
+            </NavButton>
+          </Fragment>
         ))}
       </nav>
     </aside>

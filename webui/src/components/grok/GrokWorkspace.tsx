@@ -182,6 +182,11 @@ export function GrokWorkspace({}: {}) {
               <AgentBrandIcon agent="grok" size={16} />
             </span>
             <h1>Grok Build</h1>
+            {!sessions.isLoading && sessions.data && (
+              <span className="workspace-count-pill" aria-hidden="true">
+                {sessions.data.length}
+              </span>
+            )}
           </div>
           <button
             className="icon-button"
@@ -254,7 +259,7 @@ export function GrokWorkspace({}: {}) {
                 ]}
               >
                 <strong>{grokSessionLabel(item)}</strong>
-                <span>{item.cwd}</span>
+                <span className="provider-session-path">{item.cwd}</span>
                 <span className="session-status-row">
                   {item.status === "running" ? (
                     <RunningIndicator />
@@ -278,13 +283,17 @@ export function GrokWorkspace({}: {}) {
               <AgentBrandIcon agent="grok" size={26} />
             </span>
             <strong>选择一个 Grok 任务</strong>
+            <small>支持浏览本地会话历史、命令输出分组与任务文件管理</small>
           </div>
         )}
         {selected && (
           <>
             <header className="conversation-header" data-timeline-id="session">
               <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /></button>
-              <div className="conversation-title-copy"><h1 className="conversation-title">{grokSessionLabel(selected)}</h1></div>
+              <div className="conversation-title-copy">
+                <h1 className="conversation-title">{grokSessionLabel(selected)}</h1>
+                {selected.cwd && <span className="conversation-subtitle" title={selected.cwd}>{selected.cwd}</span>}
+              </div>
               <div className="conversation-header-actions">
                 {selected.status === "running" && <span className="status-chip tone-info">运行中</span>}
                 <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>

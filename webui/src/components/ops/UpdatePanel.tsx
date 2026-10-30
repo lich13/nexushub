@@ -47,7 +47,7 @@ export function UpdatePanel({ capabilities, status, loading, action, busy, finis
       </div>
       {failure && <div role="alert" className="form-error update-feedback">{failure}</div>}
       {working && !failure && <div role="status" className="update-feedback"><RunningIndicator />{progress}</div>}
-      {feedback && <div role="status" className="update-feedback">{feedback}</div>}
+      {feedback && <div role="status" className="form-success update-feedback">{feedback}</div>}
     </Panel>
   );
 }

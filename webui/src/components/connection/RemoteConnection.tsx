@@ -1,4 +1,4 @@
-import { Check, Cloud, Monitor, Pencil, Plus, Power, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Cloud, Monitor, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   remoteRemove,
@@ -58,8 +58,15 @@ export function MachineButton({
   return (
     <div className="machine-control">
       <label className={`machine-button ${collapsed ? "compact" : ""}`} title={currentLabel}>
-        {connection.target === "local" ? <Monitor size={17} /> : <Cloud size={17} />}
+        {connection.target === "local" ? <Monitor size={16} /> : <Cloud size={16} />}
         {!collapsed && <span>{currentLabel}</span>}
+        {!collapsed && (
+          <i
+            className={`machine-status-dot${connection.target === "remote" ? " is-remote" : ""}`}
+            aria-hidden="true"
+          />
+        )}
+        {!collapsed && <ChevronDown size={13} className="machine-chevron" aria-hidden="true" />}
         <select
           aria-label="当前机器"
           value={selectValue}
@@ -397,7 +404,11 @@ export function RemoteConnectionSettings() {
             </button>
           )}
         </div>
-        {(saved || connection.notice) && <span role="status">已保存</span>}
+        {(saved || connection.notice) && (
+          <span role="status" className="form-success">
+            已保存
+          </span>
+        )}
         {error && (
           <div className="form-error" role="alert">
             {error}

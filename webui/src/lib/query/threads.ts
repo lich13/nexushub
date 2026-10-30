@@ -122,6 +122,10 @@ function isPlaceholderThreadTitleForCache(title: string): boolean {
 function mergeIncomingThreadSummaryForCache<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
   const next = { ...current, ...incoming };
   next.title = mergeThreadSummaryTitleForCache(current.title, incoming.title);
+  const keys = Object.keys(next) as Array<keyof typeof next>;
+  if (keys.length === Object.keys(current).length && keys.every(key => Object.is(current[key], next[key]))) {
+    return current;
+  }
   return next;
 }
 
@@ -295,9 +299,11 @@ export function useThreadCacheActions() {
       clearArchivedThreadClientState(qc, messageStore, threadId),
     // A list summary update does not refresh the cached transcript.
     mergeThreadDetailSummary: (threadId: string, incoming: Partial<ThreadSummary>) =>
-      qc.setQueryData<ThreadDetail>(threadQueryKeys.thread(threadId), (current) => (
-        current ? { ...current, summary: mergeIncomingThreadSummaryForCache(current.summary, incoming) as ThreadSummary } : current
-      ), { updatedAt: qc.getQueryState(threadQueryKeys.thread(threadId))?.dataUpdatedAt }),
+      qc.setQueryData<ThreadDetail>(threadQueryKeys.thread(threadId), (current) => {
+        if (!current) return current;
+        const summary = mergeIncomingThreadSummaryForCache(current.summary, incoming) as ThreadSummary;
+        return summary === current.summary ? current : { ...current, summary };
+      }, { updatedAt: qc.getQueryState(threadQueryKeys.thread(threadId))?.dataUpdatedAt }),
     updateThreadListCaches: (incoming: ThreadSummary) => updateThreadListCaches(qc, incoming),
     invalidateThreads: (refetchType?: "active" | "all" | "inactive" | "none") =>
       qc.invalidateQueries({ queryKey: threadQueryKeys.threads(), ...(refetchType ? { refetchType } : {}) }),
@@ -465,6 +471,7 @@ export function useThreadDetailQuery(input: {
   select?: (detail: ThreadDetail) => ThreadDetail;
   refetchInterval: (detail: ThreadDetail | undefined, summary?: ThreadSummary | null) => number | false;
 }) {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: threadQueryKeys.thread(input.threadId),
     queryFn: async ({ signal }) => {
@@ -475,6 +482,26 @@ export function useThreadDetailQuery(input: {
       };
       const head = await read();
       const previous = input.snapshot?.();
+      const cached = qc.getQueryData<ThreadDetail>(threadQueryKeys.thread(input.threadId));
+      if (
+        cached &&
+        previous?.blocks.length &&
+        !head.history?.reset &&
+        head.history?.epoch &&
+        head.history?.revision &&
+        previous.history?.epoch === head.history.epoch &&
+        previous.history?.revision === head.history.revision &&
+        cached.history?.epoch === head.history.epoch &&
+        cached.history?.revision === head.history.revision &&
+        previous.total_blocks === head.total_blocks &&
+        !head.subagent_updates &&
+        previous.subagents === head.subagents
+      ) {
+        const selectedHead = input.select ? input.select(head) : head;
+        if (mergeIncomingThreadSummaryForCache(cached.summary, selectedHead.summary) === cached.summary) {
+          return cached;
+        }
+      }
       const result = await refreshHistory(previous?.blocks.length ? { pages: [previous], pageParams: [undefined] } : undefined, head, read, codexHistoryAdapter, signal);
       const detail = result.pages[0];
       return input.select ? input.select(detail) : detail;

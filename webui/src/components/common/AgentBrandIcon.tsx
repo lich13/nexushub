@@ -2,6 +2,10 @@ import { useId } from "react";
 
 export type AgentBrandId = "codex" | "claude" | "grok" | "antigravity" | "dsh";
 
+// Exact official DeepSeek whale path extracted from DeepSeek Harness.app (@deepseek-ai/dsh-web-frontend/dist/favicon.svg, viewBox 0 0 50 50)
+const DEEPSEEK_OFFICIAL_PATH =
+  "M 48.84 10.05 C 48.32 9.79 48.1 10.28 47.8 10.53 C 47.7 10.61 47.61 10.71 47.53 10.81 C 46.78 11.62 45.9 12.16 44.76 12.1 C 43.09 12 41.67 12.54 40.41 13.84 C 40.14 12.23 39.25 11.27 37.89 10.66 C 37.18 10.34 36.47 10.02 35.97 9.32 C 35.62 8.82 35.53 8.27 35.36 7.73 C 35.25 7.4 35.14 7.06 34.77 7.01 C 34.36 6.94 34.21 7.29 34.05 7.58 C 33.42 8.75 33.17 10.05 33.2 11.36 C 33.25 14.31 34.47 16.66 36.9 18.34 C 37.18 18.53 37.25 18.72 37.16 19 C 36.99 19.58 36.8 20.14 36.62 20.71 C 36.51 21.08 36.35 21.16 35.96 21 C 34.63 20.43 33.48 19.59 32.46 18.58 C 30.74 16.87 29.18 14.99 27.23 13.52 C 26.78 13.18 26.32 12.86 25.85 12.55 C 23.86 10.58 26.11 8.97 26.63 8.78 C 27.17 8.58 26.82 7.89 25.06 7.9 C 23.3 7.9 21.7 8.5 19.65 9.3 C 19.35 9.42 19.03 9.51 18.71 9.58 C 16.85 9.22 14.92 9.14 12.9 9.38 C 9.11 9.81 6.07 11.64 3.84 14.77 C 1.16 18.53 0.53 22.8 1.31 27.26 C 2.12 31.95 4.47 35.84 8.07 38.88 C 11.82 42.03 16.13 43.58 21.04 43.28 C 24.03 43.1 27.35 42.7 31.1 39.46 C 32.05 39.94 33.04 40.13 34.69 40.27 C 35.95 40.39 37.18 40.21 38.12 40.01 C 39.6 39.69 39.5 38.29 38.96 38.03 C 34.62 35.97 35.58 36.81 34.71 36.13 C 36.92 33.46 40.24 30.7 41.54 21.73 C 41.64 21.02 41.56 20.57 41.54 19.99 C 41.53 19.64 41.61 19.5 42 19.46 C 43.09 19.34 44.15 19.03 45.12 18.49 C 47.93 16.92 49.06 14.34 49.33 11.26 C 49.37 10.78 49.32 10.3 48.84 10.05 Z M 24.33 37.84 C 20.12 34.46 18.08 33.35 17.24 33.4 C 16.45 33.45 16.59 34.37 16.76 34.97 C 16.94 35.56 17.18 35.97 17.51 36.49 C 17.74 36.83 17.9 37.34 17.28 37.73 C 15.93 38.58 13.57 37.44 13.46 37.38 C 10.72 35.74 8.43 33.56 6.81 30.58 C 5.25 27.72 4.35 24.65 4.2 21.37 C 4.16 20.58 4.39 20.3 5.16 20.15 C 6.18 19.96 7.22 19.92 8.24 20.07 C 12.53 20.71 16.19 22.67 19.25 25.78 C 21 27.54 22.33 29.66 23.69 31.72 C 25.14 33.91 26.7 36 28.68 37.71 C 29.38 38.31 29.94 38.77 30.48 39.1 C 28.86 39.29 26.17 39.33 24.33 37.84 Z M 26.34 24.6 C 26.34 24.25 26.62 23.97 26.97 23.97 C 27.04 23.97 27.12 23.98 27.18 24.01 C 27.27 24.04 27.34 24.09 27.41 24.16 C 27.52 24.27 27.58 24.43 27.58 24.6 C 27.58 24.95 27.3 25.23 26.96 25.23 C 26.61 25.23 26.34 24.95 26.34 24.6 Z M 32.61 27.88 C 32.2 28.05 31.8 28.19 31.42 28.21 C 30.82 28.24 30.16 27.99 29.81 27.69 C 29.26 27.22 28.86 26.95 28.7 26.13 C 28.63 25.78 28.67 25.23 28.73 24.92 C 28.87 24.25 28.71 23.82 28.25 23.42 C 27.87 23.1 27.39 23.02 26.86 23.02 C 26.67 23.02 26.48 22.93 26.35 22.86 C 26.13 22.74 25.95 22.46 26.12 22.12 C 26.18 22.01 26.45 21.74 26.51 21.69 C 27.23 21.27 28.05 21.41 28.82 21.72 C 29.53 22.02 30.06 22.56 30.83 23.33 C 31.62 24.26 31.76 24.51 32.21 25.21 C 32.57 25.75 32.89 26.31 33.11 26.95 C 33.24 27.35 33.07 27.68 32.61 27.88 Z";
+
 export function AgentBrandIcon({
   agent,
   size = 17,
@@ -34,7 +38,7 @@ export function AgentBrandIcon({
   }
 
   if (agent === "claude") {
-    // Official Anthropic Claude organic starburst spark
+    // Official Anthropic Claude starburst spark
     return (
       <svg
         viewBox="0 0 24 24"
@@ -51,48 +55,89 @@ export function AgentBrandIcon({
   }
 
   if (agent === "grok") {
-    // Official xAI Grok orbital eclipse ring & diagonal slash
+    // Official Grok Build macOS app icon (Grok Bot.app): dark squircle + 3D silver spherical bot dome + tilted visor capsule eyes
+    const clipId = `grok-clip-${uid}`;
+    const domeId = `grok-dome-${uid}`;
+    const bgId = `grok-bg-${uid}`;
     return (
       <svg
         viewBox="0 0 24 24"
         width={size}
         height={size}
         className={classes}
-        fill="none"
         aria-hidden="true"
         focusable="false"
       >
-        <path
-          d="M 15.85 5.42 A 7.75 7.75 0 1 0 18.58 15.85"
-          stroke="currentColor"
-          strokeWidth="2.35"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 8.15 18.58 A 7.75 7.75 0 0 0 18.58 8.15"
-          stroke="currentColor"
-          strokeWidth="1.45"
-          strokeLinecap="round"
-          opacity="0.55"
-        />
-        <path
-          d="M 3.6 20.4 L 20.4 3.6"
-          stroke="currentColor"
-          strokeWidth="2.35"
-          strokeLinecap="round"
+        <defs>
+          <clipPath id={clipId}>
+            <rect x="1.6" y="1.6" width="20.8" height="20.8" rx="5.2" />
+          </clipPath>
+          <linearGradient id={bgId} x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#2E2E32" />
+            <stop offset="100%" stopColor="#1B1B1E" />
+          </linearGradient>
+          <radialGradient id={domeId} cx="11.4" cy="9.2" r="14.2" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#FFFFFF" />
+            <stop offset="48%" stopColor="#ECEEF2" />
+            <stop offset="82%" stopColor="#C3C7D0" />
+            <stop offset="100%" stopColor="#9DA2AC" />
+          </radialGradient>
+        </defs>
+        <g clipPath={`url(#${clipId})`}>
+          <rect x="1.6" y="1.6" width="20.8" height="20.8" fill={`url(#${bgId})`} />
+          <circle
+            cx="10.55"
+            cy="17.85"
+            r="12.55"
+            fill={`url(#${domeId})`}
+            stroke="#FFFFFF"
+            strokeWidth="0.5"
+          />
+          <rect
+            x="8.48"
+            y="11.7"
+            width="6.39"
+            height="2.95"
+            rx="1.48"
+            transform="rotate(54.6 11.67 13.18)"
+            fill="#17171A"
+            stroke="#F8FAFC"
+            strokeWidth="0.34"
+          />
+          <rect
+            x="14"
+            y="9.62"
+            width="6.39"
+            height="1.96"
+            rx="0.98"
+            transform="rotate(54.3 17.19 10.6)"
+            fill="#17171A"
+            stroke="#F8FAFC"
+            strokeWidth="0.32"
+          />
+        </g>
+        <rect
+          x="1.85"
+          y="1.85"
+          width="20.3"
+          height="20.3"
+          rx="4.95"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.22)"
+          strokeWidth="0.5"
         />
       </svg>
     );
   }
 
   if (agent === "antigravity") {
-    // Official Google Antigravity 4-color fluid "A" arch ribbon matching Antigravity.app
+    // Official Google Antigravity macOS app icon (Antigravity.app): sub-pixel traced 4-color fluid "A" ribbon
     const baseId = `ag-base-${uid}`;
     const greenId = `ag-green-${uid}`;
     const warmId = `ag-warm-${uid}`;
     const clipId = `ag-clip-${uid}`;
     const archPath =
-      "M12 2.9C9.35 2.9 7.82 7.65 6.38 12.95C5.42 16.5 4.25 18.42 3.45 19.38C2.85 20.1 3.42 21.12 4.45 20.88C6.22 20.46 7.85 17.82 9.22 15.32C10.12 13.68 10.92 12.82 12 12.82C13.08 12.82 13.88 13.68 14.78 15.32C16.15 17.82 17.78 20.46 19.55 20.88C20.58 21.12 21.15 20.1 20.55 19.38C19.75 18.42 18.58 16.5 17.62 12.95C16.18 7.65 14.65 2.9 12 2.9Z";
+      "M 12 2.76 C 9.38 2.76 7.82 6.84 6.18 12.42 C 5.14 15.96 3.74 18.46 2.48 19.96 C 1.92 20.62 2.48 21.32 3.38 21.1 C 5.12 20.66 6.88 17.88 8.76 14.84 C 9.78 13.18 10.76 12.68 12 12.68 C 13.24 12.68 14.22 13.18 15.24 14.84 C 17.12 17.88 18.88 20.66 20.62 21.1 C 21.52 21.32 22.08 20.62 21.52 19.96 C 20.26 18.46 18.86 15.96 17.82 12.42 C 16.18 6.84 14.62 2.76 12 2.76 Z";
     return (
       <svg
         viewBox="0 0 24 24"
@@ -106,35 +151,35 @@ export function AgentBrandIcon({
           <clipPath id={clipId}>
             <path d={archPath} />
           </clipPath>
-          <linearGradient id={baseId} x1="12" y1="21" x2="12" y2="3" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#3B82F6" />
-            <stop offset="56%" stopColor="#4285F4" />
+          <linearGradient id={baseId} x1="12" y1="21.2" x2="12" y2="2.8" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#428DFC" />
+            <stop offset="52%" stopColor="#3B82F6" />
             <stop offset="100%" stopColor="#FBBC04" />
           </linearGradient>
-          <radialGradient id={greenId} cx="8.2" cy="8.2" r="7.2" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#34A853" />
-            <stop offset="55%" stopColor="#70C25B" stopOpacity="0.82" />
+          <radialGradient id={greenId} cx="7.8" cy="7.4" r="7.4" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#4CAF50" />
+            <stop offset="54%" stopColor="#8BC34A" stopOpacity="0.86" />
             <stop offset="100%" stopColor="#34A853" stopOpacity="0" />
           </radialGradient>
-          <radialGradient id={warmId} cx="14.2" cy="6.2" r="7.4" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#EA4335" />
-            <stop offset="48%" stopColor="#FB8C00" stopOpacity="0.85" />
+          <radialGradient id={warmId} cx="14.6" cy="5.8" r="7.8" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#F4511E" />
+            <stop offset="48%" stopColor="#FB8C00" stopOpacity="0.88" />
             <stop offset="100%" stopColor="#EA4335" stopOpacity="0" />
           </radialGradient>
         </defs>
         <g clipPath={`url(#${clipId})`}>
-          <rect x="2" y="2" width="20" height="20" fill={`url(#${baseId})`} />
-          <circle cx="8.2" cy="8.2" r="7.2" fill={`url(#${greenId})`} />
-          <circle cx="14.2" cy="6.2" r="7.4" fill={`url(#${warmId})`} />
+          <rect x="1.8" y="2.4" width="20.4" height="19.2" fill={`url(#${baseId})`} />
+          <circle cx="7.8" cy="7.4" r="7.4" fill={`url(#${greenId})`} />
+          <circle cx="14.6" cy="5.8" r="7.8" fill={`url(#${warmId})`} />
         </g>
       </svg>
     );
   }
 
-  // Official DeepSeek leaping whale mark matching DeepSeek Harness.app
+  // Official DeepSeek leaping whale SVG from DeepSeek Harness.app (@deepseek-ai/dsh-web-frontend/dist/favicon.svg)
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="0 0 50 50"
       width={size}
       height={size}
       className={classes}
@@ -142,11 +187,7 @@ export function AgentBrandIcon({
       aria-hidden="true"
       focusable="false"
     >
-      <path
-        fillRule="evenodd"
-        clipRule="evenodd"
-        d="M 15.92 4.35 c 0.28 -0.08 0.54 0.12 0.61 0.42 0.19 0.79 0.56 1.18 1.24 1.48 0.62 0.27 1.07 0.72 1.28 1.38 0.49 -0.54 1.14 -0.86 1.98 -0.91 0.47 -0.03 0.85 -0.21 1.22 -0.58 0.27 -0.27 0.64 -0.19 0.73 0.18 0.14 0.58 -0.03 1.42 -0.43 2.13 -0.51 0.91 -1.36 1.46 -2.48 1.65 -0.19 0.03 -0.31 0.14 -0.29 0.34 0.11 1.47 -0.25 3.16 -1.08 4.68 -0.47 0.86 -1.05 1.59 -1.74 2.25 0.56 0.28 1.15 0.52 1.61 0.74 0.38 0.18 0.45 0.65 0.11 0.88 -0.38 0.25 -1.04 0.36 -1.84 0.33 -0.86 -0.03 -1.64 -0.22 -2.32 -0.58 -1.15 0.86 -2.52 1.38 -4.08 1.47 -2.76 0.16 -5.26 -1.06 -6.86 -3.36 -1.48 -2.13 -1.88 -4.88 -1.04 -7.28 0.95 -2.71 3.32 -4.46 6.24 -4.63 0.76 -0.04 1.46 0.01 2.09 0.14 0.79 -0.34 1.64 -0.61 2.46 -0.69 0.43 -0.04 0.88 0.02 1.11 0.18 0.12 0.08 0.11 0.22 -0.03 0.3 -0.47 0.27 -0.68 0.72 -0.52 1.16 0.09 0.25 0.29 0.46 0.62 0.66 0.96 0.59 1.82 1.44 2.66 2.34 0.48 0.51 0.98 0.86 1.48 1.02 0.15 0.05 0.26 -0.01 0.32 -0.16 l 0.28 -0.82 c -0.92 -0.62 -1.45 -1.52 -1.57 -2.69 -0.06 -0.61 0.03 -1.29 0.28 -1.86 0.08 -0.17 0.21 -0.21 0.38 -0.17 Z M 4.08 10.66 c -0.28 0.05 -0.42 0.22 -0.41 0.51 0.07 2.18 0.96 4.13 2.62 5.44 0.81 0.64 1.72 1.04 2.57 1.06 0.56 0.01 0.91 -0.24 0.81 -0.64 -0.11 -0.42 -0.26 -0.84 -0.29 -1.22 -0.04 -0.41 0.22 -0.61 0.61 -0.46 0.65 0.25 1.45 0.81 2.24 1.44 0.68 0.54 1.37 0.88 2.18 0.94 0.28 0.02 0.56 -0.01 0.84 -0.07 -1.14 -0.92 -2.08 -2.16 -2.88 -3.51 -1.04 -1.76 -2.36 -2.96 -4.18 -3.53 -1.36 -0.43 -2.74 -0.54 -4.11 -0.29 v 0.33 Z m 8.55 0.34 c -0.38 -0.03 -0.67 0.21 -0.62 0.52 0.04 0.24 0.25 0.36 0.56 0.39 0.46 0.04 0.76 0.33 0.82 0.78 0.04 0.31 0.02 0.62 0.08 0.92 0.11 0.51 0.56 0.94 1.14 1.14 0.47 0.16 0.92 0.09 1.28 -0.2 0.21 -0.17 0.24 -0.39 0.11 -0.67 -0.48 -1.03 -1.17 -1.91 -2.06 -2.48 -0.41 -0.26 -0.85 -0.37 -1.31 -0.4 Z m 0.28 1.08 a 0.38 0.38 0 1 0 0 0.76 0.38 0.38 0 0 0 0 -0.76 Z"
-      />
+      <path d={DEEPSEEK_OFFICIAL_PATH} />
     </svg>
   );
 }

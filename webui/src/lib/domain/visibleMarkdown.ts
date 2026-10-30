@@ -95,17 +95,45 @@ function pageMetadataRanges(text: string, protectedRanges?: Range[]): Range[] {
   return ranges;
 }
 
+const cleanedMarkdownCache = new Map<string, { cleaned: string; bytes: number }>();
+let cleanedMarkdownBytes = 0;
+const cleanedMarkdownLimit = RENDER_CACHE_BUDGET.markdownBytes;
+
 export function visibleMarkdown(text: string, protectedRanges?: Range[]): string {
+  if (!protectedRanges) {
+    const cached = cleanedMarkdownCache.get(text);
+    if (cached) {
+      cleanedMarkdownCache.delete(text);
+      cleanedMarkdownCache.set(text, cached);
+      return cached.cleaned;
+    }
+  }
   const ranges = [...memoryMetadataRanges(text, protectedRanges), ...pageMetadataRanges(text, protectedRanges)]
     .sort((a, b) => a.start - b.start || b.end - a.end);
-  if (!ranges.length) return text;
-  let result = "";
-  let cursor = 0;
-  for (const range of ranges) {
-    if (range.start > cursor) result += text.slice(cursor, range.start);
-    cursor = Math.max(cursor, range.end);
+  let cleaned = text;
+  if (ranges.length) {
+    let result = "";
+    let cursor = 0;
+    for (const range of ranges) {
+      if (range.start > cursor) result += text.slice(cursor, range.start);
+      cursor = Math.max(cursor, range.end);
+    }
+    cleaned = (result + text.slice(cursor)).trim();
   }
-  return (result + text.slice(cursor)).trim();
+  if (!protectedRanges) {
+    const bytes = (text.length + (cleaned === text ? 0 : cleaned.length)) * 2;
+    if (bytes <= cleanedMarkdownLimit) {
+      while (cleanedMarkdownCache.size >= RENDER_CACHE_BUDGET.entries || cleanedMarkdownBytes + bytes > cleanedMarkdownLimit) {
+        const key = cleanedMarkdownCache.keys().next().value;
+        if (key === undefined) break;
+        cleanedMarkdownBytes -= cleanedMarkdownCache.get(key)!.bytes;
+        cleanedMarkdownCache.delete(key);
+      }
+      cleanedMarkdownCache.set(text, { cleaned, bytes });
+      cleanedMarkdownBytes += bytes;
+    }
+  }
+  return cleaned;
 }
 
 export type InstructionSegment = {

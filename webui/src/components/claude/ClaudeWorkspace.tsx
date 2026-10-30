@@ -174,6 +174,11 @@ export function ClaudeWorkspace() {
               <AgentBrandIcon agent="claude" size={16} />
             </span>
             <h1>Claude Code</h1>
+            {!sessions.isLoading && sessions.data && (
+              <span className="workspace-count-pill" aria-hidden="true">
+                {sessions.data.length}
+              </span>
+            )}
           </div>
           <button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={15} /></button>
         </header>
@@ -200,7 +205,7 @@ export function ClaudeWorkspace() {
               >
                 <strong>{claudeSessionLabel(item)}</strong>
                 <span>{item.id}</span>
-                <span>{item.cwd}</span>
+                <span className="provider-session-path">{item.cwd}</span>
                 <span className="session-status-row">
                   {item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}
                   <SessionSize size={item.storageSize} />
@@ -220,13 +225,17 @@ export function ClaudeWorkspace() {
               <AgentBrandIcon agent="claude" size={26} />
             </span>
             <strong>选择一个 Claude Code 任务</strong>
+            <small>支持多选清理、重命名与完整思维链及工具调用过程检视</small>
           </div>
         )}
         {selected && (
           <>
             <header className="conversation-header" data-timeline-id="session">
               <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
-              <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
+              <div className="conversation-title-copy">
+                <h1 className="conversation-title">{claudeSessionLabel(selected)}</h1>
+                {selected.cwd && <span className="conversation-subtitle" title={selected.cwd}>{selected.cwd}</span>}
+              </div>
               <div className="conversation-header-actions">
                 {selected.status === "running" ? (
                   <span className="status-chip tone-info">运行中</span>

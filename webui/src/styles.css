@@ -8,6 +8,7 @@
   --surface-nav: #f2f4f8;
   --surface: #f7f9fc;
   --surface-card: #ffffff;
+  --surface-subtle: #eff3f9;
   --surface-hover: #eaeff6;
   --segmented-bg: #e7ecf4;
   --surface-elevated: #e8eef6;
@@ -149,6 +150,7 @@
     --surface-nav: #151820;
     --surface: #191d26;
     --surface-card: #232834;
+    --surface-subtle: #1e232e;
     --surface-hover: #232937;
     --segmented-bg: #202634;
     --surface-elevated: #2b3242;
@@ -709,9 +711,9 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .cleanup-panel-head > span { overflow-wrap: anywhere; }
 .cleanup-actions { margin-top: 12px; }
 .probe-layout { display: grid; gap: 18px; }
-.probe-layout > .segmented { justify-self: start; }
-.probe-layout > .segmented button { min-width: 112px; }
-.probe-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; }
+.probe-layout > .segmented { justify-self: start; max-width: 100%; }
+.probe-layout > .segmented button { min-width: 84px; }
+.probe-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; min-width: 0; }
 .probe-header span { color: var(--muted); font-size: 12px; }
 .probe-status-banner { padding: 18px 22px; border: 1px solid var(--hairline-strong); border-left: 4px solid var(--ws-accent); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-xs); display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .probe-status-banner div { min-width: 0; display: grid; gap: 4px; }
@@ -993,4 +995,210 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
   .timeline-rail-preview { max-width: min(240px, 70vw); }
   .search-overlay { padding-top: calc(var(--mobile-top) + 10px); }
   .session-search-panel { width: calc(100vw - 20px); max-height: calc(100dvh - var(--mobile-top) - 28px); }
+}
+
+/* v1.8.0 Authentic 5-Agent Brand Badges, Sliding Pill Switches, Probe Overview & Multi-Remote Workbench */
+.agent-brand-badge[data-agent="grok"] svg { width: 20px; height: 20px; }
+.empty-brand-badge[data-agent="grok"] svg { width: 36px; height: 36px; }
+.nav-button[data-nav-id="grok"] .nav-icon-badge { background: transparent; box-shadow: none; }
+.nav-button[data-nav-id="grok"] .nav-icon-badge svg { width: 22px; height: 22px; }
+.nav-section-divider { height: 1px; margin: 6px 8px 4px; background: var(--hairline-strong); opacity: 0.75; flex: none; }
+.nav-collapsed .nav-section-divider { width: 24px; margin-inline: auto; }
+.workspace-title-brand { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }
+.workspace-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--hairline-strong);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.provider-session-path { font-family: var(--font-mono); }
+.tone-info { color: var(--primary); }
+.tone-neutral { color: var(--muted); }
+.status-chip.tone-neutral { background: var(--surface-elevated); border-color: var(--hairline-strong); color: var(--muted); }
+
+/* macOS Native Sliding Pill Switches */
+.toggle-row input[type="checkbox"],
+.probe-platform-switch-card input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--segmented-bg);
+  cursor: pointer;
+}
+.toggle-row input[type="checkbox"]::after,
+.probe-platform-switch-card input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
+  transition: transform .15s ease;
+}
+.toggle-row input[type="checkbox"]:checked,
+.probe-platform-switch-card input[type="checkbox"]:checked {
+  background: var(--ws-accent);
+  border-color: var(--ws-accent);
+}
+@media (prefers-color-scheme: dark) {
+  .toggle-row input[type="checkbox"]:checked::after,
+  .probe-platform-switch-card input[type="checkbox"]:checked::after {
+    background: #121620;
+  }
+}
+.toggle-row input[type="checkbox"]:checked::after,
+.probe-platform-switch-card input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+.toggle-row input[type="checkbox"]:disabled,
+.probe-platform-switch-card input[type="checkbox"]:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* Probe Live Overview, Platform 5-Agent Switches & Native Polling Cards */
+.probe-header-meta, .settings-header-copy { display: grid; gap: 4px; min-width: 0; }
+.probe-header-pills { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+.probe-live-overview { display: grid; gap: 14px; }
+.probe-live-summary-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.probe-live-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.probe-live-kpis .metric {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-xs);
+}
+.probe-live-kpis .metric strong { text-align: left; }
+.probe-live-session-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; width: 100%; }
+.probe-live-session-main { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.probe-live-session-copy { display: grid; gap: 2px; min-width: 0; }
+.probe-live-session-copy strong { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.probe-live-session-copy small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+.probe-platform-switch-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-subtle);
+}
+.probe-platform-switch-header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.probe-platform-switch-header strong { font-size: 14px; font-weight: 650; color: var(--text); }
+.probe-platform-switch-header span { font-size: 12px; color: var(--muted); }
+.probe-platform-switch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: 10px; }
+.probe-platform-switch-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-card);
+  cursor: pointer;
+}
+.probe-platform-switch-card:hover { border-color: var(--ws-accent-border); }
+.probe-platform-switch-card.is-enabled {
+  border-color: var(--ws-accent-border);
+  box-shadow: inset 0 0 0 1px var(--ws-accent-soft), var(--shadow-xs);
+}
+.probe-platform-switch-brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.probe-platform-switch-copy { display: grid; gap: 2px; min-width: 0; }
+.probe-platform-switch-copy strong { font-size: 13.2px; font-weight: 620; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.probe-platform-switch-copy small { font-size: 11.2px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.probe-hooks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.probe-native-polling-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.probe-native-polling-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-card);
+  font-size: 12.5px;
+}
+.probe-native-polling-item > div { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.probe-native-polling-item > div strong { font-size: 13.2px; font-weight: 620; color: var(--text); }
+.probe-native-polling-item > div span { font-size: 12px; color: var(--muted); }
+
+/* Unified Cleanup Scope Share Bar & Multi-Remote Machine Cards */
+.unified-scope-bar { height: 5px; border-radius: 999px; background: var(--segmented-bg); overflow: hidden; }
+.unified-scope-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--ws-accent); }
+
+.machine-button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.machine-status-dot { width: 7.5px; height: 7.5px; border-radius: 50%; background: var(--success); flex: none; }
+.machine-status-dot.is-remote { background: var(--ws-accent); box-shadow: 0 0 0 2.5px var(--ws-accent-soft); }
+.machine-chevron { color: var(--muted); width: 13px !important; height: 13px !important; flex: none; }
+
+.remote-settings-stack { display: grid; gap: 16px; }
+.remote-machines-panel { display: grid; gap: 14px; }
+.remote-machines-header, .remote-form-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.remote-machines-heading { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.remote-machines-heading > svg { color: var(--ws-accent); margin-top: 2px; flex: none; }
+.remote-machines-heading > div { display: grid; gap: 3px; min-width: 0; }
+.remote-machines-heading strong { font-size: 15px; font-weight: 650; }
+.remote-machines-heading span { font-size: 12.5px; color: var(--muted); }
+.remote-machine-list { display: grid; gap: 10px; }
+.remote-machine-card {
+  padding: 13px 15px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-card);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.remote-machine-card.is-connected {
+  border-color: var(--success-border);
+  box-shadow: inset 3px 0 0 var(--success), var(--shadow-xs);
+}
+.remote-machine-card.is-editing {
+  border-color: var(--ws-accent-border);
+  box-shadow: 0 0 0 2px var(--ws-accent-soft);
+}
+.remote-machine-card-main { display: grid; gap: 4px; min-width: 0; flex: 1 1 240px; }
+.remote-machine-card-main code { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.remote-machine-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.remote-machine-title-row strong { font-size: 14px; font-weight: 640; color: var(--text); }
+.remote-machine-actions { justify-content: flex-end; }
+
+@media (max-width: 767px) {
+  .probe-layout > .segmented { width: 100%; }
+  .probe-layout > .segmented button { min-width: 0; }
+  .probe-live-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .probe-platform-switch-grid, .probe-hooks-grid, .unified-cleanup-grid { grid-template-columns: minmax(0, 1fr); }
 }

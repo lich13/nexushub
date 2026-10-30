@@ -112,17 +112,22 @@ export function useThreadMessageStoreController(
   }, []);
   const setActive = useCallback((nextThreadId: string | null) => {
     setActiveThreadSlot(storeRef.current, nextThreadId);
-    notify(nextThreadId);
-  }, [notify]);
+  }, []);
   const getSlotForThread = useCallback((nextThreadId: string) => getThreadSlot(storeRef.current, nextThreadId), []);
   const isActive = useCallback((nextThreadId: string) => storeRef.current.activeThreadId === nextThreadId, []);
   const applyDetail = useCallback((nextThreadId: string, nextDetail: ThreadDetail) => {
-    applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
-    notify(nextThreadId);
+    const prevRevision = getThreadSlot(storeRef.current, nextThreadId).visibleUpdateRevision;
+    const slot = applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
+    if (slot.visibleUpdateRevision !== prevRevision) {
+      notify(nextThreadId);
+    }
   }, [legacyBlocks, notify]);
   const applySummary = useCallback((nextThreadId: string, nextSummary: ThreadSummary) => {
-    applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
-    notify(nextThreadId);
+    const prevRevision = getThreadSlot(storeRef.current, nextThreadId).visibleUpdateRevision;
+    const slot = applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
+    if (slot.visibleUpdateRevision !== prevRevision) {
+      notify(nextThreadId);
+    }
   }, [notify]);
   const patchSummary = useCallback((nextThreadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => {
     const slot = getThreadSlot(storeRef.current, nextThreadId);
@@ -228,35 +233,51 @@ export function applyThreadDetailToSlot(
   // identity/change metadata can discard already loaded messages.
   const reset = detail.history?.reset || (slot.history && detail.history && slot.history.epoch !== detail.history.epoch);
   if (reset) { slot.blocks = []; slot.beforeCursor = null; slot.hasMoreBlocks = false; }
-  slot.timeline = detail.timeline ?? (reset ? undefined : slot.timeline);
-  slot.history = detail.history;
+  const nextTimeline = detail.timeline ?? (reset ? undefined : slot.timeline);
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;
-  const mergedBlocks = mergeSubagentUpdates(mergeBlocksPreservingHistory(slot.blocks, incomingBlocks), detail.subagent_updates);
+  const tailAlreadyIdentical =
+    !reset &&
+    !detail.subagent_updates &&
+    incomingBlocks.length > 0 &&
+    slot.blocks.length >= incomingBlocks.length &&
+    incomingBlocks.every((block, idx) => slot.blocks[slot.blocks.length - incomingBlocks.length + idx] === block);
+  const mergedBlocks = tailAlreadyIdentical
+    ? slot.blocks
+    : mergeSubagentUpdates(mergeBlocksPreservingHistory(slot.blocks, incomingBlocks), detail.subagent_updates);
   const blocksChanged = mergedBlocks !== slot.blocks;
+  const nextSummary = mergeSummary(slot.summary, detail.summary);
+  const nextTotalBlocks = detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length);
+  let nextHasMoreBlocks = Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
+  let nextBeforeCursor = slot.beforeCursor;
+  if (mergedBlocks.length >= nextTotalBlocks) {
+    nextBeforeCursor = null;
+    nextHasMoreBlocks = false;
+  } else if (detail.before_cursor) {
+    if (!previousBefore || historyCursorIndex(detail.before_cursor) < historyCursorIndex(previousBefore)) {
+      nextBeforeCursor = stableHistoryCursor(detail) ?? null;
+    }
+  } else if (!mergedBlocks.length) {
+    nextBeforeCursor = null;
+    nextHasMoreBlocks = false;
+  }
   const changed = blocksChanged
+    || slot.timeline !== nextTimeline
     || slot.subagents !== detail.subagents
-    || slot.summary !== detail.summary
-    || slot.totalBlocks !== (detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length))
-    || slot.hasMoreBlocks !== Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
+    || slot.summary !== nextSummary
+    || slot.totalBlocks !== nextTotalBlocks
+    || slot.hasMoreBlocks !== nextHasMoreBlocks
+    || slot.beforeCursor !== nextBeforeCursor;
 
-  slot.summary = mergeSummary(slot.summary, detail.summary);
+  slot.timeline = nextTimeline;
+  slot.history = detail.history;
+  slot.summary = nextSummary;
   slot.subagents = detail.subagents;
   slot.subagentUpdates = detail.subagent_updates;
   slot.blocks = mergedBlocks;
-  slot.totalBlocks = detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length);
-  slot.hasMoreBlocks = Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
-  if (slot.blocks.length >= slot.totalBlocks) {
-    slot.beforeCursor = null;
-    slot.hasMoreBlocks = false;
-  } else if (detail.before_cursor) {
-    if (!previousBefore || historyCursorIndex(detail.before_cursor) < historyCursorIndex(previousBefore)) {
-      slot.beforeCursor = stableHistoryCursor(detail) ?? null;
-    }
-  } else if (!slot.blocks.length || slot.blocks.length >= slot.totalBlocks) {
-    slot.beforeCursor = null;
-    slot.hasMoreBlocks = false;
-  }
+  slot.totalBlocks = nextTotalBlocks;
+  slot.hasMoreBlocks = nextHasMoreBlocks;
+  slot.beforeCursor = nextBeforeCursor;
   slot.fetchedAt = Date.now();
   if (changed) slot.visibleUpdateRevision += 1;
   if (blocksChanged) slot.bottomFollowRevision += 1;
@@ -313,9 +334,12 @@ export function applyThreadSummaryToSlot(
   if (summary.id !== threadId) {
     return slot;
   }
-  slot.summary = mergeSummary(slot.summary, summary);
+  const nextSummary = mergeSummary(slot.summary, summary);
   slot.fetchedAt = Date.now();
-  slot.visibleUpdateRevision += 1;
+  if (nextSummary !== slot.summary) {
+    slot.summary = nextSummary;
+    slot.visibleUpdateRevision += 1;
+  }
   return slot;
 }
 
@@ -383,6 +407,10 @@ function mergeSummary(current: ThreadSummary | null, incoming: ThreadSummary): T
   next.title = mergeThreadSummaryTitle(current.title, incoming.title);
   if (!isVisibleLastEventKind(incoming.last_event_kind) && isVisibleLastEventKind(current.last_event_kind)) {
     next.last_event_kind = current.last_event_kind;
+  }
+  const keys = Object.keys(next) as Array<keyof ThreadSummary>;
+  if (keys.length === Object.keys(current).length && keys.every(key => Object.is(current[key], next[key]))) {
+    return current;
   }
   return next;
 }

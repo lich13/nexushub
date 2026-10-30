@@ -42,6 +42,98 @@ import { machineScope, useConnection } from "../../lib/query/connection";
 import { codexTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { DesktopComposer } from "./DesktopComposer";
+import type { MessageBlock } from "../../types";
+
+function computeVisibleItems(visibleBlocks: MessageBlock[]) {
+  const commandGrouped = groupCodexCommandBlocks(visibleBlocks);
+  return foldProcessSequence("codex", commandGrouped, entry => {
+    if (entry.kind === "group") return { kind: "execution", group: entry.group, turnId: entry.group.turnId };
+    const block = entry.item;
+    if (
+      block.subagent ||
+      isHistoryCollapsedBlock(block) ||
+      isPlanBlock(block) ||
+      isQuestionBlock(block) ||
+      isQuestionResultBlock(block)
+    ) {
+      return null;
+    }
+    if (isToolBlock(block)) {
+      const failed = /^(failed|error)$/i.test(block.status ?? "");
+      return {
+        kind: "detail",
+        id: block.id,
+        sourceIds: [block.id, ...(block.call_id ? [block.call_id] : [])],
+        title: toolBlockTitle(block),
+        detail: toolBlockDetailText(block),
+        running: isRunningToolBlock(block),
+        failed,
+        turnId: block.turn_id,
+      };
+    }
+    return null;
+  });
+}
+
+type DerivedBlocksEntry = {
+  visibleBlocks: MessageBlock[];
+  visibleItems: ReturnType<typeof computeVisibleItems>;
+  hasSpawnAgent: boolean;
+};
+
+const derivedBlocksCache = new WeakMap<
+  MessageBlock[],
+  {
+    compacted?: DerivedBlocksEntry;
+    expanded?: DerivedBlocksEntry;
+    timeline?: ReturnType<typeof userTimelineEntries>;
+  }
+>();
+
+function getDerivedConversationBlocks(
+  blocks: MessageBlock[],
+  historyExpanded: boolean,
+  revealedBlockId: string | null,
+): DerivedBlocksEntry {
+  if (!revealedBlockId) {
+    const slotKey = historyExpanded ? "expanded" : "compacted";
+    let cached = derivedBlocksCache.get(blocks);
+    if (cached?.[slotKey]) return cached[slotKey]!;
+    const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, null);
+    const visibleItems = computeVisibleItems(visibleBlocks);
+    const hasSpawnAgent = visibleBlocks.some(
+      block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent",
+    );
+    const entry: DerivedBlocksEntry = { visibleBlocks, visibleItems, hasSpawnAgent };
+    if (!cached) {
+      cached = {};
+      derivedBlocksCache.set(blocks, cached);
+    }
+    cached[slotKey] = entry;
+    return entry;
+  }
+  const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId);
+  const visibleItems = computeVisibleItems(visibleBlocks);
+  const hasSpawnAgent = visibleBlocks.some(
+    block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent",
+  );
+  return { visibleBlocks, visibleItems, hasSpawnAgent };
+}
+
+function getDerivedTimelineEntries(blocks: MessageBlock[]) {
+  let cached = derivedBlocksCache.get(blocks);
+  if (cached?.timeline) return cached.timeline;
+  const timeline = userTimelineEntries(
+    "codex",
+    blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message })),
+  );
+  if (!cached) {
+    cached = {};
+    derivedBlocksCache.set(blocks, cached);
+  }
+  cached.timeline = timeline;
+  return timeline;
+}
 
 export function Conversation(props: {
   threadId: string;
@@ -107,42 +199,15 @@ export function Conversation(props: {
     onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
   });
   const blocks = navigation.items ?? (slot.blocks.length ? slot.blocks : detail.blocks);
-  const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId), [blocks, historyExpanded, revealedBlockId]);
-  const visibleItems = useMemo(() => {
-    const commandGrouped = groupCodexCommandBlocks(visibleBlocks);
-    return foldProcessSequence("codex", commandGrouped, entry => {
-      if (entry.kind === "group") return { kind: "execution", group: entry.group, turnId: entry.group.turnId };
-      const block = entry.item;
-      if (
-        block.subagent ||
-        isHistoryCollapsedBlock(block) ||
-        isPlanBlock(block) ||
-        isQuestionBlock(block) ||
-        isQuestionResultBlock(block)
-      ) {
-        return null;
-      }
-      if (isToolBlock(block)) {
-        const failed = /^(failed|error)$/i.test(block.status ?? "");
-        return {
-          kind: "detail",
-          id: block.id,
-          sourceIds: [block.id, ...(block.call_id ? [block.call_id] : [])],
-          title: toolBlockTitle(block),
-          detail: toolBlockDetailText(block),
-          running: isRunningToolBlock(block),
-          failed,
-          turnId: block.turn_id,
-        };
-      }
-      return null;
-    });
-  }, [visibleBlocks]);
+  const { visibleBlocks, visibleItems, hasSpawnAgent } = useMemo(
+    () => getDerivedConversationBlocks(blocks, historyExpanded, revealedBlockId),
+    [blocks, historyExpanded, revealedBlockId],
+  );
   const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
     && props.capabilities.threadSubagents !== true
-    && visibleBlocks.some(block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent");
+    && hasSpawnAgent;
   const resolvedTimeline = slot.timeline ?? detail.timeline;
-  const timelineEntries = useMemo(() => resolvedTimeline ?? userTimelineEntries("codex", blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message }))), [resolvedTimeline, blocks]);
+  const timelineEntries = useMemo(() => resolvedTimeline ?? getDerivedTimelineEntries(blocks), [resolvedTimeline, blocks]);
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
     if (keys.includes(props.threadId)) props.onSelect(null);
   });
@@ -244,7 +309,9 @@ export function Conversation(props: {
     <main className="conversation-main">
       <header className="conversation-header" data-timeline-id="session">
         <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
-        <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1></div>
+        <div className="conversation-title-copy">
+          <h1 className="conversation-title">{summary.title}</h1>
+        </div>
         <div className="conversation-header-actions">
           <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
           <TaskMenu triggerRef={deletion.returnFocus}>

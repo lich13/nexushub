@@ -297,6 +297,19 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
                 />
               </div>
 
+              {plan && scanned && deletable > 0 && plan.totalEstimatedBytes > 0 && (
+                <div className="unified-scope-bar" aria-hidden="true">
+                  <span
+                    style={{
+                      width: `${Math.max(
+                        6,
+                        Math.min(100, Math.round((bytes / plan.totalEstimatedBytes) * 100))
+                      )}%`,
+                    }}
+                  />
+                </div>
+              )}
+
               <div className="unified-scope-foot">
                 {!supported ? (
                   <span className="unified-scope-meta">

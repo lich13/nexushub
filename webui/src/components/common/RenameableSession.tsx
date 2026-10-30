@@ -135,27 +135,29 @@ export function RenameableSession({
     setContext({ x, y });
   };
 
-  const activeMenuActions: ThreadMenuAction[] = (
-    useBatchMenu
-      ? batchMenuActions!
-      : [
-          {
-            id: "rename",
-            label: "改名",
-            icon: <Pencil size={15} />,
-            disabled: Boolean(renameBlockReason) || disabled,
-            reason: renameBlockReason,
-            run: begin,
-          },
-          ...(menuActions ?? []),
-        ]
-  ).map(action => ({
-    ...action,
-    run: () => {
-      button.current?.focus({ preventScroll: true });
-      action.run();
-    },
-  }));
+  const activeMenuActions: ThreadMenuAction[] = context
+    ? (
+        useBatchMenu
+          ? batchMenuActions!
+          : [
+              {
+                id: "rename",
+                label: "改名",
+                icon: <Pencil size={15} />,
+                disabled: Boolean(renameBlockReason) || disabled,
+                reason: renameBlockReason,
+                run: begin,
+              },
+              ...(menuActions ?? []),
+            ]
+      ).map(action => ({
+        ...action,
+        run: () => {
+          button.current?.focus({ preventScroll: true });
+          action.run();
+        },
+      }))
+    : [];
 
   const rowClassName = `${className}${multiSelected ? " multi-selected" : ""}`;
 
