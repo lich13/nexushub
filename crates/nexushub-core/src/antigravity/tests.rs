@@ -340,6 +340,7 @@ fn silent_subagents_and_background_tasks_without_system_message_eventually_deliv
     // 1. While subagent or task is still active (even 2 minutes later), never fire prematurely
     let mut ctx = TrajectoryLivenessContext {
         has_active_subagents: false,
+        has_active_child_processes: false,
         now_ms: Some(base_ms + 120_000),
         subagents: BTreeMap::from([(
             sub_id.into(),
@@ -381,4 +382,316 @@ fn silent_subagents_and_background_tasks_without_system_message_eventually_deliv
         settled.events[0].body,
         "Completed after subagent & task exit."
     );
+}
+
+#[test]
+fn multi_executor_gap_and_non_terminal_tool_steps_never_fire_early() {
+    let summary = json!({
+        "trajectoryId": "fixture-trajectory",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "summary": "Multi-executor turn",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+    // Real inter-executor snapshot: exec-1 ended on a tool-calling PLANNER_RESPONSE + GENERIC step,
+    // and exec-2 just began or lastStepIdx in metadata has not yet caught up to step 2503.
+    let mut response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "stepOffset": 2500,
+        "numTotalSteps": 2504,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-1",
+                        "createdAt": "2026-01-01T00:00:01Z",
+                        "completedAt": "2026-01-01T00:00:02Z"
+                    },
+                    "plannerResponse": {
+                        "response": "Checking workspace...",
+                        "toolCalls": [{ "id": "call-1", "name": "read_file" }]
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "generic": { "name": "read_file" },
+                    "metadata": {
+                        "executionId": "exec-1",
+                        "createdAt": "2026-01-01T00:00:02Z",
+                        "completedAt": "2026-01-01T00:00:03Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-2",
+                        "createdAt": "2026-01-01T00:00:04Z",
+                        "completedAt": "2026-01-01T00:00:05Z"
+                    },
+                    "plannerResponse": {
+                        "response": "Running next tool...",
+                        "toolCalls": [{ "id": "call-2", "name": "run_command" }]
+                    }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "exec-1",
+                    "lastStepIdx": 2502,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                },
+                {
+                    "executionId": "exec-2",
+                    "lastStepIdx": 2503,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+
+    // Even if summary momentarily looks IDLE, last step has toolCalls -> not a terminal NO_TOOL_CALL!
+    let gap = snapshot(ID, &summary, &response).unwrap();
+    assert!(gap.events.is_empty());
+    assert_eq!(gap.settled_count, 2503);
+
+    // Once exec-3 finishes cleanly with a tool-free PLANNER_RESPONSE and matching lastStepIdx, it fires.
+    response["trajectory"]["steps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {
+                "executionId": "exec-3",
+                "createdAt": "2026-01-01T00:00:06Z",
+                "completedAt": "2026-01-01T00:00:07Z"
+            },
+            "plannerResponse": { "response": "All multi-executor steps done." }
+        }));
+    response["numTotalSteps"] = json!(2505);
+    // Mismatched lastStepIdx (2503 vs actual 2504) holds notification
+    response["trajectory"]["executorMetadatas"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "executionId": "exec-3",
+            "lastStepIdx": 2503,
+            "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+        }));
+    let stale_meta = snapshot(ID, &summary, &response).unwrap();
+    assert!(stale_meta.events.is_empty());
+
+    // Accurate native lastStepIdx == 2504 delivers completion
+    response["trajectory"]["executorMetadatas"][2]["lastStepIdx"] = json!(2504);
+    let done = snapshot(ID, &summary, &response).unwrap();
+    assert_eq!(done.events.len(), 1);
+    assert_eq!(done.events[0].kind, "completion");
+    assert_eq!(done.events[0].turn_id, "exec-3");
+    assert_eq!(done.settled_count, 2505);
+}
+
+#[test]
+fn untracked_background_task_respects_active_child_processes_past_60s_quiescence() {
+    let task_id = format!("{ID}/task-long-build");
+    let summary = json!({
+        "trajectoryId": "fixture-trajectory",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "summary": "Silent cargo build",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+    let base_ms = native_probe::timestamp(&json!("2026-01-01T00:00:10Z")).unwrap();
+    let response = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "numTotalSteps": 3,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_GENERIC",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "taskDetails": { "id": task_id, "movedToBackgroundAt": "2026-01-01T00:00:05Z" },
+                    "generic": { "name": "run_command", "arguments": "{\"IsDaemon\":false}" },
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:05Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-1",
+                        "createdAt": "2026-01-01T00:00:09Z",
+                        "completedAt": "2026-01-01T00:00:10Z"
+                    },
+                    "plannerResponse": { "response": "Build started in background." }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "exec-1",
+                    "lastStepIdx": 2,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+    let steps = response["trajectory"]["steps"].as_array().unwrap();
+    let spawn = earliest_untracked_task_spawn_ms(ID, "fixture-trajectory", steps, &BTreeMap::new());
+    assert!(spawn.is_some());
+
+    // 3 minutes later (> 60s quiescence), child build process is still alive -> MUST NOT fire early!
+    let mut ctx = TrajectoryLivenessContext {
+        has_active_child_processes: true,
+        now_ms: Some(base_ms + 180_000),
+        ..Default::default()
+    };
+    let held = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
+    assert!(held.events.is_empty());
+    assert_eq!(held.settled_count, 0);
+
+    // Child process exits -> past 60s quiescence -> delivers completion cleanly
+    ctx.has_active_child_processes = false;
+    let released = snapshot_with_context(ID, &summary, &response, &ctx).unwrap();
+    assert_eq!(released.events.len(), 1);
+    assert_eq!(released.events[0].kind, "completion");
+}
+
+#[test]
+fn mid_turn_plan_feedback_plaintext_questions_and_first_turn_waiting_emit_reply_needed() {
+    let summary = json!({
+        "trajectoryId": "fixture-trajectory",
+        "createdTime": "2026-01-01T00:00:00Z",
+        "lastModifiedTime": "2026-01-01T00:00:15Z",
+        "summary": "Interactive planning thread",
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "trajectoryMetadata": { "rootConversationId": ID }
+    });
+
+    // Case 1: First-turn WAITING before any executor terminates (empty executorMetadatas),
+    // top-level CORTEX_STEP_TYPE_ASK_QUESTION without requestedInteraction and without createdAt.
+    let first_turn_waiting = json!({
+        "status": "CASCADE_RUN_STATUS_WAITING",
+        "numTotalSteps": 2,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-0", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_ASK_QUESTION",
+                    "status": "CORTEX_STEP_STATUS_WAITING",
+                    "askQuestion": {
+                        "questions": [{ "question": "要包含哪些平台？" }]
+                    },
+                    "metadata": { "executionId": "exec-0", "startedAt": "2026-01-01T00:00:04Z" }
+                }
+            ],
+            "executorMetadatas": []
+        }
+    });
+    let snap_waiting = snapshot(ID, &summary, &first_turn_waiting).unwrap();
+    assert_eq!(snap_waiting.events.len(), 1);
+    assert_eq!(snap_waiting.events[0].kind, "reply_needed");
+    assert_eq!(snap_waiting.events[0].body, "要包含哪些平台？");
+
+    // Case 2: Browser setup / elicitation interaction variants + summary.lastModifiedTime fallback
+    let mut browser_waiting = first_turn_waiting.clone();
+    browser_waiting["trajectory"]["steps"][1] = json!({
+        "type": "CORTEX_STEP_TYPE_GENERIC",
+        "status": "CORTEX_STEP_STATUS_WAITING",
+        "requestedInteraction": { "confirmBrowserSetup": {} },
+        "metadata": { "executionId": "exec-0" }
+    });
+    let snap_auth = snapshot(ID, &summary, &browser_waiting).unwrap();
+    assert_eq!(snap_auth.events.len(), 1);
+    assert_eq!(snap_auth.events[0].kind, "authorization");
+
+    // Case 3: Multi-executor /plan turn where exec-1 wrote RequestFeedback=true artifact
+    // and exec-2 finished with a declarative summary (no question mark) -> reply_needed!
+    let plan_turn = json!({
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "numTotalSteps": 3,
+        "trajectory": {
+            "cascadeId": ID,
+            "trajectoryId": "fixture-trajectory",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:00Z" }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_CODE_ACTION",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "codeAction": {
+                        "artifactMetadata": {
+                            "requestFeedback": true,
+                            "summary": "Implementation plan ready for approval."
+                        }
+                    },
+                    "metadata": {
+                        "executionId": "exec-1",
+                        "createdAt": "2026-01-01T00:00:05Z",
+                        "completedAt": "2026-01-01T00:00:06Z"
+                    }
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {
+                        "executionId": "exec-2",
+                        "createdAt": "2026-01-01T00:00:07Z",
+                        "completedAt": "2026-01-01T00:00:08Z"
+                    },
+                    "plannerResponse": {
+                        "response": "计划已写入 implementation_plan.md，重点确认清理范围。"
+                    }
+                }
+            ],
+            "executorMetadatas": [
+                {
+                    "executionId": "exec-1",
+                    "lastStepIdx": 1,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                },
+                {
+                    "executionId": "exec-2",
+                    "lastStepIdx": 2,
+                    "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                }
+            ]
+        }
+    });
+    let snap_plan = snapshot(ID, &summary, &plan_turn).unwrap();
+    assert_eq!(snap_plan.events.len(), 1);
+    assert_eq!(snap_plan.events[0].kind, "reply_needed");
+    assert!(snap_plan.events[0].body.contains("implementation_plan.md"));
+
+    // Case 4: Plain-text mid-turn question without ask_question tool -> reply_needed!
+    let (s, mut plain_q) = fixture();
+    plain_q["trajectory"]["steps"][1]["plannerResponse"]["response"] =
+        json!("我已经定位到两个分支差异。你希望保留旧接口兼容还是直接移除？");
+    let snap_plain = snapshot(ID, &s, &plain_q).unwrap();
+    assert_eq!(snap_plain.events.len(), 1);
+    assert_eq!(snap_plain.events[0].kind, "reply_needed");
 }

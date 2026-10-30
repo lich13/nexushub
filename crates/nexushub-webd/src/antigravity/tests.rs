@@ -171,6 +171,7 @@ async fn scan_paginates_steps_and_suppresses_completion_while_subtrajectory_runs
 #[tokio::test]
 async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_trajectory() {
     let root_id = "33333333-3333-4333-8333-333333333333";
+    let waiting_id = "44444444-4444-4444-8444-444444444444";
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let router = Router::new()
@@ -180,27 +181,84 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
         )
         .route(
             &format!("{SERVICE}GetCascadeTrajectorySteps"),
-            post(|axum::Json(body): axum::Json<Value>| async move {
+            post(move |axum::Json(body): axum::Json<Value>| async move {
+                if body["cascadeId"] == json!(waiting_id) {
+                    assert_eq!(body["stepOffset"], json!(1800));
+                    return axum::Json(json!({
+                        "steps": [
+                            {
+                                "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                "status": "CORTEX_STEP_STATUS_DONE",
+                                "metadata": { "executionId": "exec-w1", "createdAt": "2026-10-29T04:10:00Z" }
+                            },
+                            {
+                                "type": "CORTEX_STEP_TYPE_ASK_QUESTION",
+                                "status": "CORTEX_STEP_STATUS_WAITING",
+                                "askQuestion": {
+                                    "questions": [{ "question": "确认清理范围？" }]
+                                },
+                                "metadata": { "executionId": "exec-w1", "startedAt": "2026-10-29T04:10:03Z" }
+                            }
+                        ]
+                    }));
+                }
                 assert_eq!(body["stepOffset"], json!(2305));
                 axum::Json(json!({
                     "steps": [
                         {
                             "type": "CORTEX_STEP_TYPE_USER_INPUT",
                             "status": "CORTEX_STEP_STATUS_DONE",
-                            "metadata": { "executionId": "exec-99", "createdAt": "2026-10-29T04:00:00Z" }
+                            "metadata": { "executionId": "exec-98", "createdAt": "2026-10-29T04:00:00Z" }
+                        },
+                        {
+                            "type": "CORTEX_STEP_TYPE_GENERIC",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "generic": { "name": "read_file" },
+                            "metadata": {
+                                "executionId": "exec-98",
+                                "createdAt": "2026-10-29T04:00:01Z",
+                                "completedAt": "2026-10-29T04:00:02Z"
+                            }
                         },
                         {
                             "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                             "status": "CORTEX_STEP_STATUS_DONE",
                             "metadata": {
                                 "executionId": "exec-99",
-                                "createdAt": "2026-10-29T04:00:02Z",
+                                "createdAt": "2026-10-29T04:00:03Z",
                                 "completedAt": "2026-10-29T04:00:05Z"
                             },
                             "plannerResponse": { "response": "Long session completed via incremental steps." }
                         }
                     ]
                 }))
+            }),
+        )
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            post(move |axum::Json(body): axum::Json<Value>| async move {
+                if body["cascadeId"] == json!(waiting_id) {
+                    return axum::Json(json!({}));
+                }
+                let off = body["executorMetadataOffset"].as_u64().unwrap_or(0);
+                if off == 0 {
+                    axum::Json(json!({
+                        "executorMetadata": [
+                            {
+                                "executionId": "exec-98",
+                                "lastStepIdx": 2306,
+                                "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                            },
+                            {
+                                "executionId": "exec-99",
+                                "lastStepIdx": 2307,
+                                "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
+                            }
+                        ]
+                    }))
+                } else {
+                    axum::Json(json!({}))
+                }
             }),
         );
     let task = tokio::spawn(async move {
@@ -214,10 +272,20 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
                 "lastModifiedTime": "2026-10-29T04:00:05Z",
                 "summary": "2300-step long session",
                 "status": "CASCADE_RUN_STATUS_IDLE",
-                "stepCount": 2307,
+                "stepCount": 2308,
                 "lastUserInputStepIndex": 2305,
                 "latestExecutorTerminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL",
                 "trajectoryMetadata": { "rootConversationId": root_id }
+            },
+            waiting_id: {
+                "trajectoryId": "traj-waiting",
+                "createdTime": "2026-10-28T00:00:00Z",
+                "lastModifiedTime": "2026-10-29T04:10:03Z",
+                "summary": "Forked session waiting on first turn without termination reason",
+                "status": "CASCADE_RUN_STATUS_WAITING",
+                "stepCount": 1802,
+                "lastUserInputStepIndex": 1800,
+                "trajectoryMetadata": { "rootConversationId": waiting_id }
             }
         }
     });
@@ -225,22 +293,40 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
         &client().unwrap(),
         port,
         "fixture-token",
-        99,
+        0,
         &summaries,
         None,
     )
     .await
     .unwrap();
     assert_eq!(scan.errors, 0);
-    assert_eq!(scan.streams.len(), 1);
-    assert_eq!(scan.streams[0].record_count, 2307);
-    assert_eq!(scan.streams[0].settled_count, 2307);
-    assert_eq!(scan.streams[0].events.len(), 1);
-    assert_eq!(scan.streams[0].events[0].position, 2307);
-    assert_eq!(scan.streams[0].events[0].turn_id, "exec-99");
+    assert_eq!(scan.streams.len(), 2);
+
+    let completed = scan.streams.iter().find(|s| s.id == root_id).unwrap();
+    assert_eq!(completed.record_count, 2308);
+    assert_eq!(completed.settled_count, 2308);
+    assert_eq!(completed.events.len(), 1);
+    assert_eq!(completed.events[0].position, 2308);
+    assert_eq!(completed.events[0].turn_id, "exec-99");
     assert_eq!(
-        scan.streams[0].events[0].body,
+        completed.events[0].body,
         "Long session completed via incremental steps."
     );
+
+    let waiting = scan.streams.iter().find(|s| s.id == waiting_id).unwrap();
+    assert_eq!(waiting.record_count, 1802);
+    assert_eq!(waiting.settled_count, 1801);
+    assert_eq!(waiting.events.len(), 1);
+    assert_eq!(waiting.events[0].kind, "reply_needed");
+    assert_eq!(waiting.events[0].body, "确认清理范围？");
     task.abort();
+}
+
+#[test]
+fn ps_etime_parser_handles_mm_ss_hh_mm_ss_and_days() {
+    assert_eq!(parse_ps_etime_ms("00:45"), Some(45_000));
+    assert_eq!(parse_ps_etime_ms(" 02:03:04 "), Some(7_384_000));
+    assert_eq!(parse_ps_etime_ms("1-00:00:05"), Some(86_405_000));
+    assert_eq!(parse_ps_etime_ms(""), None);
+    assert_eq!(parse_ps_etime_ms("00:99"), None);
 }

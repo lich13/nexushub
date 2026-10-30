@@ -169,7 +169,27 @@ pub fn assistant_feedback_request(text: &str) -> Option<String> {
     ]
     .iter()
     .any(|marker| lower.contains(marker));
-    if !explicit && !direct_question {
+    let ends_with_question = lower.trim_end().ends_with(['?', '？']);
+    let trailing_user_question = ends_with_question
+        && [
+            "你希望",
+            "你想",
+            "你要",
+            "你觉得",
+            "你倾向",
+            "还是",
+            "是否",
+            "吗？",
+            "吗?",
+            "do you ",
+            "should i ",
+            "should we ",
+            "want me to",
+            "prefer ",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if !explicit && !direct_question && !trailing_user_question {
         return None;
     }
     // An instruction to the user is not inferred from an assistant's own next step.

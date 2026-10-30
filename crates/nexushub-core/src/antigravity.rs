@@ -54,46 +54,65 @@ fn settled(step: &Value) -> bool {
         )
     )
 }
-fn interaction(step: &Value, index: usize) -> Result<Option<NativeTurnEvent>> {
+fn interaction(
+    step: &Value,
+    index: usize,
+    fallback_timestamp_ms: Option<i64>,
+) -> Result<Option<NativeTurnEvent>> {
     if step["status"] != "CORTEX_STEP_STATUS_WAITING" {
         return Ok(None);
     }
-    let Some(request) = step["requestedInteraction"]
+    let request = step["requestedInteraction"]
         .as_object()
-        .filter(|r| !r.is_empty())
-    else {
+        .filter(|r| !r.is_empty());
+    let top_level_questions = (step["type"] == "CORTEX_STEP_TYPE_ASK_QUESTION")
+        .then(|| step["askQuestion"]["questions"].as_array())
+        .flatten();
+    if request.is_none() && top_level_questions.is_none() {
         return Ok(None);
-    };
+    }
     let (kind, body) = if let Some(questions) = request
-        .get("askQuestion")
+        .and_then(|r| r.get("askQuestion"))
         .and_then(|v| v["questions"].as_array())
+        .or(top_level_questions)
     {
         let texts = questions
             .iter()
             .filter_map(|q| q["question"].as_str())
+            .filter(|q| !q.trim().is_empty())
             .collect::<Vec<_>>();
-        ("reply_needed", texts.join("\n"))
-    } else if request.contains_key("elicitation") {
-        ("reply_needed", "需要回复，请打开 Antigravity 处理。".into())
-    } else if [
-        "permission",
-        "filePermission",
-        "approvalInteraction",
-        "runCommand",
-        "sendCommandInput",
-        "readUrlContent",
-        "openBrowserUrl",
-        "runExtensionCode",
-        "executeBrowserJavascript",
-        "captureBrowserScreenshot",
-        "clickBrowserPixel",
-        "browserAction",
-        "mcp",
-        "deploy",
-    ]
-    .iter()
-    .any(|k| request.contains_key(*k))
+        let body = if texts.is_empty() {
+            "需要回复，请打开 Antigravity 处理。".into()
+        } else {
+            texts.join("\n")
+        };
+        ("reply_needed", body)
+    } else if request
+        .is_some_and(|r| r.contains_key("elicitation") || r.contains_key("interaction"))
     {
+        ("reply_needed", "需要回复，请打开 Antigravity 处理。".into())
+    } else if request.is_some_and(|r| {
+        [
+            "permission",
+            "filePermission",
+            "approvalInteraction",
+            "runCommand",
+            "sendCommandInput",
+            "readUrlContent",
+            "openBrowserUrl",
+            "confirmBrowserSetup",
+            "openBrowserSetup",
+            "runExtensionCode",
+            "executeBrowserJavascript",
+            "captureBrowserScreenshot",
+            "clickBrowserPixel",
+            "browserAction",
+            "mcp",
+            "deploy",
+        ]
+        .iter()
+        .any(|k| r.contains_key(*k))
+    }) {
         (
             "authorization",
             "操作需要授权，请打开 Antigravity 处理。".into(),
@@ -106,7 +125,11 @@ fn interaction(step: &Value, index: usize) -> Result<Option<NativeTurnEvent>> {
         !execution.is_empty(),
         "missing Antigravity execution identity"
     );
-    let proof = hex::encode(Sha256::digest(serde_json::to_vec(request)?));
+    let proof_source = match request {
+        Some(req) => serde_json::to_vec(req)?,
+        None => serde_json::to_vec(&step["askQuestion"])?,
+    };
+    let proof = hex::encode(Sha256::digest(proof_source));
     let completed = step["completedInteractions"].as_array().map_or(0, Vec::len);
     Ok(Some(NativeTurnEvent {
         prompt_id: None,
@@ -115,6 +138,9 @@ fn interaction(step: &Value, index: usize) -> Result<Option<NativeTurnEvent>> {
         kind: kind.into(),
         body: safe_text(&Value::String(body)),
         timestamp_ms: native_probe::timestamp(&step["metadata"]["createdAt"])
+            .or_else(|| native_probe::timestamp(&step["metadata"]["startedAt"]))
+            .or_else(|| native_probe::timestamp(&step["metadata"]["viewableAt"]))
+            .or(fallback_timestamp_ms)
             .context("missing Antigravity interaction time")?,
     }))
 }
@@ -223,6 +249,7 @@ pub struct TaskLiveness {
 #[derive(Debug, Clone, Default)]
 pub struct TrajectoryLivenessContext {
     pub has_active_subagents: bool,
+    pub has_active_child_processes: bool,
     pub now_ms: Option<i64>,
     pub subagents: BTreeMap<String, SubagentLiveness>,
     pub tasks: BTreeMap<String, TaskLiveness>,
@@ -393,6 +420,49 @@ pub fn collect_pending_task_logs(
         .collect()
 }
 
+pub fn earliest_untracked_task_spawn_ms(
+    id: &str,
+    summary_trajectory_id: &str,
+    steps: &[Value],
+    tracked_tasks: &BTreeMap<String, TaskLiveness>,
+) -> Option<i64> {
+    let work = collect_turn_pending_work(id, summary_trajectory_id, steps);
+    let mut earliest: Option<i64> = None;
+    let mut has_untracked = false;
+    for (task_id, rec) in &work.pending_tasks {
+        if !tracked_tasks.contains_key(task_id) && rec.expected_deadline_ms.is_none() {
+            has_untracked = true;
+            if let Some(ms) = rec.spawn_ms.or(work.last_root_step_ms) {
+                earliest = Some(earliest.map_or(ms, |prev| prev.min(ms)));
+            }
+        }
+    }
+    if has_untracked {
+        earliest.or(Some(0))
+    } else {
+        None
+    }
+}
+
+fn step_requests_artifact_feedback(step: &Value) -> bool {
+    let meta = &step["codeAction"]["artifactMetadata"];
+    if meta["requestFeedback"].as_bool() == Some(true)
+        || meta["RequestFeedback"].as_bool() == Some(true)
+    {
+        return true;
+    }
+    let args = step_tool_args(step);
+    args["ArtifactMetadata"]["RequestFeedback"].as_bool() == Some(true)
+        || args["artifactMetadata"]["requestFeedback"].as_bool() == Some(true)
+}
+
+fn step_artifact_feedback_summary(step: &Value) -> Option<&str> {
+    step["codeAction"]["artifactMetadata"]["summary"]
+        .as_str()
+        .or_else(|| step["codeAction"]["artifactMetadata"]["Summary"].as_str())
+        .filter(|s| !s.trim().is_empty())
+}
+
 fn has_unsettled_background_work(
     id: &str,
     summary_trajectory_id: &str,
@@ -450,6 +520,9 @@ fn has_unsettled_background_work(
                 return true;
             }
         } else {
+            if rec.expected_deadline_ms.is_none() && ctx.has_active_child_processes {
+                return true;
+            }
             let grace = if rec.expected_deadline_ms.is_some() {
                 BACKGROUND_HANDOFF_GRACE_MS
             } else {
@@ -530,6 +603,17 @@ pub fn snapshot_with_context(
             .as_array()
             .is_some_and(|arr| !arr.is_empty());
     let unsettled_background = has_unsettled_background_work(id, summary_trajectory_id, steps, ctx);
+    let summary_modified_ms = native_probe::timestamp(&summary["lastModifiedTime"])
+        .or_else(|| native_probe::timestamp(&summary["createdTime"]));
+    let local_turn_start = steps
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, step)| {
+            !step_is_foreign(id, summary_trajectory_id, step)
+                && step["type"] == "CORTEX_STEP_TYPE_USER_INPUT"
+        })
+        .map_or(0, |(idx, _)| idx + 1);
     let mut by_execution: BTreeMap<&str, Vec<(usize, &Value)>> = BTreeMap::new();
     let mut events = Vec::new();
     let mut settled_count = count;
@@ -548,7 +632,7 @@ pub fn snapshot_with_context(
         if !settled(step) {
             settled_count = settled_count.min(global_index as u64);
         }
-        if let Some(event) = interaction(step, global_index)? {
+        if let Some(event) = interaction(step, global_index, summary_modified_ms)? {
             events.push(event);
         }
     }
@@ -585,7 +669,16 @@ pub fn snapshot_with_context(
         if exec != latest {
             continue;
         }
-        let kind = match reason {
+        let terminal_no_tool_call = (last["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+            && last["plannerResponse"]["toolCalls"]
+                .as_array()
+                .is_none_or(Vec::is_empty))
+            || last["type"] == "CORTEX_STEP_TYPE_FINISH";
+        if reason == "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" && !terminal_no_tool_call {
+            settled_count = settled_count.min(group[0].0 as u64);
+            continue;
+        }
+        let mut kind = match reason {
             "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" => "completion",
             "EXECUTOR_TERMINATION_REASON_TERMINAL_STEP_TYPE"
                 if last["type"] == "CORTEX_STEP_TYPE_FINISH" =>
@@ -623,15 +716,46 @@ pub fn snapshot_with_context(
         let Some(timestamp_ms) = timestamp else {
             continue;
         };
+        let last_planner_text = group
+            .iter()
+            .rev()
+            .find(|(_, step)| step["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE")
+            .and_then(|(_, step)| step["plannerResponse"]["response"].as_str())
+            .unwrap_or("");
+        let local_last_idx = last_global_index.saturating_sub(step_offset);
+        let turn_slice = if local_turn_start <= local_last_idx && local_last_idx < steps.len() {
+            &steps[local_turn_start..=local_last_idx]
+        } else {
+            &[]
+        };
+        let artifact_feedback_step = turn_slice.iter().rev().find(|step| {
+            !step_is_foreign(id, summary_trajectory_id, step)
+                && settled(step)
+                && step_requests_artifact_feedback(step)
+        });
+        let detected_question = if kind == "completion" {
+            crate::codex::assistant_feedback_request(last_planner_text)
+        } else {
+            None
+        };
+        if kind == "completion" && (artifact_feedback_step.is_some() || detected_question.is_some())
+        {
+            kind = "reply_needed";
+        }
         let body = if kind == "failure" {
             "主回合未能完成，请打开 Antigravity 查看详情。".into()
+        } else if let Some(question_text) = detected_question.as_deref() {
+            safe_text(&Value::String(question_text.to_owned()))
+        } else if !last_planner_text.trim().is_empty() {
+            safe_text(&Value::String(last_planner_text.to_owned()))
+        } else if let Some(summary_text) =
+            artifact_feedback_step.and_then(step_artifact_feedback_summary)
+        {
+            safe_text(&Value::String(summary_text.to_owned()))
+        } else if kind == "reply_needed" {
+            "需要回复或确认计划，请打开 Antigravity 处理。".into()
         } else {
-            group
-                .iter()
-                .rev()
-                .find(|(_, step)| step["type"] == "CORTEX_STEP_TYPE_PLANNER_RESPONSE")
-                .map(|(_, step)| safe_text(&step["plannerResponse"]["response"]))
-                .unwrap_or_default()
+            String::new()
         };
         events.push(NativeTurnEvent {
             prompt_id: None,

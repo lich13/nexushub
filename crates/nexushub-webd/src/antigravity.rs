@@ -139,7 +139,10 @@ async fn query(
     ensure!(
         matches!(
             method,
-            "GetAllCascadeTrajectories" | "GetCascadeTrajectory" | "GetCascadeTrajectorySteps"
+            "GetAllCascadeTrajectories"
+                | "GetCascadeTrajectory"
+                | "GetCascadeTrajectorySteps"
+                | "GetCascadeTrajectoryExecutorMetadatas"
         ),
         "unsupported Antigravity read method"
     );
@@ -335,6 +338,91 @@ fn inspect_task_log(log_uri: &str) -> Option<antigravity::TaskLiveness> {
     })
 }
 
+fn parse_ps_etime_ms(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (days, rest) = match trimmed.split_once('-') {
+        Some((d, r)) => (d.parse::<i64>().ok()?, r),
+        None => (0, trimmed),
+    };
+    let parts: Vec<i64> = rest
+        .split(':')
+        .map(|p| p.parse::<i64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let (hours, mins, secs) = match parts.as_slice() {
+        [m, s] => (0, *m, *s),
+        [h, m, s] => (*h, *m, *s),
+        _ => return None,
+    };
+    if days < 0 || hours < 0 || !(0..60).contains(&mins) || !(0..60).contains(&secs) {
+        return None;
+    }
+    let total_secs = days
+        .checked_mul(86_400)?
+        .checked_add(hours.checked_mul(3_600)?)?
+        .checked_add(mins.checked_mul(60)?)?
+        .checked_add(secs)?;
+    total_secs.checked_mul(1_000)
+}
+
+fn read_ps_ppid_etime() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let bin = if std::path::Path::new("/bin/ps").is_file() {
+            "/bin/ps"
+        } else {
+            "ps"
+        };
+        let out = std::process::Command::new(bin)
+            .args(["-axo", "ppid=,etime="])
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8(out.stdout).ok())
+            .flatten()
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+fn has_active_child_process_since(parent_pid: u32, since_ms: i64, now_ms: i64) -> bool {
+    if parent_pid == 0 {
+        return false;
+    }
+    let Some(table) = read_ps_ppid_etime() else {
+        return false;
+    };
+    const MAX_COMMAND_AGE_MS: i64 = 4 * 3_600 * 1_000;
+    const CLOCK_SKEW_SLACK_MS: i64 = 5_000;
+    table.lines().any(|line| {
+        let mut cols = line.split_whitespace();
+        let Some(ppid) = cols.next().and_then(|s| s.parse::<u32>().ok()) else {
+            return false;
+        };
+        if ppid != parent_pid {
+            return false;
+        }
+        let Some(elapsed_ms) = cols.next().and_then(parse_ps_etime_ms) else {
+            return false;
+        };
+        if elapsed_ms > MAX_COMMAND_AGE_MS {
+            return false;
+        }
+        if since_ms <= 0 {
+            return true;
+        }
+        now_ms
+            .saturating_sub(elapsed_ms)
+            .saturating_add(CLOCK_SKEW_SLACK_MS)
+            >= since_ms
+    })
+}
+
 async fn fetch_incremental_turn_trajectory(
     client: &reqwest::Client,
     port: u16,
@@ -352,9 +440,6 @@ async fn fetch_incremental_turn_trajectory(
         .as_u64()
         .filter(|&off| off < total)
     else {
-        return Ok(None);
-    };
-    let Some(latest_reason) = summary["latestExecutorTerminationReason"].as_str() else {
         return Ok(None);
     };
     let total_usize = total as usize;
@@ -377,51 +462,28 @@ async fn fetch_incremental_turn_trajectory(
     if offset_usize + steps.len() != total_usize {
         return Ok(None);
     }
-    let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
-    let mut exec_order: Vec<String> = Vec::new();
-    let mut last_idx_by_exec: BTreeMap<String, usize> = BTreeMap::new();
-    for (local_idx, step) in steps.iter().enumerate() {
-        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
-        let foreign = source["trajectoryId"]
-            .as_str()
-            .is_some_and(|orig| !summary_traj_id.is_empty() && orig != summary_traj_id)
-            || source["cascadeId"]
-                .as_str()
-                .is_some_and(|orig| !orig.is_empty() && orig != id);
-        if foreign {
-            continue;
+    let mut metas = Vec::new();
+    loop {
+        if metas.len() >= 20_000 {
+            return Ok(None);
         }
-        if let Some(exec_id) = step["metadata"]["executionId"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-        {
-            if !last_idx_by_exec.contains_key(exec_id) {
-                exec_order.push(exec_id.to_owned());
-            }
-            last_idx_by_exec.insert(exec_id.to_owned(), offset_usize + local_idx);
-        }
+        let page = query(
+            client,
+            port,
+            token,
+            "GetCascadeTrajectoryExecutorMetadatas",
+            json!({"cascadeId": id, "executorMetadataOffset": metas.len()}),
+        )
+        .await?;
+        let Some(batch) = page["executorMetadata"]
+            .as_array()
+            .or_else(|| page["executorMetadatas"].as_array())
+            .filter(|b| !b.is_empty())
+        else {
+            break;
+        };
+        metas.extend(batch.iter().cloned());
     }
-    if exec_order.is_empty() {
-        return Ok(None);
-    }
-    let last_pos = exec_order.len() - 1;
-    let metas: Vec<Value> = exec_order
-        .into_iter()
-        .enumerate()
-        .map(|(pos, exec_id)| {
-            let last_step_idx = last_idx_by_exec.get(&exec_id).copied().unwrap_or(0);
-            let reason = if pos == last_pos {
-                latest_reason
-            } else {
-                "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"
-            };
-            json!({
-                "executionId": exec_id,
-                "lastStepIdx": last_step_idx,
-                "terminationReason": reason,
-            })
-        })
-        .collect();
     Ok(Some(json!({
         "status": summary["status"],
         "stepOffset": turn_offset,
@@ -580,6 +642,7 @@ async fn scan_at(
         let result = match fetch_probe_trajectory(client, port, token, id, summary).await {
             Ok(response) => {
                 let mut tasks = BTreeMap::new();
+                let mut has_active_child_processes = false;
                 if !summary_is_active(summary) && !has_active_subagents {
                     if let Some(steps) = response["trajectory"]["steps"].as_array() {
                         let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
@@ -597,10 +660,23 @@ async fn scan_at(
                             .await
                             .unwrap_or_default();
                         }
+                        if let Some(since_ms) = antigravity::earliest_untracked_task_spawn_ms(
+                            id,
+                            summary_traj_id,
+                            steps,
+                            &tasks,
+                        ) {
+                            has_active_child_processes = tokio::task::spawn_blocking(move || {
+                                has_active_child_process_since(pid, since_ms, now_ms)
+                            })
+                            .await
+                            .unwrap_or(false);
+                        }
                     }
                 }
                 let ctx = antigravity::TrajectoryLivenessContext {
                     has_active_subagents,
+                    has_active_child_processes,
                     now_ms: Some(now_ms),
                     subagents,
                     tasks,
