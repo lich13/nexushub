@@ -36,7 +36,8 @@ export const ExecutionGroupView = memo(function ExecutionGroupView({ group }: { 
   const { label, Icon } = executionSummary(group);
   const positionKey = useContext(DisclosureRevealContext);
   const reveal = Boolean(positionKey && group.commands.some(command => matchesTimelinePosition(positionKey, command.id, command.sourceIds)));
-  return <ActivityDetails timelineId={group.id} timelineAliases={group.commands.map(command => `group:${command.id}`)} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} reveal={reveal} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
+  const groupAliases = [...(group.mergedIds ?? []), ...group.commands.map(command => `group:${command.id}`)];
+  return <ActivityDetails timelineId={group.id} timelineAliases={groupAliases} className="execution-group" stateKey={group.id} stateAliases={groupAliases} reveal={reveal} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
     <Icon size={15} aria-hidden="true" />
     <span className="activity-label">{label}</span>
     <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>

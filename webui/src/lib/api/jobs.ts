@@ -15,18 +15,10 @@ import type {
 } from "../../types";
 import { callCommand } from "./transport";
 import { normalizeOptionalResult, USE_DEMO } from "./shared";
-import {
-  demoArchiveDeletePlan,
-  demoArchiveDeleteResult,
-  demoHiddenThreadDeletePlan,
-  demoHiddenThreadDeleteResult,
-  demoJob,
-  demoJobs
-} from "./demo";
 
 export async function dryRunArchiveDelete(): Promise<ArchiveDeletePlan> {
   if (USE_DEMO) {
-    return demoArchiveDeletePlan();
+    return (await import("./demo")).demoArchiveDeletePlan();
   }
   return callCommand<ArchiveDeletePlan>("cleanup.archiveDryRun", {});
 }
@@ -34,7 +26,7 @@ export async function dryRunArchiveDelete(): Promise<ArchiveDeletePlan> {
 export async function startArchiveDelete(request: {
   candidates: import("../../types").HiddenThreadSelection[];
 }): Promise<ArchiveDeleteResult> {
-  if (USE_DEMO) return demoArchiveDeleteResult();
+  if (USE_DEMO) return (await import("./demo")).demoArchiveDeleteResult();
   const confirmation = {
     confirmed: true,
     candidates: request.candidates
@@ -47,7 +39,7 @@ export async function startArchiveDelete(request: {
 
 export async function dryRunHiddenThreadDelete(request?: import("../../types").HiddenScanRequest): Promise<HiddenThreadDeletePlan> {
   if (USE_DEMO) {
-    return demoHiddenThreadDeletePlan();
+    return (await import("./demo")).demoHiddenThreadDeletePlan();
   }
   return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", request ? { request } : {});
 }
@@ -57,7 +49,7 @@ export async function startHiddenThreadDelete(request: {
   candidates: import("../../types").HiddenThreadSelection[];
 }): Promise<HiddenThreadDeleteResult> {
   if (USE_DEMO) {
-    return demoHiddenThreadDeleteResult();
+    return (await import("./demo")).demoHiddenThreadDeleteResult();
   }
   const confirmation = {
     confirmed: true,
@@ -72,7 +64,7 @@ export async function startHiddenThreadDelete(request: {
 
 export async function listJobs(): Promise<JobRecord[]> {
   if (USE_DEMO) {
-    return demoJobs();
+    return (await import("./demo")).demoJobs();
   }
   const payload = await callCommand<JobRecord[] | OptionalResult<JobRecord[]>>("jobs.list", { limit: 30 });
   const result = normalizeOptionalResult<JobRecord[]>(payload);
@@ -81,7 +73,7 @@ export async function listJobs(): Promise<JobRecord[]> {
 
 export async function getJob(id: string): Promise<JobRecord> {
   if (USE_DEMO) {
-    return demoJob(id);
+    return (await import("./demo")).demoJob(id);
   }
   return callCommand<JobRecord>("jobs.detail", { id });
 }

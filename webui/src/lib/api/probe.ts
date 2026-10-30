@@ -7,19 +7,12 @@ import type {
 } from "../../types";
 import { callCommand } from "./transport";
 import { currentDemoFixtureKey, jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
-import {
-  demoJobId,
-  demoProbeEvents,
-  demoProbeSettings,
-  demoProbeStatus,
-  demoSavedProbeSettings
-} from "./demo";
 
 export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
   if (USE_DEMO) {
     return {
       available: true,
-      data: demoProbeStatus(currentDemoFixtureKey())
+      data: (await import("./demo")).demoProbeStatus(currentDemoFixtureKey())
     };
   }
   return normalizeOptionalResult<ProbeStatus>(await callCommand<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
@@ -29,7 +22,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
   if (USE_DEMO) {
     return {
       available: true,
-      data: demoProbeSettings(currentDemoFixtureKey())
+      data: (await import("./demo")).demoProbeSettings(currentDemoFixtureKey())
     };
   }
   const payload = await callCommand<ProbeSettings | OptionalResult<ProbeSettings>>("probe.settings.get");
@@ -54,7 +47,7 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 }
 
 export async function saveProbeSettings(settings: Partial<ProbeSettings>): Promise<ProbeSettings> {
-  if (USE_DEMO) return demoSavedProbeSettings(settings, currentDemoFixtureKey());
+  if (USE_DEMO) return (await import("./demo")).demoSavedProbeSettings(settings, currentDemoFixtureKey());
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
   const payload = await callCommand<ProbeSettings>("probe.settings.save", {
     settings: normalizedSettings
@@ -65,7 +58,7 @@ export async function saveProbeSettings(settings: Partial<ProbeSettings>): Promi
 
 export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEventsResponse>> {
   if (USE_DEMO) {
-    return demoProbeEvents(limit);
+    return (await import("./demo")).demoProbeEvents(limit);
   }
   return normalizeOptionalResult<ProbeEventsResponse>(await callCommand<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("probe.events", { limit }));
 }
@@ -84,7 +77,7 @@ async function startProbeCommand(
   command: "probe.barkTest" | "probe.installHooks",
   fallback: string,
   ): Promise<{ job_id: string }> {
-  if (USE_DEMO) return demoJobId(fallback);
+  if (USE_DEMO) return (await import("./demo")).demoJobId(fallback);
   const result = await callCommand<{ job_id?: string | null; jobId?: string | null }>(command, {});
   return jobIdFromRuntimeResult(result, fallback);
 }

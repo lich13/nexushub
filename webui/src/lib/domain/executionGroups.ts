@@ -14,6 +14,7 @@ export type ExecutionCommand = {
 };
 export type ExecutionGroup = {
   id: string;
+  mergedIds?: string[];
   commands: ExecutionCommand[];
   kind: "command" | "tool";
   provider: "Codex" | "Grok" | "Claude Code" | "Antigravity" | "DeepSeek Harness";

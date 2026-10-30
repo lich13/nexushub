@@ -7,12 +7,11 @@ import {
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
-import { demoUpdateJobId, demoUpdateStatus } from "./demo";
 import { currentDemoFixtureKey, jobIdFromRuntimeResult, USE_DEMO } from "./shared";
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
-    return demoUpdateStatus(currentDemoFixtureKey());
+    return (await import("./demo")).demoUpdateStatus(currentDemoFixtureKey());
   }
   return callCommand<UpdateStatus>("updates.status");
 }
@@ -37,17 +36,17 @@ async function runTypedUpdateCommand(
 
 export const updates = {
   async check(): Promise<UpdateActionResult> {
-    if (USE_DEMO) return demoUpdateJobId("check");
+    if (USE_DEMO) return (await import("./demo")).demoUpdateJobId("check");
     return runTypedUpdateCommand("updates.check", "update-check");
   },
   async install(): Promise<UpdateActionResult> {
-    if (USE_DEMO) return demoUpdateJobId("install");
+    if (USE_DEMO) return (await import("./demo")).demoUpdateJobId("install");
     return runTypedUpdateCommand("updates.install", "update-install");
   },
   async prune(
     capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
   ): Promise<UpdateActionResult> {
-    if (USE_DEMO) return demoUpdateJobId("prune");
+    if (USE_DEMO) return (await import("./demo")).demoUpdateJobId("prune");
     if (!capabilities.updatePrune) {
       throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
     }

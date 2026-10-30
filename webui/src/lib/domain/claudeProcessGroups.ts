@@ -52,11 +52,24 @@ function foldAutomatic(entries: ExecutionRenderItem<ClaudeHistoryEvent>[]): Clau
         prev?.kind === "group" &&
         (!prev.group.turnId || !entry.group.turnId || prev.group.turnId === entry.group.turnId)
       ) {
-        prev.group.commands.push(...entry.group.commands);
-        if (entry.group.kind === "tool") prev.group.kind = "tool";
-        if (!prev.group.turnId && entry.group.turnId) prev.group.turnId = entry.group.turnId;
-        prev.group.running = prev.group.commands.some(command => command.status === "running");
-        prev.group.failedCount = prev.group.commands.filter(command => command.status === "failed").length;
+        const commands = [...prev.group.commands, ...entry.group.commands];
+        const mergedIds = [
+          ...(prev.group.mergedIds ?? []),
+          entry.group.id,
+          ...(entry.group.mergedIds ?? [])
+        ];
+        result[result.length - 1] = {
+          kind: "group",
+          group: {
+            ...prev.group,
+            mergedIds,
+            commands,
+            kind: entry.group.kind === "tool" ? "tool" : prev.group.kind,
+            turnId: prev.group.turnId || entry.group.turnId,
+            running: commands.some(command => command.status === "running"),
+            failedCount: commands.filter(command => command.status === "failed").length
+          }
+        };
         continue;
       }
     }

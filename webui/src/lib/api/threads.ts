@@ -1,7 +1,6 @@
 import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../../types";
 import { callCommand } from "./transport";
 import { USE_DEMO } from "./shared";
-import { demoThreadBlockPage, demoThreadDetail, demoThreads } from "./demo";
 import type { SubagentDetailRequest, SubagentDetailResponse } from "../../types";
 
 export async function getSubagentDetail(request: SubagentDetailRequest): Promise<SubagentDetailResponse> {
@@ -9,7 +8,7 @@ export async function getSubagentDetail(request: SubagentDetailRequest): Promise
 }
 
 export async function listThreads(archived = false, q = ""): Promise<ThreadSummary[]> {
-  if (USE_DEMO) return demoThreads(archived, q);
+  if (USE_DEMO) return (await import("./demo")).demoThreads(archived, q);
   return callCommand<ThreadSummary[]>("threads.list", { archived, q, limit: 120 });
 }
 
@@ -21,14 +20,14 @@ export type ThreadDetailOptions = {
 
 export async function getThread(id: string, options: ThreadDetailOptions = {}): Promise<ThreadDetail> {
   if (USE_DEMO) {
-    return demoThreadDetail(id);
+    return (await import("./demo")).demoThreadDetail(id);
   }
   return callCommand<ThreadDetail>("threads.detail", { id, options });
 }
 
 export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOptions, "limit" | "before"> = {}): Promise<ThreadBlockPage> {
   if (USE_DEMO) {
-    return demoThreadBlockPage(id);
+    return (await import("./demo")).demoThreadBlockPage(id);
   }
   const page = await callCommand<ThreadBlockPage | {
     history?: ThreadBlockPage["history"]; threadId: string; blocks: MessageBlock[]; totalBlocks: number; hasMoreBlocks: boolean; beforeCursor?: string | null;

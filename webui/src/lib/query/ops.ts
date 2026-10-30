@@ -17,6 +17,7 @@ import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, Hi
 import { backgroundJobKey } from "./jobs";
 import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
 import { HiddenScanRunner } from "./hiddenScan";
+import { visiblePollInterval } from "./shared";
 
 export const opsQueryKeys = {
   updateStatus: ["update-status"] as const,
@@ -29,14 +30,13 @@ export function useOpsQueries({ historyOpen }: { historyOpen: boolean }) {
     update: useQuery({
       queryKey: [...opsQueryKeys.updateStatus, machineScope()] as const,
       queryFn: getUpdateStatus,
-      refetchInterval: 30000,
       staleTime: 15000
     }),
     jobs: useQuery({
       queryKey: [...opsQueryKeys.jobs, machineScope()] as const,
       queryFn: listJobs,
       enabled: historyOpen,
-      refetchInterval: 5000
+      refetchInterval: visiblePollInterval(5000)
     })
   };
 }

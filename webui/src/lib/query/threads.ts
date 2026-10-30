@@ -34,7 +34,7 @@ import {
   type ThreadMessageSlot,
   type ThreadMessageStoreController
 } from "../threadMessageStore";
-import { preservePreviousQueryData } from "./shared";
+import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 
 export const threadQueryKeys = {
   threads: (archived?: boolean, q?: string) => archived === undefined && q === undefined ? ["threads"] as const : ["threads", archived ? "archived" : "active", q] as const,
@@ -452,7 +452,7 @@ export function useThreadsQuery(input: {
       return input.select ? input.select(threads) : threads;
     },
     enabled,
-    refetchInterval: enabled ? 5000 : false,
+    refetchInterval: enabled ? visiblePollInterval(5000) : false,
     staleTime: 3000,
     placeholderData: preservePreviousQueryData
   });

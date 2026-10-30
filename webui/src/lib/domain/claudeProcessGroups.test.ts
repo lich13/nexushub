@@ -108,6 +108,7 @@ test("API error reply followed by trailing turn_duration and cost-state still fo
   expect(execGroups).toHaveLength(1);
   if (execGroups[0].kind === "group") {
     expect(execGroups[0].group.commands).toHaveLength(2);
+    expect(execGroups[0].group.mergedIds).toEqual(["group:claude:bash-2:0"]);
     expect(execGroups[0].group.commands.map(cmd => cmd.sourceIds)).toEqual([
       ["bash-1", "bash-1-out"],
       ["bash-2", "bash-2-out"],

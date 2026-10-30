@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
+import { groupClaudeProcesses } from "../../lib/domain/claudeProcessGroups";
 import { groupCodexCommandBlocks, groupGrokCommandEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionGroup } from "../../lib/domain/executionGroups";
+import { DisclosureScope, rememberScopedDisclosure } from "./ActivityDetails";
 import { executionSummary, ExecutionGroupView } from "./ExecutionGroupView";
 
 function summaryGroup(titles: string[], overrides: Partial<ExecutionGroup> = {}): ExecutionGroup {
@@ -119,4 +121,36 @@ test("an open failed group keeps instruction output unmounted and ordinary failu
   expect(html).toContain("AGENTS.md");
   expect(html).toContain("Visible failed output fixture.");
   expect(html.includes("Instruction output payload fixture."), "closed instruction commands should not mount output").toBe(false);
+});
+
+test("merged Claude execution groups preserve an absorbed group's expanded disclosure state until toggled together", () => {
+  const scope = "claude-merge-disclosure-fixture";
+  rememberScopedDisclosure(scope, "group:claude:bash-1:0", false);
+  rememberScopedDisclosure(scope, "group:claude:bash-2:0", true);
+
+  const items = groupClaudeProcesses([
+    { id: "bash-1", turnId: "t1", kind: "tool_call", callId: "b1", role: "Bash", status: "completed", detail: "{\"command\":\"pwd\"}" },
+    { id: "ctx-1", turnId: "t1", kind: "system", role: "native_context", detail: "ctx" },
+    { id: "bash-2", turnId: "t1", kind: "tool_call", callId: "b2", role: "Bash", status: "completed", detail: "{\"command\":\"ls\"}" },
+  ]);
+  const proc = items.find(entry => entry.kind === "process");
+  if (!proc || proc.kind !== "process") throw new Error("expected process");
+  const merged = proc.process.entries.find(entry => entry.kind === "group");
+  if (!merged || merged.kind !== "group") throw new Error("expected merged group");
+
+  const openHtml = renderToStaticMarkup(
+    <DisclosureScope.Provider value={scope}>
+      <ExecutionGroupView group={merged.group} />
+    </DisclosureScope.Provider>
+  );
+  expect(openHtml).toMatch(/<details class="execution-group"[^>]*open/);
+
+  const aliases = [...(merged.group.mergedIds ?? []), ...merged.group.commands.map(cmd => `group:${cmd.id}`)];
+  rememberScopedDisclosure(scope, merged.group.id, false, aliases);
+  const closedHtml = renderToStaticMarkup(
+    <DisclosureScope.Provider value={scope}>
+      <ExecutionGroupView group={merged.group} />
+    </DisclosureScope.Provider>
+  );
+  expect(closedHtml).not.toMatch(/<details class="execution-group"[^>]*open/);
 });

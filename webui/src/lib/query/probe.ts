@@ -12,7 +12,7 @@ import {
 import { useConnection } from "./connection";
 import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
-import { preservePreviousQueryData } from "./shared";
+import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
 export const probeQueryKeys = {
@@ -27,7 +27,7 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
     status: useQuery({
       queryKey: probeQueryKeys.status,
       queryFn: getProbeStatus,
-      refetchInterval: 15000,
+      refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
@@ -35,7 +35,6 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
       enabled: section === "settings",
-      refetchInterval: 30000,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
     }),
@@ -43,7 +42,7 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
       enabled: section === "events",
-      refetchInterval: 15000,
+      refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
@@ -51,7 +50,7 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
       enabled: section === "settings" && historyOpen,
-      refetchInterval: 5000,
+      refetchInterval: visiblePollInterval(5000),
       placeholderData: preservePreviousQueryData
     })
   };
