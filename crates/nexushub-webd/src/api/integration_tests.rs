@@ -89,8 +89,41 @@ fn mark_codex_home(home: &std::path::Path) {
     fs::create_dir_all(home.join("app-server-control")).unwrap();
 }
 
+fn init_isolated_codex_home(codex_home: &std::path::Path) {
+    fs::create_dir_all(codex_home.join("sessions")).unwrap();
+    fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
+    fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+    let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS threads (
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            archived_at INTEGER,
+            source TEXT NOT NULL DEFAULT 'cli',
+            thread_source TEXT NOT NULL DEFAULT 'user',
+            cwd TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            first_user_message TEXT NOT NULL DEFAULT '',
+            preview TEXT NOT NULL DEFAULT '',
+            has_user_event INTEGER NOT NULL DEFAULT 1
+        );",
+    )
+    .unwrap();
+}
+
 fn authenticated_test_state() -> (crate::state::AppState, String) {
     let mut config = Config::default();
+    let sandbox_root = temp_test_dir("nexushub-test-sandbox");
+    let codex_home = sandbox_root.join(".codex");
+    init_isolated_codex_home(&codex_home);
+    config.codex.home = codex_home;
+    config.codex.workspace = sandbox_root.join("workspace");
+    config.paths.data_dir = sandbox_root.join("data");
+    config.paths.db_path = sandbox_root.join("data/panel.sqlite");
+    config.paths.log_dir = sandbox_root.join("logs");
     config.codex.bridge_enabled = false;
     config.update.panel_precheck_command =
         "/usr/local/bin/nexushub-webd-update --precheck".to_string();
@@ -99,7 +132,8 @@ fn authenticated_test_state() -> (crate::state::AppState, String) {
 
     let db = PanelDb::open(":memory:").unwrap();
     let api_key = db.rotate_admin_api_key().unwrap();
-    (crate::state::AppState::new(config, db), api_key)
+    let state = crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root);
+    (state, api_key)
 }
 
 fn authenticated_test_state_with_config_file() -> (crate::state::AppState, String, PathBuf, PathBuf)

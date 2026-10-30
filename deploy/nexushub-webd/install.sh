@@ -261,9 +261,6 @@ ensure_secret_key() {
   if [[ -z "${secret}" && -f /etc/codex-cloud-panel/env ]]; then
     secret="$(read_legacy_secret CODEX_CLOUD_PANEL_SECRET_KEY /etc/codex-cloud-panel/env)"
   fi
-  if [[ -z "${secret}" && -f /etc/nexushub-legacy/env ]]; then
-    secret="$(read_legacy_secret NEXUSHUB_LEGACY_SECRET_KEY /etc/nexushub-legacy/env)"
-  fi
   if [[ -z "${secret}" ]]; then
     secret="$(python3 - <<'PY'
 import secrets

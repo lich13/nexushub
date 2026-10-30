@@ -98,10 +98,11 @@ pub(crate) async fn dsh_archive_delete_dry_run(
     headers: HeaderMap,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let dsh = state.dsh_paths();
     ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .cleanup()
-            .dsh_archive_dry_run(&nexushub_core::dsh::DshPaths::default_for_user())
+            .dsh_archive_dry_run(&dsh)
     })
     .await
     .map_err(anyhow::Error::from)??)
@@ -113,9 +114,11 @@ pub(crate) async fn dsh_archive_delete_execute(
     Json(request): Json<nexushub_core::dsh::DshArchiveDeleteRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let dsh = state.dsh_paths();
     ok(nexushub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-        let result = NexusHubUseCases::new(&http_update_platform()).cleanup()
-            .dsh_archive_execute(&nexushub_core::dsh::DshPaths::default_for_user(), request)?;
+        let result = NexusHubUseCases::new(&http_update_platform())
+            .cleanup()
+            .dsh_archive_execute(&dsh, request)?;
         state.db.record_audit(Some(&auth.admin_id), "dsh_archives.delete.execute", Some("dsh_archives"), None, None,
             serde_json::json!({"deleted_threads": result.deleted_threads, "deleted_bytes": result.deleted_bytes}))?;
         Ok(result)
@@ -128,9 +131,8 @@ pub(crate) async fn unified_cleanup_dry_run(
     Json(request): Json<nexushub_core::services::cleanup::UnifiedCleanupDryRunRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let codex = state.codex_paths();
+    let paths = state.unified_cleanup_paths();
     ok(nexushub_core::read_tasks::spawn_blocking(move || {
-        let paths = nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex);
         NexusHubUseCases::new(&http_update_platform())
             .cleanup()
             .unified_dry_run(&paths, request)
@@ -145,11 +147,9 @@ pub(crate) async fn unified_cleanup_execute(
     Json(request): Json<nexushub_core::services::cleanup::UnifiedCleanupExecuteRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let codex = state.codex_paths();
+    let paths = state.unified_cleanup_paths();
     ok(
         nexushub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
-            let paths =
-                nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex);
             let result = NexusHubUseCases::new(&http_update_platform())
                 .cleanup()
                 .unified_execute(&paths, request)?;

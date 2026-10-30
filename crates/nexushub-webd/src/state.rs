@@ -13,6 +13,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+pub(crate) struct TestSandboxDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for TestSandboxDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     config: Arc<RwLock<Config>>,
@@ -23,6 +33,8 @@ pub struct AppState {
     pub app_server_client: CodexAppServerClient,
     pub auth_limiter: Arc<Mutex<AuthLimiter>>,
     pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
+    #[cfg(test)]
+    test_sandbox: Option<Arc<TestSandboxDir>>,
 }
 
 impl AppState {
@@ -62,7 +74,15 @@ impl AppState {
             app_server_client,
             auth_limiter: Arc::new(Mutex::new(AuthLimiter::new(auth_rate_limit))),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
+            #[cfg(test)]
+            test_sandbox: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_sandbox(mut self, root: std::path::PathBuf) -> Self {
+        self.test_sandbox = Some(Arc::new(TestSandboxDir(root)));
+        self
     }
 
     pub fn host_surface(&self) -> HostSurface {
@@ -88,6 +108,53 @@ impl AppState {
 
     pub fn codex_paths(&self) -> CodexPaths {
         self.resolved_codex_paths().codex_paths()
+    }
+
+    pub fn dsh_paths(&self) -> nexushub_core::dsh::DshPaths {
+        #[cfg(test)]
+        if let Some(sandbox) = &self.test_sandbox {
+            if std::env::var_os("DSH_HOME")
+                .filter(|v| !v.is_empty())
+                .is_none()
+            {
+                return nexushub_core::dsh::DshPaths {
+                    home: sandbox.0.join(".dsh"),
+                };
+            }
+        }
+        nexushub_core::dsh::DshPaths::default_for_user()
+    }
+
+    pub fn unified_cleanup_paths(&self) -> nexushub_core::services::cleanup::UnifiedCleanupPaths {
+        let codex = self.codex_paths();
+        #[cfg(test)]
+        if let Some(sandbox) = &self.test_sandbox {
+            let claude_cfg = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| sandbox.0.join(".claude"));
+            let grok_home = std::env::var_os("GROK_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| sandbox.0.join(".grok"));
+            let ag_home = std::env::var_os("ANTIGRAVITY_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| sandbox.0.join(".gemini/antigravity"));
+            return nexushub_core::services::cleanup::UnifiedCleanupPaths {
+                codex,
+                antigravity: nexushub_core::antigravity::sessions::AntigravityPaths::offline(
+                    ag_home,
+                ),
+                dsh: self.dsh_paths(),
+                claude: nexushub_core::claude::ClaudePaths {
+                    projects: claude_cfg.join("projects"),
+                    config: claude_cfg,
+                },
+                grok: nexushub_core::grok::GrokPaths { home: grok_home },
+            };
+        }
+        nexushub_core::services::cleanup::UnifiedCleanupPaths::default_for_codex(codex)
     }
 }
 

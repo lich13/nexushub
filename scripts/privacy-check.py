@@ -22,6 +22,21 @@ RULES = {
     "email": re.compile(r"(?<![\w@])([\w.+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?![\w.])"),
     "url": re.compile(r"https?://([a-zA-Z0-9.-]+)(?=[:/\s\"'`<>)]|$)"),
     "secret": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\s+[A-Za-z0-9+/=]{32,}|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{32,})\b"),
+    "personal_trace": re.compile(
+        "|".join(
+            [
+                r"cc-switch" + r"-lite",
+                r"CC_SWITCH" + r"_LITE",
+                r"/srv/" + r"hermes\b",
+                r"\bhermes" + r"\s+agent\b",
+                r"\u817e\u8baf" + r"\u4e91",
+                r"\btencent-" + r"cloud(?:-ts)?\b",
+                r"\u4e91" + r"\u673a",
+                r"\bxian" + r"bao\b",
+            ]
+        ),
+        re.IGNORECASE,
+    ),
 }
 EXAMPLE_USERS = {"example", "test", "alice", "runner", "codex", "ubuntu", "user", "*"}
 
@@ -66,6 +81,8 @@ def problems(data, private_values, scan_endpoint_literals=True):
             found.add("unreviewed_endpoint")
     if RULES["secret"].search(text):
         found.add("credential")
+    if not native_binary and RULES["personal_trace"].search(text):
+        found.add("personal_trace")
     if any(value and value.encode() in data for value in private_values):
         found.add("private_value")
     return sorted(found)
@@ -107,17 +124,38 @@ def scan():
             check(name, path.read_bytes())
     if args.git_objects:
         objects = git(root, "rev-list", "--objects", "--all").splitlines()
-        for line in objects:
-            oid = line.split(b" ", 1)[0].decode()
-            kind = git(root, "cat-file", "-t", oid).strip()
-            if kind == b"blob":
-                check("git:" + oid, git(root, "cat-file", "blob", oid))
-            elif kind in (b"commit", b"tag"):
-                data = git(root, "cat-file", kind.decode(), oid)
-                check("git:" + oid, data)
-                for email in re.findall(rb"^(?:author|committer|tagger) .* <([^>]+)>", data, re.M):
-                    if not email.endswith(b"@users.noreply.github.com"):
-                        failures.append({"source": "git:" + oid, "rule": "commit_identity"})
+        oids = b"\n".join(line.split(b" ", 1)[0] for line in objects if line)
+        if oids:
+            proc = subprocess.Popen(
+                ["git", "-C", str(root), "cat-file", "--batch"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            batch_out, _ = proc.communicate(oids + b"\n")
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, "git cat-file --batch")
+            pos = 0
+            total_len = len(batch_out)
+            while pos < total_len:
+                nl = batch_out.index(b"\n", pos)
+                header = batch_out[pos:nl].decode()
+                parts = header.split(" ")
+                oid = parts[0]
+                if len(parts) < 3 or parts[1] == "missing":
+                    pos = nl + 1
+                    continue
+                kind = parts[1]
+                size = int(parts[2])
+                data = batch_out[nl + 1 : nl + 1 + size]
+                pos = nl + 1 + size + 1
+                if kind == "blob":
+                    check("git:" + oid, data)
+                elif kind in ("commit", "tag"):
+                    check("git:" + oid, data)
+                    for email in re.findall(rb"^(?:author|committer|tagger) .* <([^>]+)>", data, re.M):
+                        if not email.endswith(b"@users.noreply.github.com"):
+                            failures.append({"source": "git:" + oid, "rule": "commit_identity"})
     for directory in args.payload:
         if not directory.is_dir():
             raise ValueError("invalid payload directory")
