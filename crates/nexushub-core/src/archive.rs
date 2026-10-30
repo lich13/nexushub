@@ -139,6 +139,21 @@ pub fn execute_delete_archived(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
 ) -> Result<ArchiveDeleteResult> {
+    if candidates.is_empty() {
+        let before = plan_delete_archived(paths).unwrap_or_else(|_| ArchiveDeletePlan {
+            integrity: "unavailable".into(),
+            ..Default::default()
+        });
+        return Ok(ArchiveDeleteResult {
+            after_total_threads: before.total_threads,
+            after_active_threads: before.active_threads,
+            after_archived_threads: before.archived_threads,
+            after_integrity: before.integrity.clone(),
+            before,
+            items: Vec::new(),
+            deleted_rollout_files: 0,
+        });
+    }
     let before = plan_delete_archived(paths)?;
     let existing = existing_thread_ids(paths)?;
     let allowed: HashSet<&str> = before.archived_ids.iter().map(String::as_str).collect();
@@ -237,6 +252,28 @@ pub fn execute_delete_hidden(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
 ) -> Result<HiddenThreadDeleteResult> {
+    if candidates.is_empty() {
+        let before = plan_delete_hidden(paths).unwrap_or_else(|_| HiddenThreadDeletePlan {
+            integrity: "unavailable".into(),
+            ..Default::default()
+        });
+        return Ok(HiddenThreadDeleteResult {
+            deleted_threads: 0,
+            skipped_threads: 0,
+            failed_threads: 0,
+            items: Vec::new(),
+            after_total_threads: before.total_threads,
+            after_visible_threads: before.visible_threads,
+            after_hidden_threads: before.hidden_threads,
+            after_archived_threads: before.archived_threads,
+            after_integrity: before.integrity.clone(),
+            visible_threads: before.visible_threads,
+            hidden_threads: before.hidden_threads,
+            integrity: before.integrity.clone(),
+            before,
+            deleted_rollout_files: 0,
+        });
+    }
     let before = plan_delete_hidden(paths)?;
     let existing = existing_thread_ids(paths)?;
     let allowed: BTreeMap<&str, &HiddenThreadCandidate> = before
@@ -1003,6 +1040,28 @@ mod tests {
         assert!(thread_exists(&conn, "hidden-subagent"));
         assert!(!root.join("sessions/rollout-hidden-internal.jsonl").exists());
         assert!(!root.join("sessions/rollout-hidden-subagent.jsonl").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_candidate_cleanup_succeeds_without_state_db_while_non_empty_rejects() {
+        let root = unique_temp_dir("missing-state-db");
+        let paths = CodexPaths::new(&root);
+
+        let empty_archived = super::execute_delete_archived(&paths, &[]).unwrap();
+        assert!(empty_archived.items.is_empty());
+        assert_eq!(empty_archived.after_integrity, "unavailable");
+
+        let empty_hidden = execute_delete_hidden(&paths, &[]).unwrap();
+        assert!(empty_hidden.items.is_empty());
+        assert_eq!(empty_hidden.after_integrity, "unavailable");
+
+        let candidate = [super::HiddenThreadSelection {
+            id: "11111111-1111-4111-8111-111111111111".into(),
+            fingerprint: None,
+        }];
+        assert!(super::execute_delete_archived(&paths, &candidate).is_err());
+        assert!(execute_delete_hidden(&paths, &candidate).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
