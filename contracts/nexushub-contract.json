@@ -1179,6 +1179,10 @@
       "core": "SessionAttachmentResponse",
       "webui": "SessionAttachmentResponse"
     },
+    "RemoteMachineSummary": {
+      "core": "RemoteMachineSummary",
+      "webui": "RemoteMachineSummary"
+    },
     "RemoteConnectionView": {
       "core": "RemoteConnectionView",
       "webui": "RemoteConnectionView"

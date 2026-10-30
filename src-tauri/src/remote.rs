@@ -15,11 +15,15 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const KEYCHAIN_SERVICE: &str = "com.lich13.nexushub.remote";
+const LEGACY_MACHINE_ID: &str = "m-legacy";
 use nexushub_core::resource_limits::{
     CREDENTIAL_WAIT, REMOTE_RESPONSE_BYTES as MAX_RESPONSE_BYTES,
 };
@@ -28,8 +32,62 @@ use nexushub_core::resource_limits::{
 #[serde(rename_all = "camelCase")]
 struct Preferences {
     target: MachineTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_machine_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    machines: Vec<RemoteMachineSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     base_url: Option<String>,
     revision: u64,
+}
+
+impl Preferences {
+    fn normalize_and_migrate(&mut self) -> Result<(), String> {
+        for machine in &mut self.machines {
+            if machine.id.trim().is_empty() || machine.id.chars().any(char::is_control) {
+                return Err(safe_error("连接配置损坏"));
+            }
+            machine.base_url = normalized_base_url(&machine.base_url)?;
+            machine.name = normalized_machine_name(Some(&machine.name), &machine.base_url)?;
+        }
+        if self.machines.is_empty() {
+            if let Some(legacy_base) = self.base_url.take() {
+                let normalized = normalized_base_url(&legacy_base)?;
+                let name = default_machine_name(&normalized);
+                self.machines.push(RemoteMachineSummary {
+                    id: LEGACY_MACHINE_ID.to_string(),
+                    name,
+                    base_url: normalized,
+                });
+                self.active_machine_id = Some(LEGACY_MACHINE_ID.to_string());
+            }
+        } else {
+            self.base_url = None;
+        }
+
+        if self.machines.is_empty() {
+            self.active_machine_id = None;
+            if self.target == MachineTarget::Remote {
+                self.target = MachineTarget::Local;
+            }
+        } else {
+            let valid_active = self
+                .active_machine_id
+                .as_deref()
+                .is_some_and(|id| self.machines.iter().any(|m| m.id == id));
+            if !valid_active {
+                self.active_machine_id = self.machines.first().map(|m| m.id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn active_machine(&self) -> Option<&RemoteMachineSummary> {
+        match self.active_machine_id.as_deref() {
+            Some(id) => self.machines.iter().find(|m| m.id == id),
+            None => self.machines.first(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -77,7 +135,49 @@ pub fn normalized_base_url(raw: &str) -> Result<String, String> {
     Ok(format!("{}/", url.as_str().trim_end_matches('/')))
 }
 
-fn credential(base_url: &str) -> Result<keyring::Entry, String> {
+pub fn default_machine_name(normalized_base: &str) -> String {
+    Url::parse(normalized_base)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?;
+            match url.port() {
+                Some(port) => Some(format!("{host}:{port}")),
+                None => Some(host.to_string()),
+            }
+        })
+        .unwrap_or_else(|| "远程机器".to_string())
+}
+
+pub fn normalized_machine_name(raw: Option<&str>, normalized_base: &str) -> Result<String, String> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(default_machine_name(normalized_base));
+    };
+    if raw.chars().count() > 64 || raw.chars().any(char::is_control) {
+        return Err(safe_error("机器名称不能超过 64 个字符，且不能包含控制字符"));
+    }
+    Ok(raw.to_string())
+}
+
+fn validate_api_key_format(api_key: &str) -> Result<(), String> {
+    if api_key.len() != 68
+        || !api_key.starts_with("nhk_")
+        || !api_key[4..].bytes().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(safe_error("API Key 格式无效"));
+    }
+    Ok(())
+}
+
+fn machine_credential_account(machine_id: &str) -> String {
+    format!("machine:{machine_id}")
+}
+
+fn machine_credential(machine_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, &machine_credential_account(machine_id))
+        .map_err(|_| safe_error("无法访问钥匙串"))
+}
+
+fn legacy_credential(base_url: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, base_url).map_err(|_| safe_error("无法访问钥匙串"))
 }
 
@@ -101,6 +201,24 @@ fn restore_credential(entry: &keyring::Entry, value: Option<&str>) -> Result<(),
         }),
     }
     .map_err(|_| safe_error("无法更新钥匙串，请检查钥匙串权限"))
+}
+
+fn read_or_migrate_machine_credential(
+    machine_id: &str,
+    base_url: &str,
+) -> Result<Option<String>, String> {
+    let primary = machine_credential(machine_id)?;
+    if let Some(value) = read_credential(&primary)? {
+        return Ok(Some(value));
+    }
+    let legacy = legacy_credential(base_url)?;
+    if let Some(value) = read_credential(&legacy)? {
+        if primary.set_password(&value).is_ok() {
+            let _ = restore_credential(&legacy, None);
+        }
+        return Ok(Some(value));
+    }
+    Ok(None)
 }
 
 impl RemoteConnections {
@@ -130,17 +248,16 @@ impl RemoteConnections {
         current.writes += 1;
         Ok(LocalWriteGuard(self.state.clone()))
     }
+
     pub fn load(data_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(data_dir).map_err(|_| safe_error("无法创建连接配置目录"))?;
         let path = data_dir.join("remote-connection.json");
         let prefs = if path.exists() {
-            let value: Preferences = serde_json::from_slice(
+            let mut value: Preferences = serde_json::from_slice(
                 &fs::read(&path).map_err(|_| safe_error("无法读取连接配置"))?,
             )
             .map_err(|_| safe_error("连接配置损坏"))?;
-            if let Some(base) = &value.base_url {
-                normalized_base_url(base)?;
-            }
+            value.normalize_and_migrate()?;
             value
         } else {
             Preferences::default()
@@ -164,11 +281,15 @@ impl RemoteConnections {
 
     fn view(&self) -> RemoteConnectionView {
         let state = self.state.lock().expect("connection state");
+        let active = state.prefs.active_machine();
         RemoteConnectionView {
             target: state.prefs.target,
             revision: state.prefs.revision,
-            base_url: state.prefs.base_url.clone(),
-            configured: state.prefs.base_url.is_some(),
+            base_url: active.map(|m| m.base_url.clone()),
+            configured: !state.prefs.machines.is_empty(),
+            active_machine_id: active.map(|m| m.id.clone()),
+            active_machine_name: active.map(|m| m.name.clone()),
+            machines: state.prefs.machines.clone(),
         }
     }
 
@@ -182,8 +303,10 @@ impl RemoteConnections {
             options.mode(0o600);
         }
         let result = (|| {
+            let mut clean = prefs.clone();
+            clean.base_url = None;
             let mut file = options.open(&temp)?;
-            file.write_all(&serde_json::to_vec(prefs)?)?;
+            file.write_all(&serde_json::to_vec(&clean)?)?;
             file.sync_all()?;
             fs::rename(&temp, &self.path)?;
             Ok::<_, anyhow::Error>(())
@@ -206,12 +329,18 @@ impl RemoteConnections {
         Ok(ChangeGuard(self.state.clone()))
     }
 
-    fn require_current_remote(&self, revision: u64, base: &str) -> Result<(), String> {
+    fn require_current_remote(
+        &self,
+        revision: u64,
+        machine_id: &str,
+        base: &str,
+    ) -> Result<(), String> {
         let current = self.state.lock().expect("connection state");
+        let active = current.prefs.active_machine();
         if current.changing
             || current.prefs.revision != revision
             || current.prefs.target != MachineTarget::Remote
-            || current.prefs.base_url.as_deref() != Some(base)
+            || active.map(|m| (m.id.as_str(), m.base_url.as_str())) != Some((machine_id, base))
         {
             return Err(safe_error("连接已变化，操作已取消"));
         }
@@ -291,21 +420,81 @@ impl RemoteConnections {
         Ok(value)
     }
 
+    async fn verify_endpoint(
+        &self,
+        base: &str,
+        api_key: &str,
+    ) -> Result<SystemCapabilitiesResponse, String> {
+        validate_api_key_format(api_key)?;
+        let value = self
+            .call(base, api_key, "system.capabilities", &json!({}))
+            .await?;
+        compatible_capabilities(value)
+    }
+
     async fn verify(
         &self,
         request: &RemoteConnectionCredentials,
     ) -> Result<SystemCapabilitiesResponse, String> {
         let base = normalized_base_url(&request.base_url)?;
-        if request.api_key.len() != 68
-            || !request.api_key.starts_with("nhk_")
-            || !request.api_key[4..].bytes().all(|c| c.is_ascii_hexdigit())
-        {
-            return Err(safe_error("API Key 格式无效"));
+        self.verify_endpoint(&base, &request.api_key).await
+    }
+
+    fn resolve_target_machine_for_save(
+        &self,
+        requested_id: Option<&str>,
+        normalized_base: &str,
+    ) -> Result<(String, Option<RemoteMachineSummary>), String> {
+        let state = self.state.lock().expect("connection state");
+        if let Some(id) = requested_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let existing = state
+                .prefs
+                .machines
+                .iter()
+                .find(|m| m.id == id)
+                .cloned()
+                .ok_or_else(|| safe_error("未找到要编辑的远程机器"))?;
+            return Ok((existing.id.clone(), Some(existing)));
         }
-        let value = self
-            .call(&base, &request.api_key, "system.capabilities", &json!({}))
-            .await?;
-        compatible_capabilities(value)
+        if let Some(existing) = state
+            .prefs
+            .machines
+            .iter()
+            .find(|m| m.base_url == normalized_base)
+            .cloned()
+        {
+            return Ok((existing.id.clone(), Some(existing)));
+        }
+        Ok((next_machine_id(&state.prefs.machines), None))
+    }
+
+    fn apply_saved_profile_in_prefs(
+        &self,
+        machine_id: String,
+        name: String,
+        base: String,
+    ) -> Result<RemoteConnectionView, String> {
+        let mut state = self.state.lock().expect("connection state");
+        let mut next = state.prefs.clone();
+        if let Some(existing) = next.machines.iter_mut().find(|m| m.id == machine_id) {
+            existing.name = name;
+            existing.base_url = base;
+        } else {
+            next.machines.push(RemoteMachineSummary {
+                id: machine_id.clone(),
+                name,
+                base_url: base,
+            });
+        }
+        next.active_machine_id = Some(machine_id);
+        next.target = MachineTarget::Remote;
+        next.base_url = None;
+        next.revision = next.revision.wrapping_add(1);
+        self.persist(&next)?;
+        state.prefs = next;
+        state.verified_revision = Some(state.prefs.revision);
+        drop(state);
+        Ok(self.view())
     }
 
     // Both methods run as one serialized blocking transaction. Their caller's
@@ -313,67 +502,180 @@ impl RemoteConnections {
     // frontend stops awaiting the command.
     fn save_connection(
         &self,
-        request: RemoteConnectionCredentials,
+        machine_id: String,
+        name: String,
         base: String,
+        previous_base: Option<String>,
+        new_api_key: Option<String>,
     ) -> Result<RemoteConnectionView, String> {
-        let mut next = self.state.lock().expect("connection state").prefs.clone();
-        let entry = credential(&base)?;
+        let entry = machine_credential(&machine_id)?;
         let old_key = read_credential(&entry)?;
-        let previous_entry = next
-            .base_url
+        let legacy_entry = previous_base
             .as_deref()
-            .filter(|previous| *previous != base)
-            .map(credential)
+            .map(legacy_credential)
             .transpose()?;
-        let previous_key = previous_entry
+        let old_legacy_key = legacy_entry
             .as_ref()
             .map(read_credential)
             .transpose()?
             .flatten();
-        entry
-            .set_password(&request.api_key)
-            .map_err(|_| safe_error("无法保存 API Key 到钥匙串"))?;
-        if let Some(previous) = &previous_entry {
-            if let Err(error) = restore_credential(previous, None) {
-                restore_credential(&entry, old_key.as_deref())?;
-                return Err(error);
+
+        if let Some(api_key) = &new_api_key {
+            entry
+                .set_password(api_key)
+                .map_err(|_| safe_error("无法保存 API Key 到钥匙串"))?;
+            if let Some(legacy) = &legacy_entry {
+                let _ = restore_credential(legacy, None);
+            }
+        } else if old_key.is_none() {
+            if let Some(migrated) = old_legacy_key.as_deref() {
+                entry
+                    .set_password(migrated)
+                    .map_err(|_| safe_error("无法保存 API Key 到钥匙串"))?;
+                if let Some(legacy) = &legacy_entry {
+                    let _ = restore_credential(legacy, None);
+                }
+            } else {
+                return Err(safe_error("未找到已有 API Key，请重新填写"));
             }
         }
-        next.base_url = Some(base);
-        next.revision = next.revision.wrapping_add(1);
-        if let Err(error) = self.persist(&next) {
-            let restore_new = restore_credential(&entry, old_key.as_deref());
-            let restore_previous = previous_entry
-                .as_ref()
-                .map(|previous| restore_credential(previous, previous_key.as_deref()))
-                .transpose();
-            restore_new?;
-            restore_previous?;
-            return Err(error);
+
+        match self.apply_saved_profile_in_prefs(machine_id, name, base) {
+            Ok(view) => Ok(view),
+            Err(error) => {
+                restore_credential(&entry, old_key.as_deref())?;
+                if let Some(legacy) = &legacy_entry {
+                    restore_credential(legacy, old_legacy_key.as_deref())?;
+                }
+                Err(error)
+            }
         }
-        self.state.lock().expect("connection state").prefs = next;
+    }
+
+    fn select_machine(
+        &self,
+        target: MachineTarget,
+        requested_machine_id: Option<&str>,
+    ) -> Result<RemoteConnectionView, String> {
+        let mut next = self.state.lock().expect("connection state").prefs.clone();
+        match target {
+            MachineTarget::Local => {
+                next.target = MachineTarget::Local;
+            }
+            MachineTarget::Remote => {
+                if next.machines.is_empty() {
+                    return Err(safe_error("请先设置远程连接"));
+                }
+                if let Some(id) = requested_machine_id
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    if !next.machines.iter().any(|m| m.id == id) {
+                        return Err(safe_error("未找到指定的远程机器"));
+                    }
+                    next.active_machine_id = Some(id.to_string());
+                } else if next.active_machine_id.is_none() {
+                    next.active_machine_id = next.machines.first().map(|m| m.id.clone());
+                }
+                next.target = MachineTarget::Remote;
+            }
+        }
+        next.revision = next.revision.wrapping_add(1);
+        self.persist(&next)?;
+        let mut state = self.state.lock().expect("connection state");
+        state.prefs = next;
+        state.verified_revision = None;
+        drop(state);
         Ok(self.view())
     }
 
-    fn remove_connection(&self) -> Result<RemoteConnectionView, String> {
-        let previous = self.state.lock().expect("connection state").prefs.clone();
-        let entry = previous.base_url.as_deref().map(credential).transpose()?;
-        let old_key = entry.as_ref().map(read_credential).transpose()?.flatten();
-        if let Some(entry) = &entry {
-            restore_credential(entry, None)?;
+    fn remove_machine_from_prefs(&self, removed_id: &str) -> Result<RemoteConnectionView, String> {
+        let mut state = self.state.lock().expect("connection state");
+        let mut next = state.prefs.clone();
+        let was_active = next.active_machine().map(|m| m.id.as_str()) == Some(removed_id);
+        let before = next.machines.len();
+        next.machines.retain(|m| m.id != removed_id);
+        if next.machines.len() == before {
+            return Err(safe_error("未找到指定的远程机器"));
         }
-        let next = Preferences {
-            revision: previous.revision.wrapping_add(1),
-            ..Default::default()
-        };
-        if let Err(error) = self.persist(&next) {
-            if let (Some(entry), Some(key)) = (entry, old_key) {
-                restore_credential(&entry, Some(&key))?;
-            }
-            return Err(error);
+        if next.machines.is_empty() {
+            next.active_machine_id = None;
+            next.target = MachineTarget::Local;
+        } else if was_active {
+            next.active_machine_id = next.machines.first().map(|m| m.id.clone());
+            next.target = MachineTarget::Local;
         }
-        self.state.lock().expect("connection state").prefs = next;
+        next.base_url = None;
+        next.revision = next.revision.wrapping_add(1);
+        self.persist(&next)?;
+        state.prefs = next;
+        if was_active {
+            state.verified_revision = None;
+        }
+        drop(state);
         Ok(self.view())
+    }
+
+    fn remove_connection(
+        &self,
+        requested_id: Option<&str>,
+    ) -> Result<RemoteConnectionView, String> {
+        let target_machine = {
+            let state = self.state.lock().expect("connection state");
+            match requested_id.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(id) => state.prefs.machines.iter().find(|m| m.id == id).cloned(),
+                None => state.prefs.active_machine().cloned(),
+            }
+        };
+        let Some(machine) = target_machine else {
+            let mut state = self.state.lock().expect("connection state");
+            let mut next = state.prefs.clone();
+            next.target = MachineTarget::Local;
+            next.active_machine_id = None;
+            next.machines.clear();
+            next.base_url = None;
+            next.revision = next.revision.wrapping_add(1);
+            self.persist(&next)?;
+            state.prefs = next;
+            state.verified_revision = None;
+            drop(state);
+            return Ok(self.view());
+        };
+
+        let entry = machine_credential(&machine.id)?;
+        let old_key = read_credential(&entry)?;
+        let legacy_entry = legacy_credential(&machine.base_url)?;
+        let old_legacy = read_credential(&legacy_entry)?;
+        restore_credential(&entry, None)?;
+        restore_credential(&legacy_entry, None)?;
+
+        match self.remove_machine_from_prefs(&machine.id) {
+            Ok(view) => Ok(view),
+            Err(error) => {
+                if let Some(key) = old_key {
+                    restore_credential(&entry, Some(&key))?;
+                }
+                if let Some(legacy_key) = old_legacy {
+                    restore_credential(&legacy_entry, Some(&legacy_key))?;
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+fn next_machine_id(existing: &[RemoteMachineSummary]) -> String {
+    static NEXT_MACHINE_SEQ: AtomicU64 = AtomicU64::new(1);
+    loop {
+        let seq = NEXT_MACHINE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        let candidate = format!("m-{ts:x}-{seq:x}");
+        if !existing.iter().any(|m| m.id == candidate) {
+            return candidate;
+        }
     }
 }
 
@@ -429,14 +731,41 @@ pub async fn remoteSave(
     request: RemoteConnectionCredentials,
 ) -> Result<RemoteConnectionView, String> {
     let guard = state.begin_change(request.revision)?;
-    state.verify(&request).await?;
     let base = normalized_base_url(&request.base_url)?;
+    let name = normalized_machine_name(request.name.as_deref(), &base)?;
+    let (machine_id, existing) =
+        state.resolve_target_machine_for_save(request.id.as_deref(), &base)?;
+    let trimmed_key = request.api_key.trim().to_string();
+
+    let new_api_key = if !trimmed_key.is_empty() {
+        state.verify_endpoint(&base, &trimmed_key).await?;
+        Some(trimmed_key)
+    } else if let Some(prev) = &existing {
+        let lookup_id = prev.id.clone();
+        let lookup_base = prev.base_url.clone();
+        let stored_key = state
+            .credentials
+            .read(CREDENTIAL_WAIT, move || {
+                read_or_migrate_machine_credential(&lookup_id, &lookup_base)?
+                    .ok_or_else(|| safe_error("未找到已有 API Key，请重新填写"))
+            })
+            .await
+            .map_err(credential_access_error)??;
+        if prev.base_url != base {
+            state.verify_endpoint(&base, &stored_key).await?;
+        }
+        None
+    } else {
+        return Err(safe_error("API Key 格式无效"));
+    };
+
+    let previous_base = existing.map(|m| m.base_url);
     let credentials = state.credentials.clone();
     let connection = state.inner().clone();
     credentials
         .transaction(CREDENTIAL_WAIT, move || {
             let _guard = guard;
-            connection.save_connection(request, base)
+            connection.save_connection(machine_id, name, base, previous_base, new_api_key)
         })
         .await
         .map_err(credential_access_error)?
@@ -448,12 +777,13 @@ pub async fn remoteRemove(
     request: RemoteRevisionRequest,
 ) -> Result<RemoteConnectionView, String> {
     let guard = state.begin_change(request.revision)?;
+    let requested_id = request.machine_id;
     let credentials = state.credentials.clone();
     let connection = state.inner().clone();
     credentials
         .transaction(CREDENTIAL_WAIT, move || {
             let _guard = guard;
-            connection.remove_connection()
+            connection.remove_connection(requested_id.as_deref())
         })
         .await
         .map_err(credential_access_error)?
@@ -465,15 +795,7 @@ pub fn remoteSelect(
     request: RemoteSelectionRequest,
 ) -> Result<RemoteConnectionView, String> {
     let _guard = state.begin_change(request.revision)?;
-    let mut next = state.state.lock().expect("connection state").prefs.clone();
-    if request.target == MachineTarget::Remote && next.base_url.is_none() {
-        return Err(safe_error("请先设置远程连接"));
-    }
-    next.target = request.target;
-    next.revision = next.revision.wrapping_add(1);
-    state.persist(&next)?;
-    state.state.lock().expect("connection state").prefs = next;
-    Ok(state.view())
+    state.select_machine(request.target, request.machine_id.as_deref())
 }
 
 #[tauri::command(rename = "remote.invoke")]
@@ -485,7 +807,7 @@ pub async fn remoteInvoke(
         return Err(safe_error("不支持的远程操作"));
     }
     let write = is_mutating_rpc_command(&request.command);
-    let base = {
+    let (machine_id, base) = {
         let mut current = state.state.lock().expect("connection state");
         if current.changing
             || current.prefs.revision != request.revision
@@ -493,28 +815,28 @@ pub async fn remoteInvoke(
         {
             return Err(safe_error("连接已变化，操作已取消"));
         }
-        let base = current
+        let active = current
             .prefs
-            .base_url
-            .clone()
+            .active_machine()
+            .cloned()
             .ok_or_else(|| safe_error("请先设置远程连接"))?;
         if write {
             current.writes += 1;
         }
-        base
+        (active.id, active.base_url)
     };
     let _guard = WriteGuard(&state, write);
+    let credential_id = machine_id.clone();
     let credential_base = base.clone();
     let key = state
         .credentials
         .read(CREDENTIAL_WAIT, move || {
-            credential(&credential_base)?
-                .get_password()
-                .map_err(|_| safe_error("无法读取 API Key，请重新保存远程连接"))
+            read_or_migrate_machine_credential(&credential_id, &credential_base)?
+                .ok_or_else(|| safe_error("无法读取 API Key，请重新保存远程连接"))
         })
         .await
         .map_err(credential_access_error)??;
-    state.require_current_remote(request.revision, &base)?;
+    state.require_current_remote(request.revision, &machine_id, &base)?;
     let needs_validation = state
         .state
         .lock()
@@ -528,7 +850,7 @@ pub async fn remoteInvoke(
                 .await?,
         )?;
     }
-    state.require_current_remote(request.revision, &base)?;
+    state.require_current_remote(request.revision, &machine_id, &base)?;
     let value = state
         .call(&base, &key, &request.command, &request.args)
         .await?;
@@ -536,7 +858,12 @@ pub async fn remoteInvoke(
         compatible_capabilities(value.clone())?;
     }
     let mut current = state.state.lock().expect("connection state");
-    if current.changing || current.prefs.revision != request.revision {
+    let active = current.prefs.active_machine();
+    if current.changing
+        || current.prefs.revision != request.revision
+        || active.map(|m| (m.id.as_str(), m.base_url.as_str()))
+            != Some((machine_id.as_str(), base.as_str()))
+    {
         return Err(safe_error("连接已变化，已丢弃旧响应"));
     }
     if needs_validation {
@@ -663,38 +990,119 @@ mod tests {
     }
 
     #[test]
-    fn connection_preferences_preserve_target_without_storing_credentials() {
+    fn connection_preferences_migrate_legacy_json_and_manage_multiple_named_machines() {
         let dir = tempfile::tempdir().unwrap();
-        let state = RemoteConnections::load(dir.path()).unwrap();
-        assert_eq!(state.view().target, MachineTarget::Local);
-        state
-            .persist(&Preferences {
-                target: MachineTarget::Remote,
-                base_url: Some("https://api.example.com/nexus/".into()),
-                revision: 8,
-            })
-            .unwrap();
+        let legacy_path = dir.path().join("remote-connection.json");
+        fs::write(
+            &legacy_path,
+            serde_json::to_vec(&json!({
+                "target": "remote",
+                "baseUrl": "https://api.example.com/nexus",
+                "revision": 8
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
         let loaded = RemoteConnections::load(dir.path()).unwrap();
-        assert_eq!(loaded.view().target, MachineTarget::Remote);
-        assert_eq!(loaded.view().revision, 8);
-        let saved: Value = serde_json::from_slice(&fs::read(&state.path).unwrap()).unwrap();
-        assert_eq!(saved.as_object().unwrap().len(), 3);
+        let view = loaded.view();
+        assert_eq!(view.target, MachineTarget::Remote);
+        assert_eq!(view.revision, 8);
+        assert!(view.configured);
+        assert_eq!(
+            view.base_url.as_deref(),
+            Some("https://api.example.com/nexus/")
+        );
+        assert_eq!(view.active_machine_id.as_deref(), Some(LEGACY_MACHINE_ID));
+        assert_eq!(view.active_machine_name.as_deref(), Some("api.example.com"));
+        assert_eq!(view.machines.len(), 1);
+
+        // Add a second named machine and rename the first without touching Keychain.
+        let view_b = loaded
+            .apply_saved_profile_in_prefs(
+                "m-second".to_string(),
+                "构建节点 B".to_string(),
+                "https://build-b.example.com/nexushub/".to_string(),
+            )
+            .unwrap();
+        assert_eq!(view_b.machines.len(), 2);
+        assert_eq!(view_b.active_machine_id.as_deref(), Some("m-second"));
+        assert_eq!(view_b.active_machine_name.as_deref(), Some("构建节点 B"));
+        assert_eq!(
+            view_b.base_url.as_deref(),
+            Some("https://build-b.example.com/nexushub/")
+        );
+
+        let view_renamed = loaded
+            .apply_saved_profile_in_prefs(
+                LEGACY_MACHINE_ID.to_string(),
+                "主力节点 A".to_string(),
+                "https://api.example.com/nexus/".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            view_renamed.active_machine_id.as_deref(),
+            Some(LEGACY_MACHINE_ID)
+        );
+        assert_eq!(
+            view_renamed.active_machine_name.as_deref(),
+            Some("主力节点 A")
+        );
+
+        // Switch between named machines and reject unknown IDs.
+        assert!(loaded
+            .select_machine(MachineTarget::Remote, Some("m-nonexistent"))
+            .is_err());
+        let switched = loaded
+            .select_machine(MachineTarget::Remote, Some("m-second"))
+            .unwrap();
+        assert_eq!(switched.active_machine_id.as_deref(), Some("m-second"));
+        assert_eq!(
+            switched.base_url.as_deref(),
+            Some("https://build-b.example.com/nexushub/")
+        );
+
+        // Removing the active machine safely falls back to Local while keeping remaining machines.
+        let after_remove = loaded.remove_machine_from_prefs("m-second").unwrap();
+        assert_eq!(after_remove.target, MachineTarget::Local);
+        assert_eq!(after_remove.machines.len(), 1);
+        assert_eq!(
+            after_remove.active_machine_id.as_deref(),
+            Some(LEGACY_MACHINE_ID)
+        );
+
+        let saved_raw = fs::read_to_string(&loaded.path).unwrap();
+        assert!(!saved_raw.contains("apiKey"));
+        assert!(!saved_raw.contains("nhk_"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(&state.path).unwrap().permissions().mode() & 0o777,
+                fs::metadata(&loaded.path).unwrap().permissions().mode() & 0o777,
                 0o600
             );
         }
         let invalid = json!({ "api_version": API_VERSION + 1, "host_surface": "linux_server_api", "capabilities": {} });
         assert!(compatible_capabilities(invalid).is_err());
     }
+
     #[test]
-    fn connection_addresses_require_https_without_credentials_or_navigation_targets() {
+    fn connection_addresses_and_names_validate_cleanly() {
         assert_eq!(
             normalized_base_url("https://api.example.com/nexus").unwrap(),
             "https://api.example.com/nexus/"
+        );
+        assert_eq!(
+            normalized_machine_name(None, "https://api.example.com:8443/nexus/").unwrap(),
+            "api.example.com:8443"
+        );
+        assert_eq!(
+            normalized_machine_name(Some("  远程构建机  "), "https://api.example.com/").unwrap(),
+            "远程构建机"
+        );
+        assert!(normalized_machine_name(Some("bad\nname"), "https://api.example.com/").is_err());
+        assert!(
+            normalized_machine_name(Some(&"x".repeat(65)), "https://api.example.com/").is_err()
         );
         for invalid in [
             "http://api.example.com",
@@ -706,6 +1114,7 @@ mod tests {
             assert!(normalized_base_url(invalid).is_err());
         }
     }
+
     #[test]
     fn target_changes_reject_stale_revisions_and_pending_writes() {
         let dir = tempfile::tempdir().unwrap();

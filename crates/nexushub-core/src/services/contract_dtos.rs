@@ -49,6 +49,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "SessionStorageSize",
     "PlanSaveRequest",
     "PlanSaveResult",
+    "RemoteMachineSummary",
     "RemoteConnectionView",
     "RemoteConnectionCredentials",
     "RemoteRevisionRequest",

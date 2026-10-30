@@ -173,4 +173,73 @@ describe("native machine connection", () => {
     await expect(runtimeRpc("threads.list")).rejects.toThrow("请使用 NexusHub App");
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  test("switches across multiple named remote machines and isolates machineScope per machineId", async () => {
+    const machines = [
+      { id: "m-alpha", name: "主力节点", baseUrl: "https://alpha.example.com/nexushub/" },
+      { id: "m-beta", name: "构建节点", baseUrl: "https://beta.example.com/nexushub/" },
+    ];
+    let currentView: RemoteConnectionView = {
+      target: "remote",
+      revision: 1,
+      baseUrl: machines[0].baseUrl,
+      configured: true,
+      activeMachineId: "m-alpha",
+      activeMachineName: "主力节点",
+      machines,
+    };
+    const runtime = await loadRuntime((command, args) => {
+      if (command === "remote.get") return currentView;
+      if (command === "remote.select") {
+        const req = (args as { request: { target: "local" | "remote"; machineId?: string; revision: number } }).request;
+        const picked = machines.find(m => m.id === req.machineId) ?? machines[0];
+        currentView = {
+          ...currentView,
+          target: req.target,
+          revision: req.revision + 1,
+          baseUrl: picked.baseUrl,
+          activeMachineId: picked.id,
+          activeMachineName: picked.name,
+        };
+        return currentView;
+      }
+      if (command === "remote.remove") {
+        const req = (args as { request: { machineId?: string; revision: number } }).request;
+        const remaining = machines.filter(m => m.id !== req.machineId);
+        currentView = {
+          target: "local",
+          revision: req.revision + 1,
+          baseUrl: remaining[0]?.baseUrl ?? null,
+          configured: remaining.length > 0,
+          activeMachineId: remaining[0]?.id ?? null,
+          activeMachineName: remaining[0]?.name ?? null,
+          machines: remaining,
+        };
+        return currentView;
+      }
+      return { command, args };
+    });
+
+    await runtime.initializeConnection();
+    expect(runtime.machineScope()).toBe("remote:m-alpha:https://alpha.example.com/nexushub/");
+
+    // Selecting the already-active machineId is a no-op.
+    await runtime.remoteSelect("remote", "m-alpha");
+    expect(runtime.invoke).toHaveBeenCalledTimes(1);
+
+    // Switching to another named remote machine updates activeMachineId and machineScope.
+    await runtime.remoteSelect("remote", "m-beta");
+    expect(runtime.invoke).toHaveBeenLastCalledWith("remote.select", {
+      request: { revision: 1, target: "remote", machineId: "m-beta" },
+    });
+    expect(runtime.machineScope()).toBe("remote:m-beta:https://beta.example.com/nexushub/");
+
+    // Removing a specific machine passes machineId and resets to local when active was removed.
+    await runtime.remoteRemove("m-beta");
+    expect(runtime.invoke).toHaveBeenLastCalledWith("remote.remove", {
+      request: { revision: 2, machineId: "m-beta" },
+    });
+    expect(runtime.machineScope()).toBe("local:");
+    expect(runtime.connectionSnapshot().machines).toHaveLength(1);
+  });
 });

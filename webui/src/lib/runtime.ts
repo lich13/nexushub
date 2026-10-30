@@ -1,11 +1,26 @@
 import { useSyncExternalStore } from "react";
 
 export type MachineTarget = "local" | "remote";
-export type RemoteConnectionView = { target: MachineTarget; revision: number; baseUrl: string | null; configured: boolean };
-export type RemoteConnectionCredentials = { revision: number; baseUrl: string; apiKey: string };
-export type RemoteRevisionRequest = { revision: number };
+export type RemoteMachineSummary = { id: string; name: string; baseUrl: string };
+export type RemoteConnectionView = {
+  target: MachineTarget;
+  revision: number;
+  baseUrl: string | null;
+  configured: boolean;
+  activeMachineId?: string | null;
+  activeMachineName?: string | null;
+  machines?: RemoteMachineSummary[];
+};
+export type RemoteConnectionCredentials = {
+  revision: number;
+  baseUrl: string;
+  apiKey?: string;
+  id?: string;
+  name?: string;
+};
+export type RemoteRevisionRequest = { revision: number; machineId?: string };
 export type RemoteSelectionRequest = RemoteRevisionRequest & { target: MachineTarget };
-export type RemoteInvokeRequest = RemoteRevisionRequest & { command: string; args: Record<string, unknown> };
+export type RemoteInvokeRequest = { revision: number; command: string; args: Record<string, unknown> };
 export type RemoteInvokeResponse = unknown;
 export type RuntimeContext = { kind: "desktop" };
 type RpcArgs = Record<string, unknown> | undefined;
@@ -61,15 +76,44 @@ export function beforeMachineChange(cleanup: () => Promise<void>): () => void {
   readCleanups.add(cleanup);
   return () => { readCleanups.delete(cleanup); };
 }
-let connection = { target: "local" as MachineTarget, revision: 0, baseUrl: null as string | null, configured: false, ready: false, writes: 0, changing: false, error: "", notice: "" };
+let connection = {
+  target: "local" as MachineTarget,
+  revision: 0,
+  baseUrl: null as string | null,
+  configured: false,
+  activeMachineId: null as string | null,
+  activeMachineName: null as string | null,
+  machines: [] as RemoteMachineSummary[],
+  ready: false,
+  writes: 0,
+  changing: false,
+  error: "",
+  notice: ""
+};
+function normalizeIncomingView(view: RemoteConnectionView) {
+  return {
+    target: view.target,
+    revision: view.revision,
+    baseUrl: view.baseUrl ?? null,
+    configured: view.configured,
+    activeMachineId: view.activeMachineId ?? null,
+    activeMachineName: view.activeMachineName ?? null,
+    machines: view.machines ?? [],
+  };
+}
 function publish(patch: Partial<typeof connection>) { connection = { ...connection, ...patch }; listeners.forEach(listener => listener()); }
 export function connectionSnapshot() { return connection; }
-export function machineScope() { return `${connection.target}:${connection.target === "remote" ? connection.baseUrl : ""}`; }
+export function machineScope() {
+  if (connection.target !== "remote") return "local:";
+  return connection.activeMachineId
+    ? `remote:${connection.activeMachineId}:${connection.baseUrl ?? ""}`
+    : `remote:${connection.baseUrl ?? ""}`;
+}
 export function useConnection() { return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, connectionSnapshot, connectionSnapshot); }
 let initialization: Promise<void> | undefined;
 export function initializeConnection() {
   return initialization ??= (async () => {
-    try { publish({ ...await remoteGet(), ready: true, error: "" }); }
+    try { publish({ ...normalizeIncomingView(await remoteGet()), ready: true, error: "" }); }
     catch (error) { publish({ ready: true, error: (error as Error).message }); }
   })();
 }
@@ -88,7 +132,13 @@ async function changeConnection<T>(command: string, request: unknown): Promise<T
   publish({ changing: true });
   try {
     const result = await invokeNative<T>(command, { request });
-    if (command !== "remote.verify") publish({ ...result as RemoteConnectionView, error: "", notice: command === "remote.save" ? "已保存" : "" });
+    if (command !== "remote.verify") {
+      publish({
+        ...normalizeIncomingView(result as RemoteConnectionView),
+        error: "",
+        notice: command === "remote.save" ? "已保存" : ""
+      });
+    }
     return result;
   }
   finally { publish({ changing: false }); }
@@ -100,13 +150,26 @@ export async function remoteSave(request: RemoteConnectionCredentials) {
   const view = await changeConnection<RemoteConnectionView>("remote.save", request);
   return view;
 }
-export async function remoteRemove() {
-  const view = await changeConnection<RemoteConnectionView>("remote.remove", { revision: connection.revision });
+export async function remoteRemove(machineId?: string) {
+  const payload: RemoteRevisionRequest = machineId
+    ? { revision: connection.revision, machineId }
+    : { revision: connection.revision };
+  const view = await changeConnection<RemoteConnectionView>("remote.remove", payload);
   return view;
 }
-export async function remoteSelect(target: MachineTarget) {
-  if (target === connection.target) return connection;
-  const view = await changeConnection<RemoteConnectionView>("remote.select", { revision: connection.revision, target });
+export async function remoteSelect(target: MachineTarget, machineId?: string) {
+  if (target === "local" && connection.target === "local") return connection;
+  if (
+    target === "remote" &&
+    connection.target === "remote" &&
+    (!machineId || connection.activeMachineId === machineId)
+  ) {
+    return connection;
+  }
+  const payload: RemoteSelectionRequest = machineId
+    ? { revision: connection.revision, target, machineId }
+    : { revision: connection.revision, target };
+  const view = await changeConnection<RemoteConnectionView>("remote.select", payload);
   return view;
 }
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }

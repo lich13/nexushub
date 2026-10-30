@@ -49,6 +49,7 @@ export const contractDtoNames = [
   "SessionStorageSize",
   "PlanSaveRequest",
   "PlanSaveResult",
+  "RemoteMachineSummary",
   "RemoteConnectionView",
   "RemoteConnectionCredentials",
   "RemoteRevisionRequest",

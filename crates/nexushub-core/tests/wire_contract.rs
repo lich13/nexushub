@@ -203,6 +203,9 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
         revision: 7,
         base_url: None,
         configured: false,
+        active_machine_id: None,
+        active_machine_name: None,
+        machines: Vec::new(),
     };
     assert_eq!(
         serde_json::to_value(connection).unwrap(),

@@ -364,6 +364,10 @@
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "ts": "webui/src/lib/runtime.ts#RemoteInvokeResponse"
     },
+    "RemoteMachineSummary": {
+      "rust": "crates/nexushub-core/src/services/remote.rs#RemoteMachineSummary",
+      "ts": "webui/src/lib/runtime.ts#RemoteMachineSummary"
+    },
     "RemoteRevisionRequest": {
       "rust": "crates/nexushub-core/src/services/remote.rs#RemoteRevisionRequest",
       "ts": "webui/src/lib/runtime.ts#RemoteRevisionRequest"
@@ -7877,8 +7881,24 @@
           },
           {
             "name": "api_key",
-            "serde": [],
+            "serde": [
+              "serde (default)"
+            ],
             "type": "String"
+          },
+          {
+            "name": "id",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "name",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
@@ -7907,6 +7927,27 @@
             "name": "configured",
             "serde": [],
             "type": "bool"
+          },
+          {
+            "name": "active_machine_id",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "active_machine_name",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "machines",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < RemoteMachineSummary >"
           }
         ],
         "kind": "struct",
@@ -7937,17 +7978,47 @@
           "serde (deny_unknown_fields)"
         ]
       },
+      "RemoteMachineSummary": {
+        "fields": [
+          {
+            "name": "id",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "base_url",
+            "serde": [],
+            "type": "String"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
       "RemoteRevisionRequest": {
         "fields": [
           {
             "name": "revision",
             "serde": [],
             "type": "u64"
+          },
+          {
+            "name": "machine_id",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
         "serde": [
-          "serde (deny_unknown_fields)"
+          "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
         ]
       },
       "RemoteSelectionRequest": {
@@ -7961,11 +8032,18 @@
             "name": "target",
             "serde": [],
             "type": "MachineTarget"
+          },
+          {
+            "name": "machine_id",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
         "serde": [
-          "serde (deny_unknown_fields)"
+          "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
         ]
       }
     },
@@ -10636,8 +10714,24 @@
             "type": "MachineTarget"
           },
           {
+            "name": "active_machine_id",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
+            "name": "machines",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < RemoteMachineSummary >"
+          },
+          {
             "name": "base_url",
-            "serde": [],
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
             "type": "Option < String >"
           },
           {
@@ -11731,9 +11825,16 @@
         "fn safe_error (message : & 'static str) -> String",
         "fn credential_access_error (error : CredentialAccessError) -> String",
         "fn normalized_base_url (raw : & str) -> Result < String , String >",
-        "fn credential (base_url : & str) -> Result < keyring :: Entry , String >",
+        "fn default_machine_name (normalized_base : & str) -> String",
+        "fn normalized_machine_name (raw : Option < & str > , normalized_base : & str) -> Result < String , String >",
+        "fn validate_api_key_format (api_key : & str) -> Result < () , String >",
+        "fn machine_credential_account (machine_id : & str) -> String",
+        "fn machine_credential (machine_id : & str) -> Result < keyring :: Entry , String >",
+        "fn legacy_credential (base_url : & str) -> Result < keyring :: Entry , String >",
         "fn read_credential (entry : & keyring :: Entry) -> Result < Option < String > , String >",
         "fn restore_credential (entry : & keyring :: Entry , value : Option < & str >) -> Result < () , String >",
+        "fn read_or_migrate_machine_credential (machine_id : & str , base_url : & str ,) -> Result < Option < String > , String >",
+        "fn next_machine_id (existing : & [RemoteMachineSummary]) -> String",
         "fn compatible_capabilities (value : Value) -> Result < SystemCapabilitiesResponse , String >",
         "fn remoteGet (state : tauri :: State < '_ , RemoteConnections >) -> RemoteConnectionView",
         "async fn remoteVerify (state : tauri :: State < '_ , RemoteConnections > , request : RemoteConnectionCredentials ,) -> Result < SystemCapabilitiesResponse , String >",
@@ -12047,11 +12148,12 @@
     "webui/src/lib/runtime.ts": {
       "types": {
         "MachineTarget": "exporttypeMachineTarget=\"local\"|\"remote\";",
-        "RemoteConnectionView": "exporttypeRemoteConnectionView={target:MachineTarget;revision:number;baseUrl:string|null;configured:boolean};",
-        "RemoteConnectionCredentials": "exporttypeRemoteConnectionCredentials={revision:number;baseUrl:string;apiKey:string};",
-        "RemoteRevisionRequest": "exporttypeRemoteRevisionRequest={revision:number};",
+        "RemoteMachineSummary": "exporttypeRemoteMachineSummary={id:string;name:string;baseUrl:string};",
+        "RemoteConnectionView": "exporttypeRemoteConnectionView={target:MachineTarget;revision:number;baseUrl:string|null;configured:boolean;activeMachineId?:string|null;activeMachineName?:string|null;machines?:RemoteMachineSummary[];};",
+        "RemoteConnectionCredentials": "exporttypeRemoteConnectionCredentials={revision:number;baseUrl:string;apiKey?:string;id?:string;name?:string;};",
+        "RemoteRevisionRequest": "exporttypeRemoteRevisionRequest={revision:number;machineId?:string};",
         "RemoteSelectionRequest": "exporttypeRemoteSelectionRequest=RemoteRevisionRequest&{target:MachineTarget};",
-        "RemoteInvokeRequest": "exporttypeRemoteInvokeRequest=RemoteRevisionRequest&{command:string;args:Record<string,unknown>};",
+        "RemoteInvokeRequest": "exporttypeRemoteInvokeRequest={revision:number;command:string;args:Record<string,unknown>};",
         "RemoteInvokeResponse": "exporttypeRemoteInvokeResponse=unknown;",
         "RuntimeContext": "exporttypeRuntimeContext={kind:\"desktop\"};",
         "RpcArgs": "typeRpcArgs=Record<string,unknown>|undefined;",
@@ -12062,8 +12164,8 @@
         "invokeNative<T>(command,{request})",
         "changeConnection<import(\"../types\").SystemCapabilitiesResponse>(\"remote.verify\",request)",
         "changeConnection<RemoteConnectionView>(\"remote.save\",request)",
-        "changeConnection<RemoteConnectionView>(\"remote.remove\",{revision:connection.revision})",
-        "changeConnection<RemoteConnectionView>(\"remote.select\",{revision:connection.revision,target})",
+        "changeConnection<RemoteConnectionView>(\"remote.remove\",payload)",
+        "changeConnection<RemoteConnectionView>(\"remote.select\",payload)",
         "invokeNative<T>(\"remote.invoke\",{request})",
         "invokeNative<T>(command,args)"
       ]

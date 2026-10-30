@@ -69,15 +69,52 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
       if (name === "remote.get") return { ...connection };
       if (name === "remote.verify") return demo.demoSystemCapabilities("linux-api");
       if (name === "remote.save") {
-        connection = { target: "remote", revision: connection.revision + 1, baseUrl: args.request.baseUrl, configured: true };
+        const existing = [...(connection.machines ?? [])];
+        const reqId = typeof args.request.id === "string" && args.request.id ? args.request.id : null;
+        const matched = (reqId ? existing.find(m => m.id === reqId) : existing.find(m => m.baseUrl === args.request.baseUrl)) ?? null;
+        const id = matched?.id ?? `m-${existing.length + 1}`;
+        let defaultHost = "远程机器";
+        try { defaultHost = new URL(args.request.baseUrl).host || defaultHost; } catch { /* ignore */ }
+        const machineName = typeof args.request.name === "string" && args.request.name.trim() ? args.request.name.trim() : (matched?.name ?? defaultHost);
+        const nextMachines = matched
+          ? existing.map(m => m.id === id ? { id, name: machineName, baseUrl: args.request.baseUrl } : m)
+          : [...existing, { id, name: machineName, baseUrl: args.request.baseUrl }];
+        connection = {
+          target: "remote",
+          revision: connection.revision + 1,
+          baseUrl: args.request.baseUrl,
+          configured: true,
+          activeMachineId: id,
+          activeMachineName: machineName,
+          machines: nextMachines,
+        };
         return { ...connection };
       }
       if (name === "remote.select") {
-        connection = { ...connection, target: args.request.target, revision: connection.revision + 1 };
+        const list = connection.machines ?? [];
+        const picked = args.request.machineId ? list.find(m => m.id === args.request.machineId) : (list.find(m => m.id === connection.activeMachineId) ?? list[0]);
+        connection = {
+          ...connection,
+          target: args.request.target,
+          revision: connection.revision + 1,
+          ...(picked ? { baseUrl: picked.baseUrl, activeMachineId: picked.id, activeMachineName: picked.name } : {}),
+        };
         return { ...connection };
       }
       if (name === "remote.remove") {
-        connection = { target: "local", revision: connection.revision + 1, baseUrl: null, configured: false };
+        const list = connection.machines ?? [];
+        const targetId = args.request.machineId ?? connection.activeMachineId ?? list[0]?.id;
+        const remaining = targetId ? list.filter(m => m.id !== targetId) : [];
+        const nextActive = remaining[0] ?? null;
+        connection = {
+          target: "local",
+          revision: connection.revision + 1,
+          baseUrl: nextActive?.baseUrl ?? null,
+          configured: remaining.length > 0,
+          activeMachineId: nextActive?.id ?? null,
+          activeMachineName: nextActive?.name ?? null,
+          machines: remaining,
+        };
         return { ...connection };
       }
       if (name === "remote.invoke") return dispatch(args.request.command, args.request.args, "remote");
