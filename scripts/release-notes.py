@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.7.0": [
+        "修复 Antigravity 线程中间提问 Bark 漏推与执行段原数据核验，整合覆盖五大 Agent 六大分类的「全平台线程清理」工作台并全面加固执行端删除边界。",
+        "全面换装五大 Agent 官方原生品牌图标与高对比原生配色，深度重写 macOS 原生质感界面，并精简服务端 SQLite／内存缓存／HTTP 压缩与前端轮询包体。",
+    ],
     "1.6.0": [
         "加固五类 Agent 交接文件路径，修复 Antigravity 闲置会话常亮运行态、超长会话在线／离线过程折叠、Bark 增量扫描与最终必达，以及 Claude Code 穿插元数据与错误结尾的过程折叠。",
         "整体前端深度重写为三层冷暖空气感表面与七大工作区专属宝石色调体系，并将标签发布流水线升级为自包含并行门禁以缩短发版耗时。",
@@ -223,6 +227,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.7.0":
+        sections = {
+            "版本概览": [
+                "修复 Antigravity 线程中间提问 Bark 漏推与执行段原数据核验，整合五大 Agent「全平台线程清理」并加固执行端删除边界，全面换装官方原生品牌图标配色与深度重写界面，同时精简服务端与前端资源占用；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "五大 Agent（Codex、Claude Code、Grok Build、Antigravity、DeepSeek Harness）全面切换为官方原生矢量品牌图标与浅／深色高对比官方品牌色盘（侧栏常驻品牌徽章、工作区标题徽章、空状态徽章与统一清理分类色带），并深度精修三层 macOS 原生表面层次、会话卡片、ChatGPT 风格折叠胶囊与用户气泡。",
+                "新增 `cleanup.unifiedDryRun` 与 `cleanup.unifiedExecute` 并整合为「全平台线程清理」工作台，一键覆盖五大 Agent 六大分类（Codex 已归档／隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／废弃会话、Grok 空／废弃会话），支持按分类勾选、流式扫描隐藏线程、100 条分页候选预览、二次确认及删除数／回收空间／跳过失败项分开报告，同时完整保留既有单平台清理 RPC 兼容。",
+                "系统与性能精简：服务端新增 SQLite 投递标记 90 天裁剪与空闲 WAL `TRUNCATE` 检查点、Codex 与 Antigravity 会话内存缓存有界淘汰、按修改时间失效的 Claude 列表轻量头部摘要缓存，以及 `/api/*` 自动 gzip 响应压缩；前端在窗口隐藏时暂停轮询并将演示桩模块改为按需动态加载。",
+            ],
+            "问题修复": [
+                "Antigravity Bark 通知补齐 `ask_question` 活跃与挂起提问识别，以及执行完毕但以直接提问收尾且尚未收到用户新消息时的 `needs_reply` 提醒；当前轮增量拉取改为读取原生 `executorMetadatas` 核验真实段尾步下标与终止原因，并对无日志后台命令核查子进程存活，消除两段之间短暂闲置或长时静默构建引发的提前误发。",
+                "加固 Claude Code 与 Grok 删除执行端防护：不信任调用方传入路径或预览列表，执行端重新枚举并校验真实会话根目录、逐项检查运行／占用状态，首错即停并报告已删与残留项；Claude 清理前先剔除 history 共享索引再删主文件与旁路。",
+                "修复 Claude 连续过程组合并时丢失被吸收组 `sourceIds` 导致的手动展开状态与搜索自动展开失效问题；清理 Grok 过时死锁文件时仅移除已确认失效的 `.lock` 并容忍并发 `NotFound` 竞态。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增可选能力字段 `unified_cleanup`；连接尚未升级的远端服务时自动按能力矩阵降级提示，既有单平台清理接口、本地数据库、Bark 配置、Keychain 远端连接与各 Agent 原生会话目录无需迁移。",
+                "服务端 `/api/*` gzip 压缩按客户端 `Accept-Encoding` 自动协商，不影响现有桌面端与脚本调用。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App；随后核验五大 Agent 官方品牌图标配色、「设置 → 更新与维护 → 全平台线程清理」扫描预览与确认流程、Claude 合并过程组展开保持，以及 Antigravity 线程中间提问 Bark 推送。",
+                "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.6.0":
         sections = {
