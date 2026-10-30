@@ -495,11 +495,56 @@ impl PanelDb {
     }
 
     pub fn claim_feedback_delivery(&self, key: &str) -> Result<bool> {
+        let now = Self::now();
+        let conn = self.conn.lock().expect("db mutex");
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES(?1,'delivering',?2)",
+            rusqlite::params![key, now],
+        )? == 1;
+        if !inserted {
+            let _ = conn.execute(
+                "UPDATE settings SET updated_at = ?2 WHERE key = ?1 AND updated_at <= ?3",
+                rusqlite::params![key, now, now - 86_400],
+            );
+        }
+        Ok(inserted)
+    }
+
+    pub fn touch_setting_if_older_than(&self, key: &str, min_age_seconds: i64) -> Result<bool> {
+        let now = Self::now();
+        let threshold = now - min_age_seconds.max(1);
         let conn = self.conn.lock().expect("db mutex");
         Ok(conn.execute(
-            "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES(?1,'delivering',?2)",
-            rusqlite::params![key, Self::now()],
-        )? == 1)
+            "UPDATE settings SET updated_at = ?2 WHERE key = ?1 AND updated_at <= ?3",
+            rusqlite::params![key, now, threshold],
+        )? > 0)
+    }
+
+    pub fn retain_active_unresolved_markers(
+        &self,
+        namespace: &str,
+        marker_keys: &[String],
+    ) -> Result<()> {
+        let mut sorted: Vec<&str> = marker_keys
+            .iter()
+            .map(String::as_str)
+            .filter(|k| {
+                k.starts_with("probe_feedback_delivery:")
+                    || k.starts_with("probe_passive_sent_marker:")
+                    || k.starts_with("probe_async_question_delivery:")
+            })
+            .collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let setting_key = format!("probe_active_unresolved_markers:{namespace}");
+        let encoded = serde_json::to_string(&sorted)?;
+        let now = Self::now();
+        if let Some((prev_val, prev_at)) = self.get_setting_with_updated_at(&setting_key)? {
+            if prev_val == encoded && now.saturating_sub(prev_at) < 86_400 {
+                return Ok(());
+            }
+        }
+        self.set_setting(&setting_key, &encoded)
     }
 
     pub fn set_secret_setting_bytes(&self, key: &str, plaintext: &[u8]) -> Result<()> {
@@ -1081,18 +1126,38 @@ impl PanelDb {
             params![Self::now(), limit],
         )?;
         let marker_cutoff = Self::now() - i64::from(retention_days.clamp(7, 3650)) * 86_400;
-        conn.execute(
-            "DELETE FROM settings WHERE key IN (
-                SELECT key FROM settings
-                WHERE (
-                    key LIKE 'probe_feedback_delivery:%'
-                    OR key LIKE 'probe_passive_sent_marker:%'
-                    OR key LIKE 'probe_async_question_delivery:%'
-                ) AND updated_at < ?1
-                LIMIT ?2
-            )",
-            params![marker_cutoff, limit],
-        )?;
+        let mut protected_markers = std::collections::HashSet::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT value FROM settings WHERE key LIKE 'probe_active_unresolved_markers:%' AND updated_at >= ?1",
+            )?;
+            let rows = stmt.query_map([marker_cutoff], |row| row.get::<_, String>(0))?;
+            for value in rows.flatten() {
+                if let Ok(keys) = serde_json::from_str::<Vec<String>>(&value) {
+                    protected_markers.extend(keys);
+                }
+            }
+        }
+        let candidate_markers: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT key FROM settings
+                 WHERE (
+                     key LIKE 'probe_feedback_delivery:%'
+                     OR key LIKE 'probe_passive_sent_marker:%'
+                     OR key LIKE 'probe_async_question_delivery:%'
+                 ) AND updated_at < ?1
+                 ORDER BY updated_at ASC
+                 LIMIT ?2",
+            )?;
+            let rows =
+                stmt.query_map(params![marker_cutoff, limit], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for key in candidate_markers {
+            if !protected_markers.contains(&key) {
+                conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            }
+        }
         conn.execute(
             "DELETE FROM probe_notification_deliveries WHERE rowid IN (
                 SELECT rowid FROM probe_notification_deliveries
@@ -1311,9 +1376,10 @@ fn encrypted_setting_parts(value: &str) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::PanelDb;
+    use super::{NewProbeEvent, PanelDb};
     use rusqlite::{Connection, OptionalExtension};
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn upgrade_removes_only_retired_maintenance_state() {
@@ -1753,6 +1819,106 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(incident_keys, vec!["inc-fresh-sent", "inc-old-pending"]);
+    }
+
+    #[test]
+    fn active_unresolved_markers_survive_seven_day_prune_and_touch_throttles_daily() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let now = PanelDb::now();
+        let ten_days_ago = now - 10 * 86_400;
+        let two_hours_ago = now - 2 * 3_600;
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            for (k, ts) in [
+                ("probe_async_question_delivery:active-top-n", ten_days_ago),
+                ("probe_passive_sent_marker:active-top-n", ten_days_ago),
+                ("probe_feedback_delivery:inactive-old", ten_days_ago),
+                ("probe_feedback_delivery:recently-touched", two_hours_ago),
+            ] {
+                conn.execute(
+                    "INSERT INTO settings(key, value, updated_at) VALUES(?1, '1', ?2)",
+                    rusqlite::params![k, ts],
+                )
+                .unwrap();
+            }
+        }
+        // Within 24h window: touch must NOT write.
+        assert!(!db
+            .touch_setting_if_older_than("probe_feedback_delivery:recently-touched", 86_400)
+            .unwrap());
+        // Even before touch, active unresolved marker registry protects >7d top-N markers from pruning.
+        db.retain_active_unresolved_markers(
+            "test",
+            &[
+                "probe_async_question_delivery:active-top-n".to_string(),
+                "probe_passive_sent_marker:active-top-n".to_string(),
+            ],
+        )
+        .unwrap();
+        db.maintain_probe_events(7, 100, false).unwrap();
+        assert!(db
+            .get_setting("probe_async_question_delivery:active-top-n")
+            .unwrap()
+            .is_some());
+        assert!(db
+            .get_setting("probe_passive_sent_marker:active-top-n")
+            .unwrap()
+            .is_some());
+        assert!(db
+            .get_setting("probe_feedback_delivery:inactive-old")
+            .unwrap()
+            .is_none());
+
+        // Older than 24h: touch refreshes updated_at once, and subsequent touch in same day is a no-op.
+        assert!(db
+            .touch_setting_if_older_than("probe_async_question_delivery:active-top-n", 86_400)
+            .unwrap());
+        assert!(!db
+            .touch_setting_if_older_than("probe_async_question_delivery:active-top-n", 86_400)
+            .unwrap());
+    }
+
+    #[test]
+    fn maintain_notification_history_truncates_wal_file_on_disk() {
+        let root =
+            std::env::temp_dir().join(format!("nexushub-wal-trunc-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let db_path = root.join("panel.sqlite");
+        let wal_path = root.join("panel.sqlite-wal");
+        let db = PanelDb::open(&db_path).unwrap();
+        let expired = PanelDb::now() - 10 * 86_400;
+        let big_payload = serde_json::json!({"blob": "x".repeat(64 * 1024)});
+        for i in 0..8 {
+            let ev = db
+                .record_probe_event(NewProbeEvent {
+                    kind: "completion",
+                    thread_id: Some("t-wal"),
+                    title: Some("wal"),
+                    message: Some("msg"),
+                    dedupe_key: None,
+                    source: "test",
+                    payload: big_payload.clone(),
+                })
+                .unwrap();
+            db.conn
+                .lock()
+                .expect("db mutex")
+                .execute(
+                    "UPDATE probe_events SET created_at = ?2 WHERE id = ?1",
+                    rusqlite::params![ev.id, expired + i],
+                )
+                .unwrap();
+        }
+        let wal_before = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+        assert!(wal_before > 0, "expected non-empty WAL before checkpoint");
+        db.maintain_notification_history_if_due(7).unwrap();
+        let wal_after = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(
+            wal_after, 0,
+            "expected TRUNCATE checkpoint to shrink WAL to 0B"
+        );
+        drop(db);
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

@@ -183,6 +183,7 @@ pub async fn run_with_threads(
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
     const PASSIVE_ASYNC_QUESTION_MAX_AGE_MS: i64 = 6 * 86_400_000;
+    let mut active_markers = Vec::new();
     for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {
         if task_notification_suppression_reason(config, Some(&thread.id)).is_some() {
             continue;
@@ -193,26 +194,28 @@ pub async fn run_with_threads(
         let Ok(calls) = codex::rollout_async_questions(path) else {
             continue;
         };
-        for call in calls.iter().filter(|c| {
-            c.created_at_ms.is_some_and(|created| {
-                created > since
-                    && now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
-            })
-        }) {
+        for call in calls
+            .iter()
+            .filter(|c| c.created_at_ms.is_some_and(|created| created > since))
+        {
             let Some(event) = event_for(config, thread, call) else {
                 continue;
             };
-            if delivery_key(&event)
-                .map(|key| db.get_setting(&key))
-                .transpose()?
-                .flatten()
-                .is_some()
-            {
-                continue;
+            if let Some(key) = delivery_key(&event) {
+                active_markers.push(key.clone());
+                if db.get_setting(&key)?.is_some() {
+                    let _ = db.touch_setting_if_older_than(&key, 86_400);
+                    continue;
+                }
             }
-            record_probe_event_with_bark(config, db, event).await?;
+            if call.created_at_ms.is_some_and(|created| {
+                now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
+            }) {
+                record_probe_event_with_bark(config, db, event).await?;
+            }
         }
     }
+    let _ = db.retain_active_unresolved_markers("async_question", &active_markers);
     Ok(())
 }
 

@@ -528,7 +528,7 @@ fn untracked_background_task_respects_active_child_processes_past_60s_quiescence
                     "type": "CORTEX_STEP_TYPE_GENERIC",
                     "status": "CORTEX_STEP_STATUS_DONE",
                     "taskDetails": { "id": task_id, "movedToBackgroundAt": "2026-01-01T00:00:05Z" },
-                    "generic": { "name": "run_command", "arguments": "{\"IsDaemon\":false}" },
+                    "generic": { "name": "run_command", "arguments": "{\"CommandLine\":\"cargo build --release\",\"IsDaemon\":false}" },
                     "metadata": { "executionId": "exec-1", "createdAt": "2026-01-01T00:00:05Z" }
                 },
                 {
@@ -552,8 +552,41 @@ fn untracked_background_task_respects_active_child_processes_past_60s_quiescence
         }
     });
     let steps = response["trajectory"]["steps"].as_array().unwrap();
-    let spawn = earliest_untracked_task_spawn_ms(ID, "fixture-trajectory", steps, &BTreeMap::new());
-    assert!(spawn.is_some());
+    let specs = collect_untracked_task_commands(ID, "fixture-trajectory", steps, &BTreeMap::new());
+    assert_eq!(
+        specs,
+        vec![UntrackedCommandSpec {
+            spawn_ms: base_ms - 5_000,
+            command_line: "cargo build --release".into(),
+        }]
+    );
+
+    // Tasks without CommandLine, missing timestamps, or IsDaemon=true never emit a zero-timestamp fallback.
+    let untracked_edge_steps = vec![
+        json!({
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE"
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "taskDetails": { "id": "daemon-1", "movedToBackgroundAt": "2026-01-01T00:00:05Z" },
+            "generic": { "name": "run_command", "arguments": "{\"CommandLine\":\"pnpm dev\",\"IsDaemon\":true}" }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "taskDetails": { "id": "missing-ts" },
+            "generic": { "name": "run_command", "arguments": "{\"CommandLine\":\"cargo check\",\"IsDaemon\":false}" }
+        }),
+    ];
+    assert!(collect_untracked_task_commands(
+        ID,
+        "fixture-trajectory",
+        &untracked_edge_steps,
+        &BTreeMap::new(),
+    )
+    .is_empty());
 
     // 3 minutes later (> 60s quiescence), child build process is still alive -> MUST NOT fire early!
     let mut ctx = TrajectoryLivenessContext {

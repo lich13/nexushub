@@ -330,3 +330,202 @@ fn ps_etime_parser_handles_mm_ss_hh_mm_ss_and_days() {
     assert_eq!(parse_ps_etime_ms(""), None);
     assert_eq!(parse_ps_etime_ms("00:99"), None);
 }
+
+#[test]
+fn untracked_child_process_matcher_isolates_current_turn_command_from_other_sessions_and_daemons() {
+    let now_ms = 1_800_000_000_000_i64;
+    let spawn_ms = now_ms - 30_000; // spawned 30s ago
+    let specs = vec![antigravity::UntrackedCommandSpec {
+        spawn_ms,
+        command_line: "cd /workspace && cargo build --release -p app".into(),
+    }];
+
+    // Process table containing:
+    // - 100: language_server root
+    // - 200: another session's Vite dev server started 10m ago
+    // - 201: another session's different command started at the exact same 30s timestamp
+    // - 202: daemonized background process started 30s ago
+    // - 300: non-descendant process with identical command started 30s ago
+    let unrelated_table = "\
+  100     1    02:00:00 /Applications/Antigravity.app/Contents/Resources/bin/language_server
+  200   100       10:00 pnpm --dir webui run dev
+  201   100       00:30 /bin/zsh -c pytest tests/other_suite.py
+  202   100       00:30 nohup cargo build --release -p app
+  300   999       00:30 cargo build --release -p app
+";
+    assert!(!ps_table_matches_untracked_commands(
+        unrelated_table,
+        100,
+        &specs,
+        now_ms,
+    ));
+
+    // Grandchild (shell -> cargo build) spawned inside [spawn_ms - 5s, spawn_ms + 15s] matches!
+    let matching_table = format!(
+        "{unrelated_table}  205   100       00:29 /bin/zsh -c cd /workspace && cargo build --release -p app\n  206   205       00:28 cargo build --release -p app\n"
+    );
+    assert!(ps_table_matches_untracked_commands(
+        &matching_table,
+        100,
+        &specs,
+        now_ms,
+    ));
+}
+
+#[tokio::test]
+async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_incrementally() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    let cascade_id = "77777777-7777-4777-8777-777777777777";
+    let step_calls = Arc::new(AtomicUsize::new(0));
+    let meta_offsets = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+
+    let step_calls_handler = step_calls.clone();
+    let meta_offsets_handler = meta_offsets.clone();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new()
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectorySteps"),
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let step_calls_handler = step_calls_handler.clone();
+                async move {
+                    step_calls_handler.fetch_add(1, Ordering::SeqCst);
+                    let off = body["stepOffset"].as_u64().unwrap_or(0);
+                    if off == 10 {
+                        axum::Json(json!({
+                            "steps": [
+                                {
+                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "exec-3", "createdAt": "2026-10-30T01:00:00Z" }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": {
+                                        "executionId": "exec-3",
+                                        "createdAt": "2026-10-30T01:00:02Z",
+                                        "completedAt": "2026-10-30T01:00:04Z"
+                                    },
+                                    "plannerResponse": { "response": "补丁已准备好。你希望直接部署还是先保留本地构建？" }
+                                }
+                            ]
+                        }))
+                    } else if off == 12 {
+                        axum::Json(json!({
+                            "steps": [
+                                {
+                                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": { "executionId": "exec-4", "createdAt": "2026-10-30T01:05:00Z" }
+                                },
+                                {
+                                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                    "status": "CORTEX_STEP_STATUS_DONE",
+                                    "metadata": {
+                                        "executionId": "exec-4",
+                                        "createdAt": "2026-10-30T01:05:01Z",
+                                        "completedAt": "2026-10-30T01:05:03Z"
+                                    },
+                                    "plannerResponse": { "response": "已完成部署。" }
+                                }
+                            ]
+                        }))
+                    } else {
+                        axum::Json(json!({}))
+                    }
+                }
+            }),
+        )
+        .route(
+            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let meta_offsets_handler = meta_offsets_handler.clone();
+                async move {
+                    let off = body["executorMetadataOffset"].as_u64().unwrap_or(0);
+                    meta_offsets_handler.lock().unwrap().push(off);
+                    let all_four = meta_offsets_handler.lock().unwrap().len() >= 3;
+                    let mut all = vec![
+                        json!({"executionId": "exec-1", "lastStepIdx": 4, "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"}),
+                        json!({"executionId": "exec-2", "lastStepIdx": 9, "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"}),
+                        json!({"executionId": "exec-3", "lastStepIdx": 11, "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"}),
+                    ];
+                    if all_four {
+                        all.push(json!({"executionId": "exec-4", "lastStepIdx": 13, "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL"}));
+                    }
+                    let slice = if (off as usize) < all.len() {
+                        all[off as usize..].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    axum::Json(json!({ "executorMetadata": slice }))
+                }
+            }),
+        );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+
+    let http = client().unwrap();
+    let summaries_turn_1 = json!({
+        "trajectorySummaries": {
+            cascade_id: {
+                "trajectoryId": "traj-inc-1",
+                "createdTime": "2026-10-30T00:00:00Z",
+                "lastModifiedTime": "2026-10-30T01:00:04Z",
+                "summary": "Incremental metadata & reply_needed cache test",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 12,
+                "lastUserInputStepIndex": 10,
+                "trajectoryMetadata": { "rootConversationId": cascade_id }
+            }
+        }
+    });
+
+    // 1st scan: fetches steps once + executor metadatas from offset 0 -> emits reply_needed.
+    let s1 = scan_at(&http, port, "fixture-token", 0, &summaries_turn_1, None)
+        .await
+        .unwrap();
+    assert_eq!(s1.streams[0].events.len(), 1);
+    assert_eq!(s1.streams[0].events[0].kind, "reply_needed");
+    assert_eq!(step_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*meta_offsets.lock().unwrap(), vec![0, 3]);
+
+    // 2nd scan with unchanged summary: settled idle `reply_needed` MUST hit CACHE (0 RPC calls!).
+    let s2 = scan_at(&http, port, "fixture-token", 0, &summaries_turn_1, None)
+        .await
+        .unwrap();
+    assert_eq!(s2.streams[0].events[0].kind, "reply_needed");
+    assert_eq!(step_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*meta_offsets.lock().unwrap(), vec![0, 3]);
+
+    // 3rd scan after user answers & turn 2 completes: signature changes, META_CACHE fetches from cached_len - 1 (offset 2, NOT 0!).
+    let summaries_turn_2 = json!({
+        "trajectorySummaries": {
+            cascade_id: {
+                "trajectoryId": "traj-inc-1",
+                "createdTime": "2026-10-30T00:00:00Z",
+                "lastModifiedTime": "2026-10-30T01:05:03Z",
+                "summary": "Incremental metadata & reply_needed cache test",
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "stepCount": 14,
+                "lastUserInputStepIndex": 12,
+                "trajectoryMetadata": { "rootConversationId": cascade_id }
+            }
+        }
+    });
+    let s3 = scan_at(&http, port, "fixture-token", 0, &summaries_turn_2, None)
+        .await
+        .unwrap();
+    assert_eq!(s3.streams[0].events.len(), 1);
+    assert_eq!(s3.streams[0].events[0].kind, "completion");
+    assert_eq!(s3.streams[0].events[0].turn_id, "exec-4");
+    assert_eq!(*meta_offsets.lock().unwrap(), vec![0, 3, 2, 4]);
+
+    task.abort();
+}

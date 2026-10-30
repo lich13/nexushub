@@ -180,17 +180,60 @@ pub fn list_grok_sessions(
     Ok(result)
 }
 
+type GrokProbeStamp = (
+    u64,
+    Option<std::time::SystemTime>,
+    u64,
+    Option<std::time::SystemTime>,
+);
+
+struct GrokProbeCacheEntry {
+    session_dir: PathBuf,
+    identity: String,
+    stamp: GrokProbeStamp,
+    title: String,
+    snapshot: crate::native_probe::NativeStreamSnapshot,
+    bytes: u64,
+    last_accessed: std::time::Instant,
+}
+
+fn grok_probe_cache_stamp(
+    event_path: &Path,
+    updates_path: &Path,
+) -> Result<(String, GrokProbeStamp)> {
+    let event_meta = fs::symlink_metadata(event_path)?;
+    let updates_meta = fs::symlink_metadata(updates_path)?;
+    let identity = format!(
+        "{}:{}",
+        crate::native_probe::file_identity(event_path)?,
+        crate::native_probe::file_identity(updates_path)?
+    );
+    let stamp = (
+        event_meta.len(),
+        event_meta.modified().ok(),
+        updates_meta.len(),
+        updates_meta.modified().ok(),
+    );
+    Ok((identity, stamp))
+}
+
+static GROK_PROBE_CACHE: std::sync::Mutex<std::collections::VecDeque<GrokProbeCacheEntry>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+#[cfg(test)]
+thread_local! { static PROBE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_probe::NativeScan> {
     use crate::native_probe::{
-        file_identity, grok_events, read_jsonl, NativeProvider, NativeScan, NativeStreamSnapshot,
+        grok_events, read_jsonl, NativeProvider, NativeScan, NativeStreamSnapshot,
     };
     let mut scan = NativeScan::default();
     if !paths.sessions().exists() {
         return Ok(scan);
     }
     let root = paths.sessions().canonicalize()?;
-    let mut seen = std::collections::HashSet::new();
-    let active = activity::Snapshot::capture(paths);
+    let mut by_id: std::collections::BTreeMap<String, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
     for workspace in fs::read_dir(&root)? {
         let workspace = workspace?;
         if !workspace.file_type()?.is_dir() {
@@ -204,40 +247,98 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
             let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            if !seen.insert(id.clone()) {
-                continue;
+            by_id.entry(id).or_default().push(entry.path());
+        }
+    }
+    for (id, dirs) in by_id {
+        let read = (|| -> Result<NativeStreamSnapshot> {
+            uuid::Uuid::parse_str(&id).context("invalid Grok session ID")?;
+            ensure!(dirs.len() == 1, "ambiguous Grok session ID");
+            let raw_dir = &dirs[0];
+            ensure!(
+                !fs::symlink_metadata(raw_dir)?.file_type().is_symlink(),
+                "Grok session must not be a symlink"
+            );
+            let canonical_dir = raw_dir.canonicalize()?;
+            ensure!(
+                canonical_dir.parent().and_then(Path::parent) == Some(root.as_path()),
+                "Grok session escaped sessions root"
+            );
+            let summary = read_summary_metadata(&canonical_dir)?
+                .context("Grok session summary unavailable")?;
+            let event_path = canonical_dir.join("events.jsonl");
+            let updates_path = canonical_dir.join("updates.jsonl");
+            let (identity, stamp) = grok_probe_cache_stamp(&event_path, &updates_path)?;
+            let title =
+                crate::native_probe::notification_title(&summary.title, &summary.id, &summary.cwd);
+            if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
+                if let Some(pos) = cache.iter().position(|e| {
+                    e.session_dir == canonical_dir
+                        && e.identity == identity
+                        && e.stamp == stamp
+                        && e.title == title
+                }) {
+                    let mut hit = cache.remove(pos).expect("grok probe cache entry");
+                    hit.last_accessed = std::time::Instant::now();
+                    let out = hit.snapshot.clone();
+                    cache.push_back(hit);
+                    return Ok(out);
+                }
             }
-            let read = (|| -> Result<NativeStreamSnapshot> {
-                let summary = resolve_session_with_activity(paths, &id, &active)?;
-                let event_path = summary.path.join("events.jsonl");
-                let updates_path = summary.path.join("updates.jsonl");
-                let identity = format!(
-                    "{}:{}",
-                    file_identity(&event_path)?,
-                    file_identity(&updates_path)?
-                );
-                let events = read_jsonl(&event_path)?;
-                let updates = read_jsonl(&updates_path)?;
-                let (turns, settled_count) = grok_events(&id, &events, &updates);
-                Ok(NativeStreamSnapshot {
-                    provider: NativeProvider::Grok,
-                    session_key: id.clone(),
-                    id,
-                    title: crate::native_probe::notification_title(
-                        &summary.title,
-                        &summary.id,
-                        &summary.cwd,
-                    ),
-                    identity,
-                    record_count: events.len() as u64,
-                    settled_count,
-                    events: turns,
-                })
-            })();
-            match read {
-                Ok(stream) => scan.streams.push(stream),
-                Err(_) => scan.errors += 1,
+            #[cfg(test)]
+            PROBE_READS.with(|c| c.set(c.get() + 1));
+            let events = read_jsonl(&event_path)?;
+            let updates = read_jsonl(&updates_path)?;
+            let (turns, settled_count) = grok_events(&id, &events, &updates);
+            let snapshot = NativeStreamSnapshot {
+                provider: NativeProvider::Grok,
+                session_key: id.clone(),
+                id,
+                title: title.clone(),
+                identity: identity.clone(),
+                record_count: events.len() as u64,
+                settled_count,
+                events: turns,
+            };
+            let (after_identity, after_stamp) = grok_probe_cache_stamp(&event_path, &updates_path)?;
+            if after_identity == identity && after_stamp == stamp {
+                let bytes = 512
+                    + (snapshot.id.len()
+                        + snapshot.title.len()
+                        + snapshot.identity.len()
+                        + snapshot
+                            .events
+                            .iter()
+                            .map(|e| 256 + e.turn_id.len() + e.body.len())
+                            .sum::<usize>()) as u64;
+                if bytes <= crate::resource_limits::NATIVE_PROBE_CACHE_BYTES {
+                    if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
+                        cache.retain(|e| e.session_dir != canonical_dir);
+                        while cache.len() >= crate::resource_limits::CLAUDE_SUMMARY_ENTRIES
+                            || cache.iter().map(|e| e.bytes).sum::<u64>() + bytes
+                                > crate::resource_limits::NATIVE_PROBE_CACHE_BYTES
+                        {
+                            if cache.pop_front().is_none() {
+                                break;
+                            }
+                        }
+                        cache.push_back(GrokProbeCacheEntry {
+                            session_dir: canonical_dir,
+                            identity,
+                            stamp,
+                            title,
+                            snapshot: snapshot.clone(),
+                            bytes,
+                            last_accessed: std::time::Instant::now(),
+                        });
+                    }
+                }
             }
+            Ok(snapshot)
+        })();
+        match read {
+            Ok(stream) => scan.streams.push(stream),
+            Err(_) => scan.errors += 1,
         }
     }
     Ok(scan)
@@ -352,9 +453,18 @@ pub fn grok_session_page(
 
 static GROK_DETAIL_CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
     crate::jsonl_cache::JsonlCache::new(crate::resource_limits::GROK_DETAIL_CACHE_BYTES);
+static GROK_LAST_MESSAGE_CACHE: crate::read_cache::ReadCache<Option<String>> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES)
+        .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
+        .with_native_metadata();
 
 pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     GROK_DETAIL_CACHE.evict_idle(max_idle);
+    GROK_LAST_MESSAGE_CACHE.evict_idle(max_idle);
+    if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
+        let now = std::time::Instant::now();
+        cache.retain(|e| now.saturating_duration_since(e.last_accessed) < max_idle);
+    }
 }
 
 fn with_session_history<R>(
@@ -828,12 +938,251 @@ fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
     )
 }
 
+fn read_last_message_at(directory: &Path) -> Result<Option<String>> {
+    let updates = directory.join("updates.jsonl");
+    let native = !updates.exists();
+    let path = if native {
+        directory.join("chat_history.jsonl")
+    } else {
+        updates
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    GROK_LAST_MESSAGE_CACHE.read(
+        &path,
+        |val, _| 64 + val.as_ref().map_or(0, String::len) as u64,
+        || scan_grok_last_message_at(directory, &path, native),
+    )
+}
+
+fn scan_grok_last_message_at(
+    directory: &Path,
+    path: &Path,
+    native: bool,
+) -> Result<Option<String>> {
+    use std::io::{BufRead, BufReader};
+    let meta = fs::symlink_metadata(path)?;
+    ensure!(
+        meta.is_file() && !meta.file_type().is_symlink(),
+        "Grok history must be a regular file"
+    );
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut reader = BufReader::new(options.open(path)?);
+    let mut line = Vec::new();
+    let mut last_message_at: Option<String> = None;
+
+    if native {
+        loop {
+            line.clear();
+            let read_bytes = reader.read_until(b'\n', &mut line)?;
+            if read_bytes == 0 {
+                break;
+            }
+            let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            if value.get("synthetic_reason").and_then(Value::as_str) == Some("system_reminder") {
+                continue;
+            }
+            let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+            match kind {
+                "user" => {
+                    let raw = value.get("content").cloned().unwrap_or(Value::Null);
+                    let parts = match raw {
+                        Value::String(text) => {
+                            vec![serde_json::json!({"type": "text", "text": text})]
+                        }
+                        Value::Array(arr) => arr,
+                        other => vec![other],
+                    };
+                    let msg =
+                        crate::user_message::parse_user_message("grok:scan", &Value::Array(parts));
+                    if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+                        last_message_at = value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                }
+                "assistant" => {
+                    let content = value.get("content").unwrap_or(&Value::Null);
+                    let has_text = match content {
+                        Value::String(s) => !s.trim().is_empty(),
+                        Value::Array(parts) => parts.iter().any(|part| {
+                            part.get("type")
+                                .and_then(Value::as_str)
+                                .is_none_or(|k| k == "text")
+                                && part
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|t| !t.trim().is_empty())
+                        }),
+                        _ => false,
+                    };
+                    if has_text {
+                        last_message_at = value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Ok(last_message_at);
+    }
+
+    let mut seen_user_updates = HashSet::new();
+    let mut user_parts: Vec<Value> = Vec::new();
+    let mut user_native_key: Option<String> = None;
+    let mut last_was_user = false;
+    let mut first_event_kind: Option<String> = None;
+
+    loop {
+        line.clear();
+        let read_bytes = reader.read_until(b'\n', &mut line)?;
+        if read_bytes == 0 {
+            break;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        let params = value.get("params").unwrap_or(&value);
+        let update = params.get("update").unwrap_or(params);
+        let kind = update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .unwrap_or("event");
+        if kind != "user_message_chunk" {
+            user_parts.clear();
+            last_was_user = false;
+        }
+        if !matches!(
+            kind,
+            "user_message_chunk"
+                | "agent_message_chunk"
+                | "tool_call"
+                | "tool_call_update"
+                | "plan"
+        ) {
+            continue;
+        }
+        if kind == "user_message_chunk" {
+            if let Some(uid) = update.get("updateId").and_then(Value::as_str) {
+                if !seen_user_updates.insert(uid.to_owned()) {
+                    continue;
+                }
+            }
+            if first_event_kind.is_none() {
+                first_event_kind = Some(kind.to_owned());
+            }
+            let native_key = update
+                .get("messageId")
+                .or_else(|| update.get("promptId"))
+                .or_else(|| params.get("prompt_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let same = !user_parts.is_empty() && last_was_user && user_native_key == native_key;
+            if !same {
+                user_parts.clear();
+                user_native_key = native_key;
+            }
+            let text_fallback = update
+                .get("content")
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str)
+                .or_else(|| update.get("text").and_then(Value::as_str))
+                .or_else(|| update.get("title").and_then(Value::as_str))
+                .unwrap_or_default();
+            let content = update
+                .get("content")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({"type": "text", "text": text_fallback}));
+            match content {
+                Value::Array(parts) => user_parts.extend(parts),
+                other => user_parts.push(other),
+            }
+            let msg = crate::user_message::parse_user_message(
+                "grok:scan",
+                &Value::Array(user_parts.clone()),
+            );
+            if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+                last_message_at = value
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            last_was_user = true;
+            continue;
+        }
+        if first_event_kind.is_none() {
+            first_event_kind = Some(kind.to_owned());
+        }
+        if kind == "agent_message_chunk" {
+            let has_text = update
+                .get("content")
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str)
+                .or_else(|| update.get("text").and_then(Value::as_str))
+                .or_else(|| update.get("title").and_then(Value::as_str))
+                .is_some_and(|t| !t.trim().is_empty())
+                || update
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|arr| {
+                        arr.iter().any(|item| {
+                            item.pointer("/content/text")
+                                .and_then(Value::as_str)
+                                .is_some_and(|t| !t.trim().is_empty())
+                        })
+                    });
+            if has_text {
+                last_message_at = value
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+        }
+    }
+
+    if last_message_at.is_none()
+        && first_event_kind
+            .as_deref()
+            .is_some_and(|k| k != "user_message_chunk")
+    {
+        let mut fallback_reader = GrokReader::default();
+        fallback_reader
+            .events
+            .events
+            .push(Arc::new(GrokHistoryEvent {
+                id: "grok:placeholder".into(),
+                user_message: None,
+                timestamp: None,
+                kind: "tool_call".into(),
+                text: None,
+                method: None,
+                call_id: None,
+                status: None,
+                detail: None,
+            }));
+        fallback_reader.prepend_missing_initial_native_users(directory);
+        last_message_at = fallback_reader.last_message_at;
+    }
+
+    Ok(last_message_at)
+}
+
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let mut summary = read_summary_metadata(path)?;
     if let Some(summary) = &mut summary {
-        summary.updated_at =
-            with_session_history(path, |state, _| Ok(state.last_message_at.clone()))
-                .unwrap_or_default();
+        summary.updated_at = read_last_message_at(path).unwrap_or_default();
     }
     Ok(summary)
 }

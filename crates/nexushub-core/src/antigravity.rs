@@ -255,11 +255,18 @@ pub struct TrajectoryLivenessContext {
     pub tasks: BTreeMap<String, TaskLiveness>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrackedCommandSpec {
+    pub spawn_ms: i64,
+    pub command_line: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct PendingTaskRecord {
     spawn_ms: Option<i64>,
     expected_deadline_ms: Option<i64>,
     log_uri: Option<String>,
+    command_line: Option<String>,
 }
 
 fn step_activity_timestamp_ms(step: &Value) -> Option<i64> {
@@ -344,12 +351,20 @@ fn collect_turn_pending_work(
                     .or_else(|| step["taskDetails"]["logAbsoluteUri"].as_str())
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned);
+                let command_line = args["CommandLine"]
+                    .as_str()
+                    .or_else(|| args["commandLine"].as_str())
+                    .or_else(|| step["runCommand"]["commandLine"].as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
                 pending_tasks.insert(
                     task_id.to_owned(),
                     PendingTaskRecord {
                         spawn_ms,
                         expected_deadline_ms,
                         log_uri,
+                        command_line,
                     },
                 );
             }
@@ -420,28 +435,33 @@ pub fn collect_pending_task_logs(
         .collect()
 }
 
-pub fn earliest_untracked_task_spawn_ms(
+pub fn collect_untracked_task_commands(
     id: &str,
     summary_trajectory_id: &str,
     steps: &[Value],
     tracked_tasks: &BTreeMap<String, TaskLiveness>,
-) -> Option<i64> {
+) -> Vec<UntrackedCommandSpec> {
     let work = collect_turn_pending_work(id, summary_trajectory_id, steps);
-    let mut earliest: Option<i64> = None;
-    let mut has_untracked = false;
+    let mut specs = Vec::new();
     for (task_id, rec) in &work.pending_tasks {
-        if !tracked_tasks.contains_key(task_id) && rec.expected_deadline_ms.is_none() {
-            has_untracked = true;
-            if let Some(ms) = rec.spawn_ms.or(work.last_root_step_ms) {
-                earliest = Some(earliest.map_or(ms, |prev| prev.min(ms)));
-            }
+        if tracked_tasks.contains_key(task_id)
+            || rec.log_uri.is_some()
+            || rec.expected_deadline_ms.is_some()
+        {
+            continue;
         }
+        let Some(spawn_ms) = rec.spawn_ms.or(work.last_root_step_ms).filter(|&ms| ms > 0) else {
+            continue;
+        };
+        let Some(command_line) = rec.command_line.as_ref().filter(|cmd| !cmd.is_empty()) else {
+            continue;
+        };
+        specs.push(UntrackedCommandSpec {
+            spawn_ms,
+            command_line: command_line.clone(),
+        });
     }
-    if has_untracked {
-        earliest.or(Some(0))
-    } else {
-        None
-    }
+    specs
 }
 
 fn step_requests_artifact_feedback(step: &Value) -> bool {

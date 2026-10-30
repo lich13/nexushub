@@ -995,7 +995,11 @@ fn passive_unresolved_action_sent(db: &PanelDb, key: Option<&str>) -> Result<boo
     let Some(key) = key else {
         return Ok(false);
     };
-    Ok(db.get_setting(key)?.is_some())
+    let exists = db.get_setting(key)?.is_some();
+    if exists {
+        let _ = db.touch_setting_if_older_than(key, 86_400);
+    }
+    Ok(exists)
 }
 
 fn mark_passive_unresolved_action_sent(
@@ -1404,6 +1408,7 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
         return Ok(0);
     }
     let mut recorded = 0usize;
+    let mut active_markers = Vec::new();
     for status in ["reply-needed", "recoverable"] {
         let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
         for thread in threads {
@@ -1451,12 +1456,19 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
             if let Some(reason_label) = plan.reason_label.as_deref() {
                 event.payload["reason_label"] = json!(reason_label);
             }
+            let pre_plan = probe_service::probe_event_record_plan(event.clone());
+            if let Some(key) = pre_plan.passive_marker_key {
+                active_markers.push(key);
+            }
             let (outcome, bark) = record_probe_event_with_bark(&config, &state.db, event).await?;
             if outcome.recorded || bark.sent {
                 recorded += 1;
             }
         }
     }
+    let _ = state
+        .db
+        .retain_active_unresolved_markers("thread_scan", &active_markers);
     Ok(recorded)
 }
 

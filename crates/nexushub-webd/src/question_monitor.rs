@@ -140,7 +140,12 @@ pub async fn run_with_threads(
         .get_setting("probe_feedback_files")?
         .and_then(|value| serde_json::from_str(&value).ok())
         .unwrap_or_default();
+    let prev_active_keys: HashMap<String, String> = db
+        .get_setting("probe_feedback_active_keys")?
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default();
     let mut next = HashMap::new();
+    let mut next_active_keys = HashMap::new();
     let owned_threads;
     let threads: &[codex::ThreadSummary] = match preloaded_sorted {
         Some(slice) => slice,
@@ -165,7 +170,14 @@ pub async fn run_with_threads(
         let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
         let fingerprint = (meta.len(), modified.as_nanos());
         next.insert(thread.id.clone(), fingerprint);
-        if previous.get(&thread.id) == Some(&fingerprint) || modified.as_millis() < since as u128 {
+        if previous.get(&thread.id) == Some(&fingerprint) {
+            if let Some(key) = prev_active_keys.get(&thread.id) {
+                let _ = db.touch_setting_if_older_than(key, 86_400);
+                next_active_keys.insert(thread.id.clone(), key.clone());
+            }
+            continue;
+        }
+        if modified.as_millis() < since as u128 {
             continue;
         }
         if task_notification_suppression_reason(config, Some(&thread.id)).is_some() {
@@ -175,13 +187,30 @@ pub async fn run_with_threads(
             // A half-written terminal line must be examined again on the next change.
             continue;
         };
+        let event = event_for(config, &thread.id, &thread.title, path, &feedback);
+        if let Some(key) = delivery_key(&event) {
+            next_active_keys.insert(thread.id.clone(), key.clone());
+            if db.get_setting(&key)?.is_some() {
+                let _ = db.touch_setting_if_older_than(&key, 86_400);
+                continue;
+            }
+        }
         if feedback.completed_at_ms <= since || !is_fresh(feedback.completed_at_ms) {
             continue;
         }
-        let event = event_for(config, &thread.id, &thread.title, path, &feedback);
         record_probe_event_with_bark(config, db, event).await?;
     }
-    db.set_setting("probe_feedback_files", &serde_json::to_string(&next)?)?;
+    if next != previous {
+        db.set_setting("probe_feedback_files", &serde_json::to_string(&next)?)?;
+    }
+    if next_active_keys != prev_active_keys {
+        db.set_setting(
+            "probe_feedback_active_keys",
+            &serde_json::to_string(&next_active_keys)?,
+        )?;
+    }
+    let retained: Vec<String> = next_active_keys.into_values().collect();
+    let _ = db.retain_active_unresolved_markers("feedback", &retained);
     Ok(())
 }
 
@@ -313,6 +342,83 @@ mod tests {
         let fixture = Fixture::new(url);
         let rollout = fixture.config.codex.home.join("sessions/rollout.jsonl");
         fs::OpenOptions::new().append(true).open(&rollout).unwrap().write_all(format!("{}\n", json!({"type":"event_msg","payload":{"type":"user_message","turn_id":"turn-a","message":"已确认"}})).as_bytes()).unwrap();
+        run(&fixture.config, &fixture.db).await.unwrap();
+        assert!(requests.recv_timeout(Duration::from_millis(150)).is_err());
+    }
+
+    #[tokio::test]
+    async fn monitor_ignores_earlier_sentence_keywords_with_rhetorical_trailing_question() {
+        let (url, requests) = mock_bark_server(1);
+        let fixture = Fixture::new(url);
+        let rollout = fixture.config.codex.home.join("sessions/rollout.jsonl");
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let non_question = "我已检查配置是否生效，所有服务均已正常响应。为什么之前会出现偶发超时？";
+        let events = [
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rhet"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":non_question}]}}),
+            json!({"type":"event_msg","timestamp":timestamp,"payload":{"type":"task_complete","turn_id":"turn-rhet","status":"completed","last_agent_message":non_question}}),
+        ];
+        fs::write(
+            &rollout,
+            events
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        run(&fixture.config, &fixture.db).await.unwrap();
+        assert!(requests.recv_timeout(Duration::from_millis(150)).is_err());
+
+        // Appending a genuine user-directed final sentence DOES trigger delivery.
+        let real_question = "改动已经完成并通过本地检查。你希望直接推送主分支还是先打预览标签？";
+        let events_2 = [
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-real"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":real_question}]}}),
+            json!({"type":"event_msg","timestamp":timestamp,"payload":{"type":"task_complete","turn_id":"turn-real","status":"completed","last_agent_message":real_question}}),
+        ];
+        fs::write(
+            &rollout,
+            events_2
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        run(&fixture.config, &fixture.db).await.unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(&requests.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+        assert!(payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("你希望直接推送主分支"));
+    }
+
+    #[tokio::test]
+    async fn unanswered_top_n_question_marker_is_renewed_and_not_repushed_after_seven_days() {
+        let (url, requests) = mock_bark_server(2);
+        let fixture = Fixture::new(url);
+        run(&fixture.config, &fixture.db).await.unwrap();
+        let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        // Simulate 10 days passing without user answer while thread stays in top-N list.
+        let active_keys: HashMap<String, String> = serde_json::from_str(
+            &fixture
+                .db
+                .get_setting("probe_feedback_active_keys")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let marker_key = active_keys.get("main").unwrap().clone();
+        // Backdate marker's updated_at by 10 days; pruning must skip active top-N marker and scan renews it.
+        fixture.db.maintain_probe_events(7, 1000, false).unwrap();
+        assert!(fixture.db.get_setting(&marker_key).unwrap().is_some());
+
+        // Clear file fingerprint cache to simulate cold restart rescan of top-N threads: must NOT repush!
+        fixture
+            .db
+            .set_setting("probe_feedback_files", "{}")
+            .unwrap();
         run(&fixture.config, &fixture.db).await.unwrap();
         assert!(requests.recv_timeout(Duration::from_millis(150)).is_err());
     }

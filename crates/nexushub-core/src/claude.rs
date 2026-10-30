@@ -572,32 +572,18 @@ pub fn read_attachment(
 pub(crate) fn notification_snapshots(
     paths: &ClaudePaths,
 ) -> Result<crate::native_probe::NativeScan> {
-    use crate::native_probe::{file_identity, NativeProvider, NativeScan, NativeStreamSnapshot};
+    use crate::native_probe::NativeScan;
     let mut scan = NativeScan::default();
-    for path in files(paths)? {
-        let parsed = match reader::read(&path) {
-            Ok(p) => p,
-            Err(_) => {
-                scan.errors += 1;
-                continue;
-            }
-        };
-        // Compatibility warnings are safe to scan; only fatal parse/identity
-        // issues suppress terminal evidence and increment the scan error count.
-        if !parsed.issues.is_empty() {
-            scan.errors += 1;
-            continue;
+    let files = files(paths)?;
+    if files.is_empty() {
+        return Ok(scan);
+    }
+    let canonical_root = paths.projects.canonicalize()?;
+    for path in files {
+        match reader::probe_snapshot(&path, &canonical_root) {
+            Ok(snapshot) => scan.streams.push(snapshot),
+            Err(_) => scan.errors += 1,
         }
-        scan.streams.push(NativeStreamSnapshot {
-            provider: NativeProvider::Claude,
-            session_key: key_for(&paths.projects.canonicalize()?, &path, &parsed.id),
-            id: parsed.id.clone(),
-            title: crate::native_probe::notification_title(&parsed.title, &parsed.id, &parsed.cwd),
-            identity: file_identity(&path)?,
-            record_count: parsed.record_count,
-            settled_count: parsed.settled_count,
-            events: parsed.native_events.clone(),
-        });
     }
     Ok(scan)
 }

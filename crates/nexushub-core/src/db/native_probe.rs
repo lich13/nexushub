@@ -279,15 +279,18 @@ impl PanelDb {
         }
         self.maintain_probe_events(retention_days, 100_000, false)?;
         let marker_cutoff = now - i64::from(retention_days.clamp(7, 3650)) * 86_400;
+        {
+            let conn = self.conn.lock().expect("db mutex");
+            conn.execute(
+                "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped') AND updated_at < ?1",
+                [marker_cutoff],
+            )?;
+        }
+        self.set_setting("probe_event_retention_last_run", "ok")?;
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped') AND updated_at < ?1",
-            [marker_cutoff],
-        )?;
-        let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
         let _ = conn.execute_batch("PRAGMA optimize;");
-        drop(conn);
-        self.set_setting("probe_event_retention_last_run", "ok")
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        Ok(())
     }
 }
 

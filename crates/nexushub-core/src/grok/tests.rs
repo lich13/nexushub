@@ -950,3 +950,63 @@ fn execute_grok_delete_rejects_out_of_bounds_running_and_stops_on_partial_failur
 
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn notification_snapshots_and_list_sessions_avoid_detail_cache_thrashing_and_rereads() {
+    let (paths, id, path) = fixture();
+    let events_path = path.join("events.jsonl");
+    let updates_path = path.join("updates.jsonl");
+    fs::write(
+        &events_path,
+        format!(
+            "{{\"type\":\"turn_started\",\"session_id\":\"{id}\",\"session_relationship\":\"primary\",\"ts\":\"2026-10-30T01:00:00Z\"}}\n{{\"type\":\"turn_ended\",\"outcome\":\"completed\",\"ts\":\"2026-10-30T01:00:02Z\"}}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &updates_path,
+        format!(
+            "{{\"timestamp\":\"2026-10-30T01:00:01Z\",\"params\":{{\"sessionId\":\"{id}\",\"_meta\":{{\"promptId\":\"p1\"}},\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{{\"type\":\"text\",\"text\":\"Completed without detail cache.\"}}}}}}}}\n{{\"timestamp\":\"2026-10-30T01:00:02Z\",\"params\":{{\"sessionId\":\"{id}\",\"update\":{{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p1\",\"stop_reason\":\"end_turn\"}}}}}}\n"
+        ),
+    )
+    .unwrap();
+
+    // 1. list_grok_sessions extracts conversation updated_at WITHOUT populating GROK_DETAIL_CACHE (`HISTORY_READS` stays 0).
+    HISTORY_READS.with(|c| c.set(0));
+    let listed = list_grok_sessions(&paths, 10, None).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].updated_at.as_deref(),
+        Some("2026-10-30T01:00:01Z")
+    );
+    assert_eq!(HISTORY_READS.with(|c| c.get()), 0);
+
+    // 2. notification_snapshots reads JSONL once on first scan and 0 times on unchanged repeat scan.
+    PROBE_READS.with(|c| c.set(0));
+    let s1 = notification_snapshots(&paths).unwrap();
+    assert_eq!(s1.errors, 0);
+    assert_eq!(s1.streams.len(), 1);
+    assert_eq!(s1.streams[0].events.len(), 1);
+    assert_eq!(PROBE_READS.with(|c| c.get()), 1);
+
+    let s2 = notification_snapshots(&paths).unwrap();
+    assert_eq!(PROBE_READS.with(|c| c.get()), 1);
+    assert_eq!(s2.streams[0].events, s1.streams[0].events);
+
+    // 3. Modifying events.jsonl invalidates GROK_PROBE_CACHE and picks up the new in-progress turn.
+    use std::io::Write;
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&events_path)
+            .unwrap(),
+        "{{\"type\":\"turn_started\",\"session_id\":\"{id}\",\"session_relationship\":\"primary\",\"ts\":\"2026-10-30T01:01:00Z\"}}"
+    )
+    .unwrap();
+    let s3 = notification_snapshots(&paths).unwrap();
+    assert_eq!(PROBE_READS.with(|c| c.get()), 2);
+    assert_eq!(s3.streams[0].record_count, 3);
+    assert_eq!(s3.streams[0].settled_count, 3);
+
+    fs::remove_dir_all(paths.home).unwrap();
+}

@@ -2333,3 +2333,36 @@ fn execute_claude_delete_rejects_out_of_bounds_running_and_stops_on_partial_fail
             .contains("native-fixture"));
     }
 }
+
+#[test]
+fn notification_snapshots_reuse_lightweight_probe_cache_without_rereading_or_touching_detail_cache()
+{
+    let f = Fixture::new();
+    f.complete();
+
+    reader::BODY_RECORDS.with(|c| c.set(0));
+    let first = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(first.errors, 0);
+    assert_eq!(first.streams.len(), 1);
+    assert_eq!(first.streams[0].events.len(), 1);
+    let parsed_first = reader::BODY_RECORDS.with(|c| c.get());
+    assert!(parsed_first >= 2);
+
+    // Unchanged transcript on subsequent 15s scan: 0 JSONL lines parsed!
+    reader::BODY_RECORDS.with(|c| c.set(0));
+    let second = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(reader::BODY_RECORDS.with(|c| c.get()), 0);
+    assert_eq!(second.streams[0].events, first.streams[0].events);
+
+    // Appending a new turn invalidates the lightweight probe cache entry and detects the update.
+    f.append(&f.row("u2", Some("a1"), "user", json!("Follow-up question")));
+    f.append(&f.row(
+        "a2",
+        Some("u2"),
+        "assistant",
+        json!([{"type":"text","text":"Second reply"}]),
+    ));
+    let third = notification_snapshots(&f.paths).unwrap();
+    assert!(reader::BODY_RECORDS.with(|c| c.get()) >= 4);
+    assert_eq!(third.streams[0].events.len(), 2);
+}

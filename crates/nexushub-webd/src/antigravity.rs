@@ -13,14 +13,53 @@ use std::{
 
 const SERVICE: &str = "/exa.language_server_pb.LanguageServerService/";
 const LIMIT: usize = nexushub_core::resource_limits::ANTIGRAVITY_LOCAL_RPC_BYTES;
-static CACHE: tokio::sync::Mutex<
-    VecDeque<(String, String, NativeStreamSnapshot, std::time::Instant)>,
-> = tokio::sync::Mutex::const_new(VecDeque::new());
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SlimExecMeta {
+    execution_id: String,
+    last_step_idx: Option<u64>,
+    termination_reason: String,
+    proceeded_with_auto_continue: bool,
+}
+
+impl SlimExecMeta {
+    fn from_value(value: &Value) -> Option<Self> {
+        Some(Self {
+            execution_id: value["executionId"].as_str()?.to_owned(),
+            last_step_idx: value["lastStepIdx"].as_u64(),
+            termination_reason: value["terminationReason"].as_str().unwrap_or("").to_owned(),
+            proceeded_with_auto_continue: value["proceededWithAutoContinue"].as_bool()
+                == Some(true),
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "executionId": self.execution_id,
+            "lastStepIdx": self.last_step_idx,
+            "terminationReason": self.termination_reason,
+            "proceededWithAutoContinue": self.proceeded_with_auto_continue,
+        })
+    }
+}
+
+type SnapshotCacheEntry = (String, String, NativeStreamSnapshot, std::time::Instant);
+type MetaCacheEntry = (String, String, Vec<SlimExecMeta>, std::time::Instant);
+
+static CACHE: tokio::sync::Mutex<VecDeque<SnapshotCacheEntry>> =
+    tokio::sync::Mutex::const_new(VecDeque::new());
+static META_CACHE: tokio::sync::Mutex<VecDeque<MetaCacheEntry>> =
+    tokio::sync::Mutex::const_new(VecDeque::new());
 
 pub async fn evict_idle_cache(max_idle: Duration) {
-    let mut cache = CACHE.lock().await;
     let now = std::time::Instant::now();
-    cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+    {
+        let mut cache = CACHE.lock().await;
+        cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+    }
+    {
+        let mut meta_cache = META_CACHE.lock().await;
+        meta_cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+    }
 }
 struct Endpoint {
     pid: u32,
@@ -374,7 +413,7 @@ fn parse_ps_etime_ms(raw: &str) -> Option<i64> {
     total_secs.checked_mul(1_000)
 }
 
-fn read_ps_ppid_etime() -> Option<String> {
+fn read_ps_process_table() -> Option<String> {
     #[cfg(unix)]
     {
         let bin = if std::path::Path::new("/bin/ps").is_file() {
@@ -383,7 +422,7 @@ fn read_ps_ppid_etime() -> Option<String> {
             "ps"
         };
         let out = std::process::Command::new(bin)
-            .args(["-axo", "ppid=,etime="])
+            .args(["-ww", "-axo", "pid=,ppid=,etime=,command="])
             .output()
             .ok()?;
         out.status
@@ -397,37 +436,214 @@ fn read_ps_ppid_etime() -> Option<String> {
     }
 }
 
-fn has_active_child_process_since(parent_pid: u32, since_ms: i64, now_ms: i64) -> bool {
-    if parent_pid == 0 {
+fn normalize_ws(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn command_looks_like_daemon(norm_cmd: &str) -> bool {
+    let lower = norm_cmd.to_ascii_lowercase();
+    lower.starts_with("nohup ")
+        || lower.contains(" nohup ")
+        || lower.contains(" --daemon")
+        || lower.ends_with(" &")
+}
+
+fn process_command_matches_spec(proc_cmd: &str, spec_cmd: &str) -> bool {
+    let norm_proc = normalize_ws(proc_cmd);
+    let norm_spec = normalize_ws(spec_cmd);
+    if norm_proc.is_empty() || norm_spec.is_empty() || command_looks_like_daemon(&norm_proc) {
         return false;
     }
-    let Some(table) = read_ps_ppid_etime() else {
+    if norm_proc.contains(&norm_spec) {
+        return true;
+    }
+    // Compound shell pipelines (`cd dir && cargo test -p foo`) spawn subcommands as descendants.
+    norm_spec
+        .split(['&', ';', '|', '\n'])
+        .map(normalize_ws)
+        .filter(|seg| seg.len() >= 6 && !seg.starts_with("cd "))
+        .any(|seg| norm_proc.contains(&seg))
+}
+
+fn ps_table_matches_untracked_commands(
+    table: &str,
+    root_pid: u32,
+    specs: &[antigravity::UntrackedCommandSpec],
+    now_ms: i64,
+) -> bool {
+    if root_pid == 0 || specs.is_empty() {
+        return false;
+    }
+    const MAX_COMMAND_AGE_MS: i64 = 4 * 3_600 * 1_000;
+    const EARLY_CLOCK_SLACK_MS: i64 = 5_000;
+    const LATE_SPAWN_WINDOW_MS: i64 = 15_000;
+
+    let mut rows: Vec<(u32, u32, i64, &str)> = Vec::new();
+    for line in table.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((pid_str, rest)) = trimmed.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(pid) = pid_str.parse::<u32>().ok() else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some((ppid_str, rest)) = rest.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(ppid) = ppid_str.parse::<u32>().ok() else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some((etime_str, cmd)) = rest.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(elapsed_ms) = parse_ps_etime_ms(etime_str) else {
+            continue;
+        };
+        let cmd = cmd.trim();
+        if !cmd.is_empty() {
+            rows.push((pid, ppid, elapsed_ms, cmd));
+        }
+    }
+
+    let mut descendants = BTreeSet::new();
+    let mut frontier = BTreeSet::from([root_pid]);
+    for _ in 0..16 {
+        let mut next_frontier = BTreeSet::new();
+        for &(pid, ppid, _, _) in &rows {
+            if pid != root_pid && frontier.contains(&ppid) && descendants.insert(pid) {
+                next_frontier.insert(pid);
+            }
+        }
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
+    }
+    if descendants.is_empty() {
+        return false;
+    }
+
+    rows.into_iter().any(|(pid, _, elapsed_ms, cmd)| {
+        if !descendants.contains(&pid) || elapsed_ms > MAX_COMMAND_AGE_MS {
+            return false;
+        }
+        let start_ms = now_ms.saturating_sub(elapsed_ms);
+        specs.iter().any(|spec| {
+            spec.spawn_ms > 0
+                && start_ms >= spec.spawn_ms.saturating_sub(EARLY_CLOCK_SLACK_MS)
+                && start_ms <= spec.spawn_ms.saturating_add(LATE_SPAWN_WINDOW_MS)
+                && process_command_matches_spec(cmd, &spec.command_line)
+        })
+    })
+}
+
+fn has_matching_active_child_process(
+    root_pid: u32,
+    specs: &[antigravity::UntrackedCommandSpec],
+    now_ms: i64,
+) -> bool {
+    if root_pid == 0 || specs.is_empty() {
+        return false;
+    }
+    let Some(table) = read_ps_process_table() else {
         return false;
     };
-    const MAX_COMMAND_AGE_MS: i64 = 4 * 3_600 * 1_000;
-    const CLOCK_SKEW_SLACK_MS: i64 = 5_000;
-    table.lines().any(|line| {
-        let mut cols = line.split_whitespace();
-        let Some(ppid) = cols.next().and_then(|s| s.parse::<u32>().ok()) else {
-            return false;
-        };
-        if ppid != parent_pid {
-            return false;
+    ps_table_matches_untracked_commands(&table, root_pid, specs, now_ms)
+}
+
+async fn fetch_incremental_executor_metadatas(
+    client: &reqwest::Client,
+    port: u16,
+    token: &str,
+    id: &str,
+    trajectory_id: &str,
+) -> Result<Option<Vec<Value>>> {
+    let mut cached: Vec<SlimExecMeta> = {
+        let cache = META_CACHE.lock().await;
+        cache
+            .iter()
+            .find(|(cid, tid, _, _)| cid == id && tid == trajectory_id)
+            .map(|(_, _, metas, _)| metas.clone())
+            .unwrap_or_default()
+    };
+    let mut start_offset = cached.len().saturating_sub(1);
+    let mut retried_from_zero = false;
+
+    loop {
+        cached.truncate(start_offset);
+        let mut cursor = start_offset;
+        let mut diverged = false;
+        loop {
+            if cached.len() >= 20_000 {
+                return Ok(None);
+            }
+            let page = query(
+                client,
+                port,
+                token,
+                "GetCascadeTrajectoryExecutorMetadatas",
+                json!({"cascadeId": id, "executorMetadataOffset": cursor}),
+            )
+            .await?;
+            let Some(batch) = page["executorMetadata"]
+                .as_array()
+                .or_else(|| page["executorMetadatas"].as_array())
+                .filter(|b| !b.is_empty())
+            else {
+                if cursor == start_offset && start_offset > 0 && !retried_from_zero {
+                    diverged = true;
+                }
+                break;
+            };
+            let mut parsed_batch = Vec::with_capacity(batch.len());
+            for raw in batch {
+                let Some(slim) = SlimExecMeta::from_value(raw) else {
+                    return Ok(None);
+                };
+                parsed_batch.push(slim);
+            }
+            if cursor == start_offset && start_offset > 0 && !retried_from_zero {
+                // Verify overlap continuity when possible by ensuring no duplicate pre-anchor ID.
+                if cached
+                    .last()
+                    .is_some_and(|prev| prev.execution_id == parsed_batch[0].execution_id)
+                {
+                    diverged = true;
+                    break;
+                }
+            }
+            cursor += parsed_batch.len();
+            cached.extend(parsed_batch);
         }
-        let Some(elapsed_ms) = cols.next().and_then(parse_ps_etime_ms) else {
-            return false;
-        };
-        if elapsed_ms > MAX_COMMAND_AGE_MS {
-            return false;
+        if diverged {
+            retried_from_zero = true;
+            start_offset = 0;
+            cached.clear();
+            continue;
         }
-        if since_ms <= 0 {
-            return true;
+        break;
+    }
+
+    let serialized: Vec<Value> = cached.iter().map(SlimExecMeta::to_value).collect();
+    {
+        let mut cache = META_CACHE.lock().await;
+        cache.retain(|(cid, _, _, _)| cid != id);
+        cache.push_back((
+            id.to_owned(),
+            trajectory_id.to_owned(),
+            cached,
+            std::time::Instant::now(),
+        ));
+        while cache.len() > 64 {
+            cache.pop_front();
         }
-        now_ms
-            .saturating_sub(elapsed_ms)
-            .saturating_add(CLOCK_SKEW_SLACK_MS)
-            >= since_ms
-    })
+    }
+    Ok(Some(serialized))
 }
 
 async fn fetch_incremental_turn_trajectory(
@@ -469,28 +685,12 @@ async fn fetch_incremental_turn_trajectory(
     if offset_usize + steps.len() != total_usize {
         return Ok(None);
     }
-    let mut metas = Vec::new();
-    loop {
-        if metas.len() >= 20_000 {
-            return Ok(None);
-        }
-        let page = query(
-            client,
-            port,
-            token,
-            "GetCascadeTrajectoryExecutorMetadatas",
-            json!({"cascadeId": id, "executorMetadataOffset": metas.len()}),
-        )
-        .await?;
-        let Some(batch) = page["executorMetadata"]
-            .as_array()
-            .or_else(|| page["executorMetadatas"].as_array())
-            .filter(|b| !b.is_empty())
-        else {
-            break;
-        };
-        metas.extend(batch.iter().cloned());
-    }
+    let trajectory_id = summary["trajectoryId"].as_str().unwrap_or("");
+    let Some(metas) =
+        fetch_incremental_executor_metadatas(client, port, token, id, trajectory_id).await?
+    else {
+        return Ok(None);
+    };
     Ok(Some(json!({
         "status": summary["status"],
         "stepOffset": turn_offset,
@@ -619,8 +819,11 @@ async fn scan_at(
             summary,
             has_active_subagents
         ]))?));
-        // Revalidation always obtains fresh native terminal / interaction state.
-        let cached = if only.is_none() {
+        let is_active = summary_is_active(summary) || has_active_subagents;
+        // Revalidation (`only.is_some()`) always obtains fresh native terminal / interaction state.
+        // Settled idle streams (including idle trailing questions / awaiting /plan) reuse CACHE until
+        // `summary` or subagent liveness changes `signature`.
+        let cached = if only.is_none() && !is_active {
             let mut cache = CACHE.lock().await;
             cache
                 .iter_mut()
@@ -628,10 +831,7 @@ async fn scan_at(
                     key == id
                         && sig == &signature
                         && s.record_count == s.settled_count
-                        && !s
-                            .events
-                            .iter()
-                            .any(|e| matches!(e.kind.as_str(), "reply_needed" | "authorization"))
+                        && !s.events.iter().any(|e| e.kind == "authorization")
                 })
                 .map(|(_, _, s, touched)| {
                     *touched = std::time::Instant::now();
@@ -652,7 +852,7 @@ async fn scan_at(
             Ok(response) => {
                 let mut tasks = BTreeMap::new();
                 let mut has_active_child_processes = false;
-                if !summary_is_active(summary) && !has_active_subagents {
+                if !is_active {
                     if let Some(steps) = response["trajectory"]["steps"].as_array() {
                         let summary_traj_id = summary["trajectoryId"].as_str().unwrap_or("");
                         let pending_logs =
@@ -669,14 +869,15 @@ async fn scan_at(
                             .await
                             .unwrap_or_default();
                         }
-                        if let Some(since_ms) = antigravity::earliest_untracked_task_spawn_ms(
+                        let untracked_specs = antigravity::collect_untracked_task_commands(
                             id,
                             summary_traj_id,
                             steps,
                             &tasks,
-                        ) {
+                        );
+                        if !untracked_specs.is_empty() {
                             has_active_child_processes = tokio::task::spawn_blocking(move || {
-                                has_active_child_process_since(pid, since_ms, now_ms)
+                                has_matching_active_child_process(pid, &untracked_specs, now_ms)
                             })
                             .await
                             .unwrap_or(false);
