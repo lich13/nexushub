@@ -6,6 +6,7 @@ export const contractDtoNames = [
     "DshArchiveDeleteResult",
     "UnifiedCleanupDryRunRequest",
     "UnifiedCleanupCandidate",
+    "UnifiedCleanupTargetSelection",
     "UnifiedCleanupScopePlan",
     "UnifiedCleanupPlan",
     "UnifiedCleanupExecuteRequest",

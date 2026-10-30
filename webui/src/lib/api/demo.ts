@@ -466,8 +466,8 @@ export function demoUnifiedCleanupPlan(
       deletableCount: 2,
       estimatedBytes: 24576,
       candidates: [
-        { id: "019e-demo-a", title: "旧归档线程 A", estimatedBytes: 12288, blockedReason: null },
-        { id: "019e-demo-b", title: "旧归档线程 B", estimatedBytes: 12288, blockedReason: null }
+        { id: "019e-demo-a", title: "旧归档线程 A", estimatedBytes: 12288, fingerprint: "fp-codex-arch-a", blockedReason: null },
+        { id: "019e-demo-b", title: "旧归档线程 B", estimatedBytes: 12288, fingerprint: "fp-codex-arch-b", blockedReason: null }
       ],
       issues: []
     },
@@ -486,6 +486,7 @@ export function demoUnifiedCleanupPlan(
             id,
             title: id,
             estimatedBytes: 4096,
+            fingerprint: `fp-${id}`,
             blockedReason: null
           }))
         : [],
@@ -502,7 +503,7 @@ export function demoUnifiedCleanupPlan(
       deletableCount: macos ? 1 : 0,
       estimatedBytes: macos ? 8192 : 0,
       candidates: macos
-        ? [{ id: "ag:ag-archived-demo", title: "Antigravity 历史归档会话", estimatedBytes: 8192, blockedReason: null }]
+        ? [{ id: "ag:ag-archived-demo", title: "Antigravity 历史归档会话", estimatedBytes: 8192, fingerprint: "fp-ag-demo", blockedReason: null }]
         : [],
       issues: []
     },
@@ -516,7 +517,7 @@ export function demoUnifiedCleanupPlan(
       candidateCount: 1,
       deletableCount: 1,
       estimatedBytes: 6144,
-      candidates: [{ id: "dsh-archived-demo", title: "DSH 历史归档会话", estimatedBytes: 6144, blockedReason: null }],
+      candidates: [{ id: "dsh-archived-demo", title: "DSH 历史归档会话", estimatedBytes: 6144, fingerprint: "fp-dsh-demo", blockedReason: null }],
       issues: []
     },
     {
@@ -529,7 +530,7 @@ export function demoUnifiedCleanupPlan(
       candidateCount: 1,
       deletableCount: 1,
       estimatedBytes: 1024,
-      candidates: [{ id: "claude:empty-demo", title: "空会话残余", estimatedBytes: 1024, blockedReason: null }],
+      candidates: [{ id: "claude:empty-demo", title: "空会话残余", estimatedBytes: 1024, fingerprint: "fp-claude-demo", blockedReason: null }],
       issues: []
     },
     {

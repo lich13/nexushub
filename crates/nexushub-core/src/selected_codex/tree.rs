@@ -248,6 +248,61 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
     result
 }
 
+const DELETE_RESIDUALS_FILE: &str = ".nexushub-delete-residuals.json";
+
+fn delete_residuals_path(paths: &CodexPaths) -> PathBuf {
+    paths.home.join(DELETE_RESIDUALS_FILE)
+}
+
+fn load_recorded_delete_residuals(paths: &CodexPaths) -> BTreeSet<String> {
+    let path = delete_residuals_path(paths);
+    fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BTreeSet<String>>(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn is_recorded_delete_residual(paths: &CodexPaths, id: &str) -> bool {
+    if session_delete::valid_id(id).is_err() {
+        return false;
+    }
+    load_recorded_delete_residuals(paths).contains(id)
+}
+
+fn update_delete_residuals(paths: &CodexPaths, add: &[String], remove: &[String]) {
+    let mut current = load_recorded_delete_residuals(paths);
+    let mut changed = false;
+    for id in remove {
+        if current.remove(id) {
+            changed = true;
+        }
+    }
+    for id in add {
+        if session_delete::valid_id(id).is_ok() && current.insert(id.clone()) {
+            changed = true;
+        }
+    }
+    let target = delete_residuals_path(paths);
+    if current.is_empty() {
+        if target.exists() {
+            let _ = fs::remove_file(target);
+        }
+        return;
+    }
+    if !changed && target.exists() {
+        return;
+    }
+    if let Ok(payload) = serde_json::to_vec(&current) {
+        let tmp = paths.home.join(format!(
+            ".nexushub-delete-residuals.{}.tmp",
+            uuid::Uuid::new_v4()
+        ));
+        if fs::write(&tmp, payload).is_ok() && fs::rename(&tmp, &target).is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+}
+
 pub(crate) fn has_orphan_artifacts(paths: &CodexPaths, id: &str) -> bool {
     if session_delete::valid_id(id).is_err() {
         return false;
@@ -565,7 +620,7 @@ pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutc
         }
     }
     outcome.finish();
-    let deleted_ids = if database.exists() {
+    let deleted_ids: Vec<String> = if database.exists() {
         Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .ok()
             .map(|conn| {
@@ -580,6 +635,11 @@ pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutc
     } else {
         ids.into_iter().collect()
     };
+    if outcome.residuals.is_empty() {
+        update_delete_residuals(paths, &[], &deleted_ids);
+    } else if !deleted_ids.is_empty() {
+        update_delete_residuals(paths, &deleted_ids, &[]);
+    }
     Ok(DeleteOutcome {
         deleted_ids,
         error: (!outcome.residuals.is_empty()).then(|| "部分内容未删除，请查看逐项结果".into()),

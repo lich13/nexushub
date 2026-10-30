@@ -1447,6 +1447,10 @@
       "core": "UnifiedCleanupCandidate",
       "webui": "UnifiedCleanupCandidate"
     },
+    "UnifiedCleanupTargetSelection": {
+      "core": "UnifiedCleanupTargetSelection",
+      "webui": "UnifiedCleanupTargetSelection"
+    },
     "UnifiedCleanupScopePlan": {
       "core": "UnifiedCleanupScopePlan",
       "webui": "UnifiedCleanupScopePlan"

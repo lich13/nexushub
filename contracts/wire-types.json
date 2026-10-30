@@ -488,6 +488,10 @@
       "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupScopeResult",
       "ts": "webui/src/types.ts#UnifiedCleanupScopeResult"
     },
+    "UnifiedCleanupTargetSelection": {
+      "rust": "crates/nexushub-core/src/services/cleanup.rs#UnifiedCleanupTargetSelection",
+      "ts": "webui/src/types.ts#UnifiedCleanupTargetSelection"
+    },
     "UpdatesCheckResponse": {
       "freeJson": "Existing Value or inline adapter envelope; preserve the action request/response and adapter contract tests.",
       "ts": "webui/src/lib/api/updates.ts#UpdateActionResult"
@@ -5957,6 +5961,13 @@
             "type": "u64"
           },
           {
+            "name": "fingerprint",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
+          },
+          {
             "name": "blocked_reason",
             "serde": [],
             "type": "Option < String >"
@@ -6002,6 +6013,13 @@
               "serde (default)"
             ],
             "type": "Vec < String >"
+          },
+          {
+            "name": "targets",
+            "serde": [
+              "serde (default)"
+            ],
+            "type": "Vec < UnifiedCleanupTargetSelection >"
           }
         ],
         "kind": "struct",
@@ -6184,6 +6202,31 @@
             "name": "issues",
             "serde": [],
             "type": "Vec < String >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "UnifiedCleanupTargetSelection": {
+        "fields": [
+          {
+            "name": "scope",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "id",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "fingerprint",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
@@ -10938,6 +10981,7 @@
         "fn scope_meta (scope : & str) -> Result < (& 'static str , & 'static str) >",
         "fn dry_run_single_scope (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , scope : & str , scan_hidden : bool ,) -> Result < UnifiedCleanupScopePlan >",
         "fn dry_run_unified_with_capability (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , request : UnifiedCleanupDryRunRequest ,) -> Result < UnifiedCleanupPlan >",
+        "fn validate_unified_target_id (scope : & str , id : & str) -> Result < () >",
         "fn execute_unified_with_capability (platform : & PlatformPaths , paths : & UnifiedCleanupPaths , request : UnifiedCleanupExecuteRequest ,) -> Result < UnifiedCleanupResult >"
       ]
     },
@@ -12018,10 +12062,11 @@
         "DshArchiveDeleteRequest": "exporttypeDshArchiveDeleteRequest={confirmed:boolean;targets:DshArchiveSelection[]};",
         "DshArchiveDeleteResult": "exporttypeDshArchiveDeleteResult={items:HiddenThreadItemResult[];deletedThreads:number;deletedBytes:number};",
         "UnifiedCleanupDryRunRequest": "exporttypeUnifiedCleanupDryRunRequest={scopes?:string[];includeCodexHidden?:boolean};",
-        "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;blockedReason:string|null;};",
+        "UnifiedCleanupCandidate": "exporttypeUnifiedCleanupCandidate={id:string;title:string;estimatedBytes:number;fingerprint?:string|null;blockedReason:string|null;};",
+        "UnifiedCleanupTargetSelection": "exporttypeUnifiedCleanupTargetSelection={scope:string;id:string;fingerprint?:string|null;};",
         "UnifiedCleanupScopePlan": "exporttypeUnifiedCleanupScopePlan={scope:string;provider:string;label:string;supported:boolean;scanned:boolean;unavailableReason:string|null;candidateCount:number;deletableCount:number;estimatedBytes:number;candidates:UnifiedCleanupCandidate[];issues:string[];};",
         "UnifiedCleanupPlan": "exporttypeUnifiedCleanupPlan={totalCandidates:number;totalDeletable:number;totalEstimatedBytes:number;scopes:UnifiedCleanupScopePlan[];};",
-        "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[]};",
+        "UnifiedCleanupExecuteRequest": "exporttypeUnifiedCleanupExecuteRequest={confirmed:boolean;scopes?:string[];targets?:UnifiedCleanupTargetSelection[];};",
         "UnifiedCleanupScopeResult": "exporttypeUnifiedCleanupScopeResult={scope:string;provider:string;label:string;deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;residuals:string[];issues:string[];};",
         "UnifiedCleanupResult": "exporttypeUnifiedCleanupResult={deletedCount:number;skippedCount:number;failedCount:number;deletedBytes:number;stoppedEarly:boolean;scopes:UnifiedCleanupScopeResult[];};"
       },

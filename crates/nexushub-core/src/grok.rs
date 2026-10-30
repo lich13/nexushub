@@ -1,6 +1,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -1058,9 +1059,63 @@ impl<'a> DeletionContext<'a> {
     }
 }
 
+pub(crate) fn grok_fingerprint(located: &[PathBuf]) -> Result<String> {
+    let mut sorted = located.to_vec();
+    sorted.sort();
+    let mut hash = Sha256::new();
+    hash.update(b"grok:v1\0");
+    for root in &sorted {
+        let mut entries = Vec::new();
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .follow_root_links(false)
+        {
+            let entry = entry?;
+            let rel = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .into_owned();
+            entries.push((rel, entry.into_path()));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        hash.update(b"root\0");
+        for (rel, path) in entries {
+            let meta = fs::symlink_metadata(&path)?;
+            hash.update(rel.as_bytes());
+            hash.update(b"\0");
+            if meta.file_type().is_symlink() {
+                hash.update(b"L");
+                if let Ok(target) = fs::read_link(&path) {
+                    hash.update(target.to_string_lossy().as_bytes());
+                }
+            } else if meta.is_dir() {
+                hash.update(b"D");
+            } else {
+                hash.update(b"F");
+                hash.update(meta.len().to_le_bytes());
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        hash.update(dur.as_secs().to_le_bytes());
+                        hash.update(dur.subsec_nanos().to_le_bytes());
+                    }
+                }
+                if meta.len() <= 64 * 1024 {
+                    if let Ok(bytes) = fs::read(&path) {
+                        hash.update(&bytes);
+                    }
+                }
+            }
+            hash.update(b"\n");
+        }
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
 pub(crate) fn find_empty_inactive_sessions(
     paths: &GrokPaths,
-) -> Result<Vec<(GrokSessionSummary, u64)>> {
+) -> Result<Vec<(GrokSessionSummary, String, u64)>> {
     let root = paths.sessions();
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -1119,8 +1174,11 @@ pub(crate) fn find_empty_inactive_sessions(
             {
                 continue;
             }
+            let Ok(fp) = grok_fingerprint(&located) else {
+                continue;
+            };
             let (_, bytes) = crate::session_delete::size(&located);
-            out.push((summary, bytes));
+            out.push((summary, fp, bytes));
         }
     }
     Ok(out)
@@ -1147,6 +1205,14 @@ pub fn execute_grok_delete(
         ensure!(
             snapshot.ownership(&summary) != activity::Ownership::Open,
             "Grok 会话正在运行，请先退出后再删除"
+        );
+    }
+    let expected_fp = request.fingerprint.trim();
+    if !expected_fp.is_empty() {
+        ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");
+        ensure!(
+            grok_fingerprint(&located)? == expected_fp,
+            "Grok 会话已变化，请重新预览"
         );
     }
     let mut outcome = crate::session_delete::Outcome::default();

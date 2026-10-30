@@ -141,7 +141,7 @@ async fn run_hidden_scan_fixture(
     );
     assert!(candidates
         .iter()
-        .all(|candidate| candidate.allowed && candidate.fingerprint.is_none()));
+        .all(|candidate| candidate.allowed && candidate.fingerprint.is_some()));
 
     let expected_ids = fixture.hidden_ids.iter().cloned().collect::<BTreeSet<_>>();
     let candidate_ids = candidates

@@ -449,7 +449,7 @@ impl SessionUseCases {
                             crate::claude::ClaudeDeleteRequest {
                                 session_key: item.session_key.clone(),
                                 confirmed: true,
-                                fingerprint: String::new(),
+                                fingerprint: item.fingerprint.clone(),
                             },
                         )?;
                         result.residuals = outcome.residuals;
@@ -463,7 +463,7 @@ impl SessionUseCases {
                             grok::GrokDeleteRequest {
                                 id: item.session_key.clone(),
                                 confirmed: true,
-                                fingerprint: String::new(),
+                                fingerprint: item.fingerprint.clone(),
                             },
                         )?;
                         result.residuals = outcome.residuals;

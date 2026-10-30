@@ -58,7 +58,11 @@ test("Probe rejects duplicate save events before pending state renders", async (
 
 test("unified cross-platform cleanup requires preview, explicit confirmation, and visible failure", async ({ page }) => {
   await mockApi(page);
-  const executed: Array<{ confirmed: boolean; scopes?: string[] }> = [];
+  const executed: Array<{
+    confirmed: boolean;
+    scopes?: string[];
+    targets?: Array<{ scope: string; id: string; fingerprint?: string | null }>;
+  }> = [];
   await mockCommand(page, "cleanup.unifiedExecute", args => {
     executed.push(args.request);
     return Promise.reject(new Error("Fixture count changed; run a new preview"));
@@ -82,6 +86,8 @@ test("unified cross-platform cleanup requires preview, explicit confirmation, an
   expect(executed[0].confirmed).toBe(true);
   expect(executed[0].scopes).not.toContain("antigravity_archived");
   expect(executed[0].scopes?.length).toBeGreaterThan(0);
+  expect(executed[0].targets?.length).toBeGreaterThan(0);
+  expect(executed[0].targets?.every((t) => t.scope !== "antigravity_archived" && Boolean(t.fingerprint))).toBe(true);
   await assertContrast(page, ".form-error, .status-chip, .danger-button");
 });
 

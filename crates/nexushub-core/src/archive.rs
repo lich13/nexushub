@@ -1,9 +1,10 @@
 use crate::codex::{hidden_thread_metadata_category, CodexPaths, ThreadVisibilityMetadata};
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fs,
     path::Path,
 };
@@ -146,9 +147,15 @@ pub fn execute_delete_archived(
         delete_candidates(paths, candidates, |candidate| -> Result<()> {
             crate::session_delete::valid_id(&candidate.id)?;
             if allowed.contains(candidate.id.as_str()) {
+                if let Some(req_fp) = candidate.fingerprint.as_deref().filter(|s| !s.is_empty()) {
+                    if let Some(cur_fp) = codex_thread_fingerprint(paths, &candidate.id)? {
+                        anyhow::ensure!(req_fp == cur_fp, "归档线程指纹已变化，请重新预览");
+                    }
+                }
                 return Ok(());
             }
             if !existing.contains(&candidate.id)
+                && crate::selected_codex::tree::is_recorded_delete_residual(paths, &candidate.id)
                 && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
             {
                 return Ok(());
@@ -266,6 +273,7 @@ pub fn execute_delete_hidden(
                 return Ok(());
             }
             if !existing.contains(&candidate.id)
+                && crate::selected_codex::tree::is_recorded_delete_residual(paths, &candidate.id)
                 && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
             {
                 return Ok(());
@@ -372,18 +380,19 @@ pub(crate) fn scan_hidden(
     plan.session_index_lines = count_lines(&paths.session_index()).unwrap_or(0);
     plan.rollout_files = count_rollout_files(&paths.sessions_dir()).unwrap_or(0);
     emit(&plan, None)?;
+    let row_by_id: BTreeMap<&str, &HiddenVisibilityRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
     for id in &plan.hidden_ids {
         work.check()?;
-        let title = rows
-            .iter()
-            .find(|row| &row.id == id)
-            .map_or_else(|| id.clone(), |row| row.title.clone());
+        let row = row_by_id.get(id.as_str()).copied();
+        let title = row.map_or_else(|| id.clone(), |r| r.title.clone());
+        let fingerprint = row.map(|r| r.fingerprint.clone());
         emit(
             &plan,
             Some(HiddenThreadCandidate {
                 id: id.clone(),
                 title,
-                fingerprint: None,
+                fingerprint,
                 allowed: true,
                 reason: None,
             }),
@@ -398,6 +407,223 @@ struct HiddenVisibilityRow {
     title: String,
     archived: bool,
     hidden_category: Option<String>,
+    parent_ids: Vec<String>,
+    fingerprint: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn codex_row_fingerprint(
+    id: &str,
+    archived: bool,
+    updated_tag: &str,
+    thread_source: Option<&str>,
+    source: Option<&str>,
+    parent_thread_id: Option<&str>,
+    has_user_event: Option<i64>,
+    title: Option<&str>,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"codex:v1\0");
+    for part in [
+        id,
+        if archived { "1" } else { "0" },
+        updated_tag,
+        thread_source.unwrap_or(""),
+        source.unwrap_or(""),
+        parent_thread_id.unwrap_or(""),
+        title.unwrap_or(""),
+    ] {
+        hash.update(part.as_bytes());
+        hash.update(b"\0");
+    }
+    match has_user_event {
+        Some(v) => {
+            hash.update(b"1");
+            hash.update(v.to_le_bytes());
+        }
+        None => hash.update(b"0"),
+    }
+    hex::encode(hash.finalize())
+}
+
+fn extract_row_parents(parent_thread_id: Option<&str>, source: Option<&str>) -> Vec<String> {
+    let mut parents = Vec::new();
+    if let Some(p) = parent_thread_id.filter(|s| !s.trim().is_empty()) {
+        parents.push(p.to_string());
+    }
+    if let Some(parsed) = source.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) {
+        for ptr in [
+            "/subagent/thread_spawn/parent_thread_id",
+            "/parent_thread_id",
+        ] {
+            if let Some(p) = parsed
+                .pointer(ptr)
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                if !parents.iter().any(|existing| existing == p) {
+                    parents.push(p.to_string());
+                }
+            }
+        }
+    }
+    parents
+}
+
+struct VisibilitySelectSql {
+    select_cols: String,
+    updated_expr: String,
+}
+
+fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql {
+    let archived_condition = archived_sql_condition(columns);
+    let updated_expr = first_existing(columns, &["updated_at", "last_activity_at", "created_at"])
+        .unwrap_or("id")
+        .to_string();
+    let thread_source_expr = first_existing(columns, &["thread_source", "source_kind"])
+        .or_else(|| first_existing(columns, &["source"]))
+        .unwrap_or("NULL");
+    let source_expr = first_existing(columns, &["source"]).unwrap_or("NULL");
+    let parent_thread_expr =
+        first_existing(columns, &["parent_thread_id", "parentThreadId"]).unwrap_or("NULL");
+    let agent_path_expr = first_existing(columns, &["agent_path", "agentPath"]).unwrap_or("NULL");
+    let agent_nickname_expr =
+        first_existing(columns, &["agent_nickname", "agentNickname"]).unwrap_or("NULL");
+    let agent_role_expr = first_existing(columns, &["agent_role", "agentRole"]).unwrap_or("NULL");
+    let has_user_event_expr = first_existing(columns, &["has_user_event"]).unwrap_or("NULL");
+    let title_expr = first_existing(columns, &["title", "name"]).unwrap_or("NULL");
+    let first_user_message_expr =
+        first_existing(columns, &["first_user_message"]).unwrap_or("NULL");
+    let preview_expr = first_existing(columns, &["preview"]).unwrap_or("NULL");
+    let select_cols = format!(
+        "id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END, \
+         {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, \
+         {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr}, \
+         {first_user_message_expr}, {preview_expr}, CAST({updated_expr} AS TEXT)"
+    );
+    VisibilitySelectSql {
+        select_cols,
+        updated_expr,
+    }
+}
+
+fn decode_visibility_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HiddenVisibilityRow> {
+    let id: String = row.get(0)?;
+    let archived_flag: i64 = row.get(1)?;
+    let archived = archived_flag != 0;
+    let thread_source: Option<String> = row.get(2).ok();
+    let source: Option<String> = row.get(3).ok();
+    let parent_thread_id: Option<String> = row.get(4).ok();
+    let agent_path: Option<String> = row.get(5).ok();
+    let agent_nickname: Option<String> = row.get(6).ok();
+    let agent_role: Option<String> = row.get(7).ok();
+    let has_user_event: Option<i64> = row.get(8).ok();
+    let title: Option<String> = row.get(9).ok();
+    let first_user_message: Option<String> = row.get(10).ok();
+    let preview: Option<String> = row.get(11).ok();
+    let updated_tag: Option<String> = row.get(12).ok();
+    let hidden_category = hidden_thread_metadata_category(ThreadVisibilityMetadata {
+        thread_source: thread_source.as_deref(),
+        source: source.as_deref(),
+        parent_thread_id: parent_thread_id.as_deref(),
+        agent_path: agent_path.as_deref(),
+        agent_nickname: agent_nickname.as_deref(),
+        agent_role: agent_role.as_deref(),
+        has_user_event,
+        title: title.as_deref(),
+        first_user_message: first_user_message.as_deref(),
+        preview: preview.as_deref(),
+    });
+    let fingerprint = codex_row_fingerprint(
+        &id,
+        archived,
+        updated_tag.as_deref().unwrap_or(""),
+        thread_source.as_deref(),
+        source.as_deref(),
+        parent_thread_id.as_deref(),
+        has_user_event,
+        title.as_deref(),
+    );
+    let parent_ids = extract_row_parents(parent_thread_id.as_deref(), source.as_deref());
+    Ok(HiddenVisibilityRow {
+        title: title.unwrap_or_else(|| id.clone()),
+        id,
+        archived,
+        hidden_category,
+        parent_ids,
+        fingerprint,
+    })
+}
+
+pub(crate) fn codex_thread_fingerprint(paths: &CodexPaths, id: &str) -> Result<Option<String>> {
+    let db = paths.state_db();
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", db.display()))?;
+    let columns = table_columns(&conn, "threads")?;
+    let spec = build_visibility_select_sql(&columns);
+    let sql = format!("SELECT {} FROM threads WHERE id = ?1", spec.select_cols);
+    let row = conn
+        .query_row(&sql, [id], decode_visibility_row)
+        .optional()?;
+    Ok(row.map(|r| r.fingerprint))
+}
+
+/// Targeted `O(depth)` point lookup verifying `id` belongs to the current non-archived hidden
+/// thread closure in `state_5.sqlite` without scanning all threads or rollout files on disk.
+pub(crate) fn verify_hidden_target_fingerprint(
+    conn: &Connection,
+    thread_columns: &HashSet<String>,
+    has_spawn_edges: bool,
+    id: &str,
+) -> Result<Option<String>> {
+    let spec = build_visibility_select_sql(thread_columns);
+    let row_sql = format!("SELECT {} FROM threads WHERE id = ?1", spec.select_cols);
+    let Some(target_row) = conn
+        .query_row(&row_sql, [id], decode_visibility_row)
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let target_fp = target_row.fingerprint.clone();
+    if !target_row.archived && target_row.hidden_category.is_some() {
+        return Ok(Some(target_fp));
+    }
+    let mut queue: VecDeque<String> = target_row.parent_ids.into_iter().collect();
+    if has_spawn_edges {
+        let mut stmt = conn.prepare(
+            "SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = ?1",
+        )?;
+        for parent in stmt.query_map([id], |r| r.get::<_, String>(0))? {
+            queue.push_back(parent?);
+        }
+    }
+    let mut visited = BTreeSet::from([id.to_string()]);
+    while let Some(parent_id) = queue.pop_front() {
+        if !visited.insert(parent_id.clone()) {
+            continue;
+        }
+        let Some(anc) = conn
+            .query_row(&row_sql, [&parent_id], decode_visibility_row)
+            .optional()?
+        else {
+            continue;
+        };
+        if !anc.archived && anc.hidden_category.is_some() {
+            return Ok(Some(target_fp));
+        }
+        for p in anc.parent_ids {
+            queue.push_back(p);
+        }
+        if has_spawn_edges {
+            let mut stmt = conn.prepare(
+                "SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = ?1",
+            )?;
+            for parent in stmt.query_map([&parent_id], |r| r.get::<_, String>(0))? {
+                queue.push_back(parent?);
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn hidden_visibility_rows(
@@ -405,82 +631,13 @@ fn hidden_visibility_rows(
     work: &crate::scan_work::ScanWork,
 ) -> Result<Vec<HiddenVisibilityRow>> {
     let columns = table_columns(conn, "threads")?;
-    let archived_condition = archived_sql_condition(&columns);
-    let updated_expr = first_existing(&columns, &["updated_at", "last_activity_at", "created_at"])
-        .unwrap_or("id")
-        .to_string();
-    let thread_source_expr = first_existing(&columns, &["thread_source", "source_kind"])
-        .or_else(|| first_existing(&columns, &["source"]))
-        .unwrap_or("NULL")
-        .to_string();
-    let source_expr = first_existing(&columns, &["source"])
-        .unwrap_or("NULL")
-        .to_string();
-    let parent_thread_expr = first_existing(&columns, &["parent_thread_id", "parentThreadId"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_path_expr = first_existing(&columns, &["agent_path", "agentPath"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_nickname_expr = first_existing(&columns, &["agent_nickname", "agentNickname"])
-        .unwrap_or("NULL")
-        .to_string();
-    let agent_role_expr = first_existing(&columns, &["agent_role", "agentRole"])
-        .unwrap_or("NULL")
-        .to_string();
-    let has_user_event_expr = first_existing(&columns, &["has_user_event"])
-        .unwrap_or("NULL")
-        .to_string();
-    let title_expr = first_existing(&columns, &["title", "name"])
-        .unwrap_or("NULL")
-        .to_string();
-    let first_user_message_expr = first_existing(&columns, &["first_user_message"])
-        .unwrap_or("NULL")
-        .to_string();
-    let preview_expr = first_existing(&columns, &["preview"])
-        .unwrap_or("NULL")
-        .to_string();
+    let spec = build_visibility_select_sql(&columns);
     let sql = format!(
-        "SELECT id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END,
-                {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr},
-                {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {title_expr},
-                {first_user_message_expr}, {preview_expr}
-         FROM threads
-         ORDER BY {updated_expr} DESC, id"
+        "SELECT {} FROM threads ORDER BY {} DESC, id",
+        spec.select_cols, spec.updated_expr
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
-        let id: String = row.get(0)?;
-        let archived: i64 = row.get(1)?;
-        let thread_source: Option<String> = row.get(2).ok();
-        let source: Option<String> = row.get(3).ok();
-        let parent_thread_id: Option<String> = row.get(4).ok();
-        let agent_path: Option<String> = row.get(5).ok();
-        let agent_nickname: Option<String> = row.get(6).ok();
-        let agent_role: Option<String> = row.get(7).ok();
-        let has_user_event: Option<i64> = row.get(8).ok();
-        let title: Option<String> = row.get(9).ok();
-        let first_user_message: Option<String> = row.get(10).ok();
-        let preview: Option<String> = row.get(11).ok();
-        let hidden_category = hidden_thread_metadata_category(ThreadVisibilityMetadata {
-            thread_source: thread_source.as_deref(),
-            source: source.as_deref(),
-            parent_thread_id: parent_thread_id.as_deref(),
-            agent_path: agent_path.as_deref(),
-            agent_nickname: agent_nickname.as_deref(),
-            agent_role: agent_role.as_deref(),
-            has_user_event,
-            title: title.as_deref(),
-            first_user_message: first_user_message.as_deref(),
-            preview: preview.as_deref(),
-        });
-        Ok(HiddenVisibilityRow {
-            title: title.unwrap_or_else(|| id.clone()),
-            id,
-            archived: archived != 0,
-            hidden_category,
-        })
-    })?;
+    let rows = stmt.query_map([], decode_visibility_row)?;
     let mut result = Vec::new();
     for row in rows {
         let row = row?;
@@ -747,30 +904,76 @@ mod tests {
     }
 
     #[test]
-    fn hidden_delete_finishes_missing_rows_and_removes_indexed_files() {
-        let root = hidden_cleanup_fixture("missing-row");
+    fn hidden_delete_rejects_unindexed_orphans_but_allows_recorded_partial_delete_residual_retry() {
+        let root = hidden_cleanup_fixture("orphan-vs-residual");
         let paths = CodexPaths::new(&root);
+
+        // 1. Pre-migration / unindexed orphan rollout (absent from `threads` and never partially
+        //    deleted by NexusHub) must be strictly rejected by both archived and hidden delete.
+        let orphan_id = "unindexed-pre-migration";
+        let orphan_rollout = root
+            .join("sessions")
+            .join(format!("rollout-{orphan_id}.jsonl"));
+        fs::write(&orphan_rollout, valid_completed_rollout(orphan_id)).unwrap();
+        let orphan_sel = [HiddenThreadSelection {
+            id: orphan_id.into(),
+            fingerprint: None,
+        }];
+        let archived_orphan = super::execute_delete_archived(&paths, &orphan_sel).unwrap();
+        assert_eq!(archived_orphan.items[0].status, "failed");
+        assert!(orphan_rollout.exists());
+
+        let hidden_orphan = execute_delete_hidden(&paths, &orphan_sel).unwrap();
+        assert_eq!(hidden_orphan.failed_threads, 1);
+        assert!(orphan_rollout.exists());
+
+        // 2. Genuine partial failure where `state_5.sqlite` row is deleted but secondary
+        //    `thread_history_1.sqlite` fails records a controlled residual, allowing clean retry.
         let plan = plan_delete_hidden(&paths).unwrap();
         let selected = selection(&plan, "hidden-subagent");
-        let rollout = root.join("sessions/rollout-hidden-subagent.jsonl");
-        use std::io::Write;
-        writeln!(
-            fs::OpenOptions::new()
-                .append(true)
-                .open(paths.session_index())
-                .unwrap(),
-            "{}",
-            json!({"id":"hidden-subagent","path":rollout})
-        )
-        .unwrap();
-        Connection::open(paths.state_db())
-            .unwrap()
-            .execute("DELETE FROM threads WHERE id='hidden-subagent'", [])
+        let history_db = root.join("thread_history_1.sqlite");
+        let hconn = Connection::open(&history_db).unwrap();
+        hconn
+            .execute_batch(
+                "CREATE TABLE history(thread_id TEXT NOT NULL);
+                 INSERT INTO history(thread_id) VALUES('hidden-subagent');
+                 CREATE TRIGGER fail_secondary BEFORE DELETE ON history
+                 WHEN OLD.thread_id='hidden-subagent'
+                 BEGIN SELECT RAISE(ABORT,'secondary history locked'); END;",
+            )
             .unwrap();
-        let result = execute_delete_hidden(&paths, &[selected]).unwrap();
-        assert_eq!(result.deleted_threads, 1);
-        assert_eq!(result.skipped_threads, 0);
-        assert!(!rollout.exists());
+        drop(hconn);
+
+        let first = execute_delete_hidden(&paths, std::slice::from_ref(&selected)).unwrap();
+        assert_eq!(first.failed_threads, 1);
+        assert!(!first.items[0].residuals.is_empty());
+        assert!(!thread_exists(
+            &Connection::open(paths.state_db()).unwrap(),
+            "hidden-subagent"
+        ));
+        assert!(crate::selected_codex::tree::is_recorded_delete_residual(
+            &paths,
+            "hidden-subagent"
+        ));
+
+        // Recreate a residual artifact and drop the secondary failure trigger, then retry.
+        let residual_lock = root.join("thread-writer-locks/hidden-subagent.lock");
+        fs::create_dir_all(residual_lock.parent().unwrap()).unwrap();
+        fs::write(&residual_lock, b"").unwrap();
+        Connection::open(&history_db)
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_secondary;")
+            .unwrap();
+
+        let retry = execute_delete_hidden(&paths, &[selected]).unwrap();
+        assert_eq!(retry.deleted_threads, 1);
+        assert_eq!(retry.failed_threads, 0);
+        assert!(!residual_lock.exists());
+        assert!(!crate::selected_codex::tree::is_recorded_delete_residual(
+            &paths,
+            "hidden-subagent"
+        ));
+        assert!(orphan_rollout.exists());
         assert!(thread_exists(
             &Connection::open(paths.state_db()).unwrap(),
             "hidden-internal"

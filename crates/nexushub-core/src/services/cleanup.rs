@@ -70,7 +70,18 @@ pub struct UnifiedCleanupCandidate {
     pub id: String,
     pub title: String,
     pub estimated_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
     pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnifiedCleanupTargetSelection {
+    pub scope: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +115,8 @@ pub struct UnifiedCleanupExecuteRequest {
     pub confirmed: bool,
     #[serde(default)]
     pub scopes: Vec<String>,
+    #[serde(default)]
+    pub targets: Vec<UnifiedCleanupTargetSelection>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,11 +437,15 @@ fn dry_run_single_scope(
                                 (t, p.selected.bytes)
                             })
                             .unwrap_or_else(|_| (id.clone(), 0));
+                    let fingerprint = archive::codex_thread_fingerprint(&paths.codex, &id)
+                        .ok()
+                        .flatten();
                     out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
                     out.candidates.push(UnifiedCleanupCandidate {
                         id,
                         title,
                         estimated_bytes: bytes,
+                        fingerprint,
                         blocked_reason: None,
                     });
                 }
@@ -464,6 +481,7 @@ fn dry_run_single_scope(
                             id: c.id,
                             title,
                             estimated_bytes: bytes,
+                            fingerprint: c.fingerprint,
                             blocked_reason,
                         });
                     }
@@ -508,6 +526,7 @@ fn dry_run_single_scope(
                                     id: summary.session_key,
                                     title: summary.title,
                                     estimated_bytes: preview.bytes,
+                                    fingerprint: preview.fingerprint,
                                     blocked_reason,
                                 });
                             }
@@ -521,6 +540,7 @@ fn dry_run_single_scope(
                                     id: summary.session_key,
                                     title: summary.title,
                                     estimated_bytes: bytes,
+                                    fingerprint: None,
                                     blocked_reason: Some(err.to_string()),
                                 });
                             }
@@ -548,6 +568,7 @@ fn dry_run_single_scope(
                         id: c.id,
                         title,
                         estimated_bytes: bytes,
+                        fingerprint: Some(c.archive_id),
                         blocked_reason: c.reason,
                     });
                 }
@@ -557,12 +578,13 @@ fn dry_run_single_scope(
         },
         SCOPE_CLAUDE_EMPTY => match crate::claude::find_empty_inactive_sessions(&paths.claude) {
             Ok(items) => {
-                for (summary, _fp, bytes) in items {
+                for (summary, fp, bytes) in items {
                     out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
                     out.candidates.push(UnifiedCleanupCandidate {
                         id: summary.session_key,
                         title: summary.title,
                         estimated_bytes: bytes,
+                        fingerprint: Some(fp),
                         blocked_reason: None,
                     });
                 }
@@ -573,12 +595,13 @@ fn dry_run_single_scope(
         },
         SCOPE_GROK_EMPTY => match crate::grok::find_empty_inactive_sessions(&paths.grok) {
             Ok(items) => {
-                for (summary, bytes) in items {
+                for (summary, fp, bytes) in items {
                     out.estimated_bytes = out.estimated_bytes.saturating_add(bytes);
                     out.candidates.push(UnifiedCleanupCandidate {
                         id: summary.id,
                         title: summary.title,
                         estimated_bytes: bytes,
+                        fingerprint: Some(fp),
                         blocked_reason: None,
                     });
                 }
@@ -625,6 +648,39 @@ pub fn dry_run_unified_with_capability(
     Ok(plan)
 }
 
+fn validate_unified_target_id(scope: &str, id: &str) -> Result<()> {
+    let trimmed = id.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty()
+            && trimmed == id
+            && !id.contains('\0')
+            && !id.contains('\\')
+            && !id.starts_with('/')
+            && !id
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == ".."),
+        "清理目标 ID 格式越界或非法: {id}"
+    );
+    match scope {
+        SCOPE_CLAUDE_EMPTY => {
+            anyhow::ensure!(
+                id.starts_with("claude:")
+                    && id.len() == 71
+                    && id[7..].bytes().all(|c| c.is_ascii_hexdigit()),
+                "Claude 清理目标键格式非法: {id}"
+            );
+        }
+        SCOPE_ANTIGRAVITY_ARCHIVED => {
+            let raw = id.strip_prefix("ag:").unwrap_or(id);
+            crate::session_delete::valid_id(raw)?;
+        }
+        _ => {
+            crate::session_delete::valid_id(id)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn execute_unified_with_capability(
     platform: &PlatformPaths,
     paths: &UnifiedCleanupPaths,
@@ -632,16 +688,64 @@ pub fn execute_unified_with_capability(
 ) -> Result<UnifiedCleanupResult> {
     require_capability(platform, Capability::ThreadCleanup)?;
     anyhow::ensure!(request.confirmed, UNIFIED_CLEANUP_CONFIRMATION_MESSAGE);
-    anyhow::ensure!(!request.scopes.is_empty(), "请至少选择一个待清理平台范围");
-    let mut ordered_scopes = Vec::new();
+    anyhow::ensure!(
+        !request.targets.is_empty(),
+        "请先扫描预览并确认待清理会话列表"
+    );
     for s in &request.scopes {
         scope_meta(s)?;
     }
+
+    let mut targets_by_scope: std::collections::BTreeMap<
+        String,
+        Vec<UnifiedCleanupTargetSelection>,
+    > = std::collections::BTreeMap::new();
+    let mut seen_pairs: std::collections::BTreeMap<(String, String), Option<String>> =
+        std::collections::BTreeMap::new();
+    for target in &request.targets {
+        scope_meta(&target.scope)?;
+        validate_unified_target_id(&target.scope, &target.id)?;
+        let norm_fp = target
+            .fingerprint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let key = (target.scope.clone(), target.id.clone());
+        if let Some(prev_fp) = seen_pairs.get(&key) {
+            anyhow::ensure!(
+                prev_fp == &norm_fp,
+                "清理目标 {} 指纹冲突，请重新预览",
+                target.id
+            );
+            continue;
+        }
+        seen_pairs.insert(key, norm_fp.clone());
+        if !request.scopes.is_empty() && !request.scopes.iter().any(|s| s == &target.scope) {
+            continue;
+        }
+        targets_by_scope
+            .entry(target.scope.clone())
+            .or_default()
+            .push(UnifiedCleanupTargetSelection {
+                scope: target.scope.clone(),
+                id: target.id.clone(),
+                fingerprint: norm_fp,
+            });
+    }
+
+    let mut ordered_scopes = Vec::new();
     for &known in ALL_UNIFIED_SCOPES {
-        if request.scopes.iter().any(|s| s == known) {
+        let explicitly_selected = if request.scopes.is_empty() {
+            targets_by_scope.contains_key(known)
+        } else {
+            request.scopes.iter().any(|s| s == known)
+        };
+        if explicitly_selected {
             ordered_scopes.push(known);
         }
     }
+    anyhow::ensure!(!ordered_scopes.is_empty(), "请至少选择一个待清理平台范围");
 
     let mut total = UnifiedCleanupResult::default();
     for scope in ordered_scopes {
@@ -659,103 +763,182 @@ pub fn execute_unified_with_capability(
             total.scopes.push(scope_res);
             continue;
         }
+        let scope_targets = targets_by_scope.remove(scope).unwrap_or_default();
+        if scope_targets.is_empty() {
+            total.scopes.push(scope_res);
+            continue;
+        }
+
         match scope {
             SCOPE_CODEX_ARCHIVED => {
                 let recomputed = archive::plan_delete_archived(&paths.codex)?;
-                if !recomputed.archived_ids.is_empty() {
-                    let mut bytes_by_id = std::collections::BTreeMap::new();
-                    let selections: Vec<_> = recomputed
-                        .archived_ids
-                        .iter()
-                        .map(|id| {
-                            let bytes =
-                                crate::selected_codex::tree::preview(&paths.codex, id, false)
-                                    .map(|p| p.selected.bytes)
-                                    .unwrap_or(0);
-                            bytes_by_id.insert(id.clone(), bytes);
-                            archive::HiddenThreadSelection {
-                                id: id.clone(),
-                                fingerprint: None,
-                            }
-                        })
-                        .collect();
-                    let res = archive::execute_delete_archived(&paths.codex, &selections)?;
-                    for item in res.items {
-                        match item.status.as_str() {
-                            "deleted" => {
-                                scope_res.deleted_count += 1;
-                                scope_res.deleted_bytes = scope_res.deleted_bytes.saturating_add(
-                                    bytes_by_id.get(&item.id).copied().unwrap_or(0),
-                                );
-                            }
-                            "skipped" => {
-                                scope_res.skipped_count += 1;
-                                if let Some(r) = item.reason {
-                                    scope_res.issues.push(format!("{}: {r}", item.id));
-                                }
-                            }
-                            _ => {
-                                scope_res.failed_count += 1;
-                                if let Some(r) = item.reason {
-                                    scope_res.issues.push(format!("{}: {r}", item.id));
-                                }
-                                scope_res.residuals.extend(item.residuals);
-                            }
+                let allowed: std::collections::HashSet<&str> =
+                    recomputed.archived_ids.iter().map(String::as_str).collect();
+                for target in scope_targets {
+                    let Some(req_fp) = target.fingerprint.as_deref() else {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 缺少预览指纹，已跳过", target.id));
+                        continue;
+                    };
+                    let is_residual = !allowed.contains(target.id.as_str())
+                        && crate::selected_codex::tree::is_recorded_delete_residual(
+                            &paths.codex,
+                            &target.id,
+                        )
+                        && crate::selected_codex::tree::has_orphan_artifacts(
+                            &paths.codex,
+                            &target.id,
+                        );
+                    if !allowed.contains(target.id.as_str()) && !is_residual {
+                        scope_res.skipped_count += 1;
+                        scope_res.issues.push(format!(
+                            "{}: 目标不在当前已归档允许集合中，已跳过",
+                            target.id
+                        ));
+                        continue;
+                    }
+                    if !is_residual {
+                        let cur_fp = archive::codex_thread_fingerprint(&paths.codex, &target.id)?;
+                        if cur_fp.as_deref() != Some(req_fp) {
+                            scope_res.skipped_count += 1;
+                            scope_res
+                                .issues
+                                .push(format!("{}: 线程状态或指纹已变化，已跳过", target.id));
+                            continue;
                         }
                     }
-                    if scope_res.failed_count > 0 || !scope_res.residuals.is_empty() {
+                    if let Err(err) = crate::selected_codex::tree::ensure_tree_not_running(
+                        &paths.codex,
+                        &target.id,
+                    ) {
+                        scope_res.failed_count += 1;
+                        scope_res.issues.push(format!("{}: {err}", target.id));
                         total.stopped_early = true;
+                        break;
+                    }
+                    let bytes =
+                        crate::selected_codex::tree::preview(&paths.codex, &target.id, false)
+                            .map(|p| p.selected.bytes)
+                            .unwrap_or(0);
+                    match crate::selected_codex::tree::execute_ids(
+                        &paths.codex,
+                        std::slice::from_ref(&target.id),
+                    ) {
+                        Ok(out) if out.error.is_none() && out.residuals.is_empty() => {
+                            scope_res.deleted_count += 1;
+                            scope_res.deleted_bytes = scope_res.deleted_bytes.saturating_add(bytes);
+                        }
+                        Ok(out) => {
+                            scope_res.failed_count += 1;
+                            if let Some(err) = out.error {
+                                scope_res.issues.push(format!("{}: {err}", target.id));
+                            }
+                            scope_res.residuals.extend(out.residuals);
+                            total.stopped_early = true;
+                            break;
+                        }
+                        Err(err) => {
+                            scope_res.failed_count += 1;
+                            scope_res.issues.push(format!("{}: {err}", target.id));
+                            total.stopped_early = true;
+                            break;
+                        }
                     }
                 }
             }
             SCOPE_CODEX_HIDDEN => {
-                let recomputed = archive::plan_delete_hidden(&paths.codex)?;
-                let mut bytes_by_id = std::collections::BTreeMap::new();
-                let mut selections = Vec::new();
-                for c in recomputed.candidates {
-                    if !c.allowed {
+                // O(K) targeted SQLite primary-key verification without full-DB or filesystem scan.
+                let db_path = paths.codex.state_db();
+                let conn = rusqlite::Connection::open_with_flags(
+                    &db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .map_err(|e| anyhow::anyhow!("open {}: {e}", db_path.display()))?;
+                let thread_cols = archive::table_columns(&conn, "threads")?;
+                let edge_cols = archive::table_columns(&conn, "thread_spawn_edges")?;
+                let has_spawn_edges =
+                    edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
+
+                for target in scope_targets {
+                    let Some(req_fp) = target.fingerprint.as_deref() else {
                         scope_res.skipped_count += 1;
-                        if let Some(r) = c.reason {
-                            scope_res.issues.push(format!("{}: {r}", c.id));
-                        }
+                        scope_res
+                            .issues
+                            .push(format!("{}: 缺少预览指纹，已跳过", target.id));
                         continue;
-                    }
-                    let bytes = crate::selected_codex::tree::preview(&paths.codex, &c.id, false)
-                        .map(|p| p.selected.bytes)
-                        .unwrap_or(0);
-                    bytes_by_id.insert(c.id.clone(), bytes);
-                    selections.push(archive::HiddenThreadSelection {
-                        id: c.id,
-                        fingerprint: c.fingerprint,
-                    });
-                }
-                if !selections.is_empty() {
-                    let res = archive::execute_delete_hidden(&paths.codex, &selections)?;
-                    for item in res.items {
-                        match item.status.as_str() {
-                            "deleted" => {
-                                scope_res.deleted_count += 1;
-                                scope_res.deleted_bytes = scope_res.deleted_bytes.saturating_add(
-                                    bytes_by_id.get(&item.id).copied().unwrap_or(0),
-                                );
-                            }
-                            "skipped" => {
-                                scope_res.skipped_count += 1;
-                                if let Some(r) = item.reason {
-                                    scope_res.issues.push(format!("{}: {r}", item.id));
-                                }
-                            }
-                            _ => {
-                                scope_res.failed_count += 1;
-                                if let Some(r) = item.reason {
-                                    scope_res.issues.push(format!("{}: {r}", item.id));
-                                }
-                                scope_res.residuals.extend(item.residuals);
-                            }
+                    };
+                    let verified_fp = archive::verify_hidden_target_fingerprint(
+                        &conn,
+                        &thread_cols,
+                        has_spawn_edges,
+                        &target.id,
+                    )?;
+                    let is_residual = verified_fp.is_none()
+                        && crate::selected_codex::tree::is_recorded_delete_residual(
+                            &paths.codex,
+                            &target.id,
+                        )
+                        && crate::selected_codex::tree::has_orphan_artifacts(
+                            &paths.codex,
+                            &target.id,
+                        );
+                    match verified_fp {
+                        Some(cur_fp) if cur_fp == req_fp => {}
+                        Some(_) => {
+                            scope_res.skipped_count += 1;
+                            scope_res
+                                .issues
+                                .push(format!("{}: 隐藏线程指纹已变化，已跳过", target.id));
+                            continue;
+                        }
+                        None if is_residual => {}
+                        None => {
+                            scope_res.skipped_count += 1;
+                            scope_res.issues.push(format!(
+                                "{}: 目标不在当前隐藏线程允许集合中，已跳过",
+                                target.id
+                            ));
+                            continue;
                         }
                     }
-                    if scope_res.failed_count > 0 || !scope_res.residuals.is_empty() {
+                    if let Err(err) = crate::selected_codex::tree::ensure_tree_not_running(
+                        &paths.codex,
+                        &target.id,
+                    ) {
+                        scope_res.failed_count += 1;
+                        scope_res.issues.push(format!("{}: {err}", target.id));
                         total.stopped_early = true;
+                        break;
+                    }
+                    let bytes =
+                        crate::selected_codex::tree::preview(&paths.codex, &target.id, false)
+                            .map(|p| p.selected.bytes)
+                            .unwrap_or(0);
+                    match crate::selected_codex::tree::execute_ids(
+                        &paths.codex,
+                        std::slice::from_ref(&target.id),
+                    ) {
+                        Ok(out) if out.error.is_none() && out.residuals.is_empty() => {
+                            scope_res.deleted_count += 1;
+                            scope_res.deleted_bytes = scope_res.deleted_bytes.saturating_add(bytes);
+                        }
+                        Ok(out) => {
+                            scope_res.failed_count += 1;
+                            if let Some(err) = out.error {
+                                scope_res.issues.push(format!("{}: {err}", target.id));
+                            }
+                            scope_res.residuals.extend(out.residuals);
+                            total.stopped_early = true;
+                            break;
+                        }
+                        Err(err) => {
+                            scope_res.failed_count += 1;
+                            scope_res.issues.push(format!("{}: {err}", target.id));
+                            total.stopped_early = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -773,45 +956,71 @@ pub fn execute_unified_with_capability(
                             q: None,
                         },
                     )?;
-                    for summary in sessions.into_iter().filter(|s| s.archived) {
+                    let allowed_keys: std::collections::HashSet<String> = sessions
+                        .into_iter()
+                        .filter(|s| s.archived)
+                        .map(|s| s.session_key)
+                        .collect();
+
+                    for target in scope_targets {
+                        let Some(req_fp) = target.fingerprint.as_deref() else {
+                            scope_res.skipped_count += 1;
+                            scope_res
+                                .issues
+                                .push(format!("{}: 缺少预览指纹，已跳过", target.id));
+                            continue;
+                        };
+                        if !allowed_keys.contains(&target.id) {
+                            scope_res.skipped_count += 1;
+                            scope_res.issues.push(format!(
+                                "{}: 目标不在当前已归档允许集合中，已跳过",
+                                target.id
+                            ));
+                            continue;
+                        }
                         let preview = match crate::antigravity::sessions::preview_batch_item(
                             &paths.antigravity,
-                            &summary.session_key,
+                            &target.id,
                             crate::services::sessions::SessionOperation::Delete,
                             true,
                         ) {
                             Ok(p) if p.allowed => p,
                             Ok(p) => {
-                                scope_res.skipped_count += 1;
+                                scope_res.failed_count += 1;
                                 if let Some(r) = p.reason {
-                                    scope_res
-                                        .issues
-                                        .push(format!("{}: {r}", summary.session_key));
+                                    scope_res.issues.push(format!("{}: {r}", target.id));
                                 }
-                                continue;
+                                total.stopped_early = true;
+                                break;
                             }
                             Err(err) => {
-                                scope_res.skipped_count += 1;
-                                scope_res
-                                    .issues
-                                    .push(format!("{}: {err}", summary.session_key));
-                                continue;
+                                scope_res.failed_count += 1;
+                                scope_res.issues.push(format!("{}: {err}", target.id));
+                                total.stopped_early = true;
+                                break;
                             }
                         };
+                        if preview.fingerprint.as_deref() != Some(req_fp) {
+                            scope_res.skipped_count += 1;
+                            scope_res
+                                .issues
+                                .push(format!("{}: 会话状态或指纹已变化，已跳过", target.id));
+                            continue;
+                        }
                         let current = crate::antigravity::sessions::session_summary(
                             &paths.antigravity,
-                            &summary.session_key,
+                            &target.id,
                         )?;
                         if !current.archived {
                             scope_res.skipped_count += 1;
                             scope_res
                                 .issues
-                                .push(format!("{}: 会话已恢复为非归档状态", summary.session_key));
+                                .push(format!("{}: 会话已恢复为非归档状态", target.id));
                             continue;
                         }
                         match crate::antigravity::sessions::execute_batch_item(
                             &paths.antigravity,
-                            &summary.session_key,
+                            &target.id,
                             crate::services::sessions::SessionOperation::Delete,
                             &preview.descendants,
                             true,
@@ -824,9 +1033,7 @@ pub fn execute_unified_with_capability(
                             Ok(item) => {
                                 scope_res.failed_count += 1;
                                 if let Some(msg) = item.message {
-                                    scope_res
-                                        .issues
-                                        .push(format!("{}: {msg}", summary.session_key));
+                                    scope_res.issues.push(format!("{}: {msg}", target.id));
                                 }
                                 scope_res.residuals.extend(item.residuals);
                                 total.stopped_early = true;
@@ -834,9 +1041,7 @@ pub fn execute_unified_with_capability(
                             }
                             Err(err) => {
                                 scope_res.failed_count += 1;
-                                scope_res
-                                    .issues
-                                    .push(format!("{}: {err}", summary.session_key));
+                                scope_res.issues.push(format!("{}: {err}", target.id));
                                 total.stopped_early = true;
                                 break;
                             }
@@ -847,24 +1052,55 @@ pub fn execute_unified_with_capability(
             SCOPE_DSH_ARCHIVED => {
                 let recomputed = crate::dsh::preview(&paths.dsh)?;
                 scope_res.issues.extend(recomputed.issues);
-                let mut targets = Vec::new();
-                for c in recomputed.candidates {
-                    if let Some(reason) = c.reason {
+                let allowed_map: std::collections::BTreeMap<
+                    &str,
+                    &crate::dsh::DshArchiveCandidate,
+                > = recomputed
+                    .candidates
+                    .iter()
+                    .map(|c| (c.id.as_str(), c))
+                    .collect();
+                let mut verified_targets = Vec::new();
+                for target in scope_targets {
+                    let Some(req_fp) = target.fingerprint.as_deref() else {
                         scope_res.skipped_count += 1;
-                        scope_res.issues.push(format!("{}: {reason}", c.id));
-                    } else {
-                        targets.push(crate::dsh::DshArchiveSelection {
-                            id: c.id,
-                            archive_id: c.archive_id,
-                        });
+                        scope_res
+                            .issues
+                            .push(format!("{}: 缺少预览指纹，已跳过", target.id));
+                        continue;
+                    };
+                    let Some(c) = allowed_map.get(target.id.as_str()) else {
+                        scope_res.skipped_count += 1;
+                        scope_res.issues.push(format!(
+                            "{}: 目标不在当前已归档允许集合中，已跳过",
+                            target.id
+                        ));
+                        continue;
+                    };
+                    if let Some(reason) = &c.reason {
+                        scope_res.failed_count += 1;
+                        scope_res.issues.push(format!("{}: {reason}", target.id));
+                        total.stopped_early = true;
+                        break;
                     }
+                    if c.archive_id != req_fp {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 归档指纹已变化，已跳过", target.id));
+                        continue;
+                    }
+                    verified_targets.push(crate::dsh::DshArchiveSelection {
+                        id: target.id,
+                        archive_id: req_fp.to_owned(),
+                    });
                 }
-                if !targets.is_empty() {
+                if !total.stopped_early && !verified_targets.is_empty() {
                     match crate::dsh::execute(
                         &paths.dsh,
                         crate::dsh::DshArchiveDeleteRequest {
                             confirmed: true,
-                            targets,
+                            targets: verified_targets,
                         },
                     ) {
                         Ok(res) => {
@@ -901,13 +1137,58 @@ pub fn execute_unified_with_capability(
             }
             SCOPE_CLAUDE_EMPTY => {
                 let empty = crate::claude::find_empty_inactive_sessions(&paths.claude)?;
-                for (summary, fp, _bytes) in empty {
+                let allowed_map: std::collections::BTreeMap<String, String> = empty
+                    .into_iter()
+                    .map(|(summary, fp, _bytes)| (summary.session_key, fp))
+                    .collect();
+                for target in scope_targets {
+                    let Some(req_fp) = target.fingerprint.as_deref() else {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 缺少预览指纹，已跳过", target.id));
+                        continue;
+                    };
+                    let Some(cur_fp) = allowed_map.get(&target.id) else {
+                        if let Ok(sum) =
+                            crate::claude::claude_session_summary(&paths.claude, &target.id)
+                        {
+                            if sum.status == "running"
+                                || sum
+                                    .delete_block_reason
+                                    .as_deref()
+                                    .is_some_and(|r| r.contains("正在运行") || r.contains("占用"))
+                            {
+                                scope_res.failed_count += 1;
+                                scope_res.issues.push(format!(
+                                    "{}: {}",
+                                    target.id,
+                                    sum.delete_block_reason
+                                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
+                                ));
+                                total.stopped_early = true;
+                                break;
+                            }
+                        }
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 会话不再属于空残余允许集合，已跳过", target.id));
+                        continue;
+                    };
+                    if cur_fp != req_fp {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 会话指纹已变化，已跳过", target.id));
+                        continue;
+                    }
                     match crate::claude::execute_claude_delete(
                         &paths.claude,
                         crate::claude::ClaudeDeleteRequest {
-                            session_key: summary.session_key.clone(),
+                            session_key: target.id.clone(),
                             confirmed: true,
-                            fingerprint: fp,
+                            fingerprint: req_fp.to_owned(),
                         },
                     ) {
                         Ok(res) if res.deleted && res.residuals.is_empty() => {
@@ -923,9 +1204,7 @@ pub fn execute_unified_with_capability(
                         }
                         Err(err) => {
                             scope_res.failed_count += 1;
-                            scope_res
-                                .issues
-                                .push(format!("{}: {err}", summary.session_key));
+                            scope_res.issues.push(format!("{}: {err}", target.id));
                             total.stopped_early = true;
                             break;
                         }
@@ -934,13 +1213,57 @@ pub fn execute_unified_with_capability(
             }
             SCOPE_GROK_EMPTY => {
                 let empty = crate::grok::find_empty_inactive_sessions(&paths.grok)?;
-                for (summary, _bytes) in empty {
+                let allowed_map: std::collections::BTreeMap<String, String> = empty
+                    .into_iter()
+                    .map(|(summary, fp, _bytes)| (summary.id, fp))
+                    .collect();
+                for target in scope_targets {
+                    let Some(req_fp) = target.fingerprint.as_deref() else {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 缺少预览指纹，已跳过", target.id));
+                        continue;
+                    };
+                    let Some(cur_fp) = allowed_map.get(&target.id) else {
+                        if let Ok(sum) = crate::grok::grok_session_summary(&paths.grok, &target.id)
+                        {
+                            if sum
+                                .deletion_eligibility
+                                .as_ref()
+                                .is_some_and(|e| !e.allowed)
+                            {
+                                scope_res.failed_count += 1;
+                                scope_res.issues.push(format!(
+                                    "{}: {}",
+                                    target.id,
+                                    sum.deletion_eligibility
+                                        .and_then(|e| e.reason)
+                                        .unwrap_or_else(|| "Grok 会话正在运行，无法删除".into())
+                                ));
+                                total.stopped_early = true;
+                                break;
+                            }
+                        }
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 会话不再属于空残余允许集合，已跳过", target.id));
+                        continue;
+                    };
+                    if cur_fp != req_fp {
+                        scope_res.skipped_count += 1;
+                        scope_res
+                            .issues
+                            .push(format!("{}: 会话指纹已变化，已跳过", target.id));
+                        continue;
+                    }
                     match crate::grok::execute_grok_delete(
                         &paths.grok,
                         crate::grok::GrokDeleteRequest {
-                            id: summary.id.clone(),
+                            id: target.id.clone(),
                             confirmed: true,
-                            fingerprint: String::new(),
+                            fingerprint: req_fp.to_owned(),
                         },
                     ) {
                         Ok(res) if res.deleted && res.residuals.is_empty() => {
@@ -956,7 +1279,7 @@ pub fn execute_unified_with_capability(
                         }
                         Err(err) => {
                             scope_res.failed_count += 1;
-                            scope_res.issues.push(format!("{}: {err}", summary.id));
+                            scope_res.issues.push(format!("{}: {err}", target.id));
                             total.stopped_early = true;
                             break;
                         }
@@ -1234,17 +1557,94 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mac_plan.total_deletable, 2);
+        let preview_targets: Vec<super::UnifiedCleanupTargetSelection> = mac_plan
+            .scopes
+            .iter()
+            .flat_map(|s| {
+                s.candidates
+                    .iter()
+                    .filter(|c| c.blocked_reason.is_none())
+                    .map(move |c| super::UnifiedCleanupTargetSelection {
+                        scope: s.scope.clone(),
+                        id: c.id.clone(),
+                        fingerprint: c.fingerprint.clone(),
+                    })
+            })
+            .collect();
+        assert_eq!(preview_targets.len(), 2);
+        assert!(preview_targets
+            .iter()
+            .all(|t| t.fingerprint.as_deref().is_some_and(|fp| !fp.is_empty())));
 
-        // Unconfirmed execute must fail closed.
+        // Unconfirmed or targetless execute must fail closed.
         assert!(super::execute_unified_with_capability(
             &macos,
             &paths,
             super::UnifiedCleanupExecuteRequest {
                 confirmed: false,
                 scopes: vec![super::SCOPE_CLAUDE_EMPTY.into()],
+                targets: preview_targets.clone(),
             },
         )
         .is_err());
+        assert!(super::execute_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupExecuteRequest {
+                confirmed: true,
+                scopes: vec![super::SCOPE_CLAUDE_EMPTY.into()],
+                targets: Vec::new(),
+            },
+        )
+        .is_err());
+
+        // Out-of-bounds / path-traversal target ID must fail closed immediately.
+        assert!(super::execute_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupExecuteRequest {
+                confirmed: true,
+                scopes: vec![super::SCOPE_GROK_EMPTY.into()],
+                targets: vec![super::UnifiedCleanupTargetSelection {
+                    scope: super::SCOPE_GROK_EMPTY.into(),
+                    id: "../escape".into(),
+                    fingerprint: Some("forged".into()),
+                }],
+            },
+        )
+        .is_err());
+
+        // Seed a brand-new empty Grok session AFTER preview: intersection must NOT delete it!
+        let late_grok_id = "55555555-5555-4555-8555-555555555555";
+        let late_grok_dir = paths.grok.sessions().join("ws").join(late_grok_id);
+        fs::create_dir_all(&late_grok_dir).unwrap();
+        fs::write(
+            late_grok_dir.join("summary.json"),
+            serde_json::json!({"info":{"id":late_grok_id,"cwd":"/work"},"generated_title":"Late Empty Grok","num_messages":0}).to_string(),
+        )
+        .unwrap();
+        fs::write(late_grok_dir.join("updates.jsonl"), "").unwrap();
+
+        // Fingerprint mismatch must skip without deleting the modified session.
+        let mut stale_fp_targets = preview_targets.clone();
+        for t in &mut stale_fp_targets {
+            if t.scope == super::SCOPE_GROK_EMPTY {
+                t.fingerprint = Some("stale-fingerprint".into());
+            }
+        }
+        let skipped_res = super::execute_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupExecuteRequest {
+                confirmed: true,
+                scopes: vec![super::SCOPE_GROK_EMPTY.into()],
+                targets: stale_fp_targets,
+            },
+        )
+        .unwrap();
+        assert_eq!(skipped_res.deleted_count, 0);
+        assert_eq!(skipped_res.skipped_count, 1);
+        assert!(grok_empty_dir.exists());
 
         // Stop-on-first-failure: locking Claude's project dir stops before Grok empty is deleted!
         #[cfg(unix)]
@@ -1261,6 +1661,7 @@ mod tests {
                         super::SCOPE_CLAUDE_EMPTY.into(),
                         super::SCOPE_GROK_EMPTY.into(),
                     ],
+                    targets: preview_targets.clone(),
                 },
             )
             .unwrap();
@@ -1273,7 +1674,7 @@ mod tests {
             );
         }
 
-        // Normal confirmed execution cleans empty Claude & Grok while preserving non-empty sessions.
+        // Normal confirmed execution cleans ONLY previewed targets while preserving late & active sessions.
         let ok = super::execute_unified_with_capability(
             &macos,
             &paths,
@@ -1283,6 +1684,7 @@ mod tests {
                     super::SCOPE_CLAUDE_EMPTY.into(),
                     super::SCOPE_GROK_EMPTY.into(),
                 ],
+                targets: preview_targets,
             },
         )
         .unwrap();
@@ -1290,8 +1692,134 @@ mod tests {
         assert_eq!(ok.deleted_count, 2);
         assert!(!claude_empty_file.exists());
         assert!(!grok_empty_dir.exists());
+        assert!(
+            late_grok_dir.exists(),
+            "session created after preview must not be deleted"
+        );
         assert!(claude_active_file.exists());
         assert!(grok_active_dir.exists());
+
+        // Targeted O(K) Codex hidden + archived execution test (running target stops, late archived untouched).
+        fs::create_dir_all(paths.codex.sessions_dir()).unwrap();
+        fs::write(paths.codex.session_index(), b"").unwrap();
+        let conn = rusqlite::Connection::open(paths.codex.state_db()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                thread_source TEXT NOT NULL,
+                parent_thread_id TEXT,
+                has_user_event INTEGER NOT NULL,
+                first_user_message TEXT NOT NULL,
+                preview TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                status TEXT
+            );",
+        )
+        .unwrap();
+        let h1 = "66666666-6666-4666-8666-666666666666";
+        let h2 = "77777777-7777-4777-8777-777777777777";
+        let h_late = "88888888-8888-4888-8888-888888888888";
+        for (id, status) in [(h1, "running"), (h2, "completed")] {
+            let r = paths
+                .codex
+                .sessions_dir()
+                .join(format!("rollout-{id}.jsonl"));
+            fs::write(&r, "{}\n").unwrap();
+            conn.execute(
+                "INSERT INTO threads VALUES(?1, ?2, 1, 10, 'codex', 'subagent', NULL, 1, 'u', 'u', '/tmp', ?1, 0, NULL, ?3)",
+                (id, r.display().to_string(), status),
+            )
+            .unwrap();
+        }
+        let codex_plan = super::dry_run_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupDryRunRequest {
+                scopes: vec![super::SCOPE_CODEX_HIDDEN.into()],
+                include_codex_hidden: true,
+            },
+        )
+        .unwrap();
+        let hidden_targets: Vec<super::UnifiedCleanupTargetSelection> = codex_plan.scopes[0]
+            .candidates
+            .iter()
+            .map(|c| super::UnifiedCleanupTargetSelection {
+                scope: super::SCOPE_CODEX_HIDDEN.into(),
+                id: c.id.clone(),
+                fingerprint: c.fingerprint.clone(),
+            })
+            .collect();
+        assert_eq!(hidden_targets.len(), 2);
+
+        // Add unpreviewed hidden thread h_late after preview
+        let r_late = paths
+            .codex
+            .sessions_dir()
+            .join(format!("rollout-{h_late}.jsonl"));
+        fs::write(&r_late, "{}\n").unwrap();
+        conn.execute(
+            "INSERT INTO threads VALUES(?1, ?2, 1, 20, 'codex', 'subagent', NULL, 1, 'u', 'u', '/tmp', ?1, 0, NULL, 'completed')",
+            (h_late, r_late.display().to_string()),
+        )
+        .unwrap();
+
+        // Running target h1 stops execution before h2 is deleted!
+        let running_stop = super::execute_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupExecuteRequest {
+                confirmed: true,
+                scopes: vec![super::SCOPE_CODEX_HIDDEN.into()],
+                targets: hidden_targets.clone(),
+            },
+        )
+        .unwrap();
+        assert!(running_stop.stopped_early);
+        assert_eq!(running_stop.failed_count, 1);
+        assert_eq!(running_stop.deleted_count, 0);
+        assert!(paths
+            .codex
+            .sessions_dir()
+            .join(format!("rollout-{h2}.jsonl"))
+            .exists());
+
+        // Mark h1 completed (bumping updated_at -> fingerprint changed -> skipped; h2 deleted; h_late untouched!)
+        conn.execute(
+            "UPDATE threads SET status='completed', updated_at=99 WHERE id=?1",
+            [h1],
+        )
+        .unwrap();
+        let after_stop = super::execute_unified_with_capability(
+            &macos,
+            &paths,
+            super::UnifiedCleanupExecuteRequest {
+                confirmed: true,
+                scopes: vec![super::SCOPE_CODEX_HIDDEN.into()],
+                targets: hidden_targets,
+            },
+        )
+        .unwrap();
+        assert!(!after_stop.stopped_early);
+        assert_eq!(after_stop.skipped_count, 1);
+        assert_eq!(after_stop.deleted_count, 1);
+        assert!(paths
+            .codex
+            .sessions_dir()
+            .join(format!("rollout-{h1}.jsonl"))
+            .exists());
+        assert!(!paths
+            .codex
+            .sessions_dir()
+            .join(format!("rollout-{h2}.jsonl"))
+            .exists());
+        assert!(r_late.exists());
 
         let _ = fs::remove_dir_all(&tmp);
     }

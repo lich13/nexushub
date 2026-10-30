@@ -6,6 +6,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "DshArchiveDeleteResult",
     "UnifiedCleanupDryRunRequest",
     "UnifiedCleanupCandidate",
+    "UnifiedCleanupTargetSelection",
     "UnifiedCleanupScopePlan",
     "UnifiedCleanupPlan",
     "UnifiedCleanupExecuteRequest",

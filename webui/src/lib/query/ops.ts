@@ -22,7 +22,8 @@ import type {
   HiddenThreadDeleteResult,
   UnifiedCleanupDryRunRequest,
   UnifiedCleanupPlan,
-  UnifiedCleanupResult
+  UnifiedCleanupResult,
+  UnifiedCleanupTargetSelection
 } from "../../types";
 import { backgroundJobKey } from "./jobs";
 import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
@@ -238,9 +239,15 @@ export function useUnifiedCleanupActions(input: {
       }
     }),
     unifiedExecute: useMutation({
-      mutationFn: ({ scopes }: { scopes: string[] }) => {
+      mutationFn: ({
+        scopes,
+        targets
+      }: {
+        scopes: string[];
+        targets: UnifiedCleanupTargetSelection[];
+      }) => {
         requireThreadCleanup();
-        return startUnifiedCleanup({ confirmed: true, scopes });
+        return startUnifiedCleanup({ confirmed: true, scopes, targets });
       },
       onSuccess: (result) => {
         input.onUnifiedExecute(result);

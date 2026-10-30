@@ -73,7 +73,7 @@ function mutation() {
 function unifiedPlan(count: number): UnifiedCleanupPlan {
   const candidates = Array.from({ length: count }, (_, index) => {
     const id = "candidate-" + String(index).padStart(3, "0");
-    return { id, title: id, estimatedBytes: 1024, blockedReason: null };
+    return { id, title: id, estimatedBytes: 1024, fingerprint: `fp-${id}`, blockedReason: null };
   });
   return {
     totalCandidates: count + 1,
@@ -103,7 +103,7 @@ function unifiedPlan(count: number): UnifiedCleanupPlan {
         candidateCount: 1,
         deletableCount: 1,
         estimatedBytes: 1024,
-        candidates: [{ id: "ag:demo", title: "AG 归档", estimatedBytes: 1024, blockedReason: null }],
+        candidates: [{ id: "ag:demo", title: "AG 归档", estimatedBytes: 1024, fingerprint: "fp-ag-demo", blockedReason: null }],
         issues: []
       }
     ]
@@ -268,7 +268,12 @@ describe("UnifiedThreadCleanup workbench", () => {
     tree = renderTree();
     clickButton(tree, "确认清理所选");
     expect(harness.unifiedActions.unifiedExecute.mutate).toHaveBeenCalledWith({
-      scopes: ["codex_hidden"]
+      scopes: ["codex_hidden"],
+      targets: [
+        { scope: "codex_hidden", id: "candidate-000", fingerprint: "fp-candidate-000" },
+        { scope: "codex_hidden", id: "candidate-001", fingerprint: "fp-candidate-001" },
+        { scope: "codex_hidden", id: "candidate-002", fingerprint: "fp-candidate-002" }
+      ]
     });
   });
 });

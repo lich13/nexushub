@@ -300,6 +300,41 @@ fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates(
 }
 
 #[test]
+fn grok_delete_enforces_non_empty_fingerprint_and_rejects_mismatch() {
+    let (paths, id, path) = fixture();
+    let located = locate_sessions(&paths, &id).unwrap();
+    let fp = grok_fingerprint(&located).unwrap();
+    assert!(!fp.is_empty());
+
+    fs::write(path.join("updates.jsonl"), "{\"changed\":true}\n").unwrap();
+    let err = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id: id.clone(),
+            confirmed: true,
+            fingerprint: fp,
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("已变化"), "{err:#}");
+    assert!(path.exists());
+
+    let fresh_fp = grok_fingerprint(&locate_sessions(&paths, &id).unwrap()).unwrap();
+    let ok = execute_grok_delete(
+        &paths,
+        GrokDeleteRequest {
+            id,
+            confirmed: true,
+            fingerprint: fresh_fp,
+        },
+    )
+    .unwrap();
+    assert!(ok.deleted);
+    assert!(!path.exists());
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
 fn grok_delete_ignores_changed_content_and_does_not_touch_workspace() {
     let (paths, id, path) = fixture();
     let preview = preview_grok_delete(&paths, &id).unwrap();
@@ -709,7 +744,7 @@ fn deletion_locates_all_workspaces_with_missing_or_corrupt_summaries() {
             GrokDeleteRequest {
                 id: id.clone(),
                 confirmed: true,
-                fingerprint: "old fingerprint".into()
+                fingerprint: preview.fingerprint
             }
         )
         .unwrap()

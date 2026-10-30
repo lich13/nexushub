@@ -672,7 +672,13 @@ export type UnifiedCleanupCandidate = {
   id: string;
   title: string;
   estimatedBytes: number;
+  fingerprint?: string | null;
   blockedReason: string | null;
+};
+export type UnifiedCleanupTargetSelection = {
+  scope: string;
+  id: string;
+  fingerprint?: string | null;
 };
 export type UnifiedCleanupScopePlan = {
   scope: string;
@@ -693,7 +699,11 @@ export type UnifiedCleanupPlan = {
   totalEstimatedBytes: number;
   scopes: UnifiedCleanupScopePlan[];
 };
-export type UnifiedCleanupExecuteRequest = { confirmed: boolean; scopes?: string[] };
+export type UnifiedCleanupExecuteRequest = {
+  confirmed: boolean;
+  scopes?: string[];
+  targets?: UnifiedCleanupTargetSelection[];
+};
 export type UnifiedCleanupScopeResult = {
   scope: string;
   provider: string;

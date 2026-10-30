@@ -14,6 +14,7 @@ import type {
   UnifiedCleanupPlan,
   UnifiedCleanupResult,
   UnifiedCleanupScopePlan,
+  UnifiedCleanupTargetSelection,
   UpdateStatus
 } from "../../types";
 import { runtimeCapabilitiesForRuntime, type RuntimeCapabilityMatrix } from "./capabilities";
@@ -701,6 +702,7 @@ export function mergeHiddenScanIntoUnifiedPlan(
     id: item.id,
     title: item.title || item.id,
     estimatedBytes: 0,
+    fingerprint: item.fingerprint ?? null,
     blockedReason: item.allowed ? null : (item.reason ?? "当前线程暂不可清理")
   }));
   const deletableCount = candidates.filter((item) => !item.blockedReason).length;
@@ -740,6 +742,27 @@ export function mergeHiddenScanIntoUnifiedPlan(
     totalEstimatedBytes: scopes.reduce((sum, item) => sum + item.estimatedBytes, 0),
     scopes
   };
+}
+
+export function collectUnifiedCleanupTargets(
+  plan: UnifiedCleanupPlan | null,
+  selectedScopes: readonly string[]
+): UnifiedCleanupTargetSelection[] {
+  if (!plan || selectedScopes.length === 0) return [];
+  const selectedSet = new Set(selectedScopes);
+  const targets: UnifiedCleanupTargetSelection[] = [];
+  for (const scope of plan.scopes) {
+    if (!selectedSet.has(scope.scope) || !scope.supported || !scope.scanned) continue;
+    for (const candidate of scope.candidates) {
+      if (candidate.blockedReason) continue;
+      targets.push({
+        scope: scope.scope,
+        id: candidate.id,
+        fingerprint: candidate.fingerprint ?? null
+      });
+    }
+  }
+  return targets;
 }
 
 export function unifiedPlanAfterExecute(

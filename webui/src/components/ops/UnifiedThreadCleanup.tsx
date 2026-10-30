@@ -4,6 +4,7 @@ import {
   OPS_PANEL_TITLES,
   UNIFIED_CLEANUP_SCOPES,
   canStartHiddenThreadDelete,
+  collectUnifiedCleanupTargets,
   formatCleanupBytes,
   mergeHiddenScanIntoUnifiedPlan,
   unifiedCleanupStageView,
@@ -164,6 +165,7 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
     (sum, scope) => sum + (scopeMap.get(scope)?.estimatedBytes ?? 0),
     0
   );
+  const selectedTargets = collectUnifiedCleanupTargets(plan, activeSelectedScopes);
 
   const stage = unifiedCleanupStageView({
     hasPlan: Boolean(plan),
@@ -451,8 +453,17 @@ export function UnifiedThreadCleanup({ capabilities }: { capabilities: RuntimeCa
           <>
             <button
               className="danger-button"
-              disabled={unifiedExecute.isPending || activeSelectedScopes.length === 0}
-              onClick={() => unifiedExecute.mutate({ scopes: activeSelectedScopes })}
+              disabled={
+                unifiedExecute.isPending ||
+                activeSelectedScopes.length === 0 ||
+                selectedTargets.length === 0
+              }
+              onClick={() =>
+                unifiedExecute.mutate({
+                  scopes: activeSelectedScopes,
+                  targets: selectedTargets
+                })
+              }
             >
               <Trash2 size={17} />
               确认清理所选

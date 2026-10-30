@@ -351,20 +351,20 @@ async fn hidden_scan_locates_corrupt_and_nonterminal_candidates_without_content_
         .get(fixture.hidden_ids[0].as_str())
         .expect("complete candidate is present");
     assert!(complete.allowed);
-    assert!(complete.fingerprint.is_none());
+    assert!(complete.fingerprint.is_some());
 
     let corrupt = candidates
         .get(fixture.hidden_ids[1].as_str())
         .expect("corrupt candidate is present");
     assert!(corrupt.allowed);
-    assert!(corrupt.fingerprint.is_none());
+    assert!(corrupt.fingerprint.is_some());
     assert!(corrupt.reason.is_none());
 
     let nonterminal = candidates
         .get(fixture.hidden_ids[2].as_str())
         .expect("nonterminal candidate is present");
     assert!(nonterminal.allowed);
-    assert!(nonterminal.fingerprint.is_none());
+    assert!(nonterminal.fingerprint.is_some());
     assert!(nonterminal.reason.is_none());
 }
 
