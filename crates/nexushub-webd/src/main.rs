@@ -1151,13 +1151,29 @@ async fn run_probe_error_monitor_once(
     let config =
         load_config().map_err(|_| anyhow::anyhow!("notification configuration unavailable"))?;
     let config = &config;
-    if let Err(error) = async_question_monitor::run(config, db).await {
+    let shared_codex_threads =
+        if async_question_monitor::is_enabled(config) || question_monitor::is_enabled(config) {
+            let paths = resolve_codex_paths(&config.codex.home).codex_paths();
+            nexushub_core::codex::notification_thread_headers(&paths)
+                .ok()
+                .map(|mut rows| {
+                    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    rows
+                })
+        } else {
+            None
+        };
+    if let Err(error) =
+        async_question_monitor::run_with_threads(config, db, shared_codex_threads.as_deref()).await
+    {
         tracing::warn!(
             "Codex structured question monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())
         );
     }
-    if let Err(error) = question_monitor::run(config, db).await {
+    if let Err(error) =
+        question_monitor::run_with_threads(config, db, shared_codex_threads.as_deref()).await
+    {
         tracing::warn!(
             "Codex feedback monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())

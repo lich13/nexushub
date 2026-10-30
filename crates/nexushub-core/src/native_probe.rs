@@ -200,10 +200,15 @@ pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     }
 }
 
+static NATIVE_PROBE_CACHE: crate::read_cache::ReadCache<Vec<Value>> =
+    crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
+
+pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    NATIVE_PROBE_CACHE.evict_idle(max_idle);
+}
+
 pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
-    static CACHE: crate::read_cache::ReadCache<Vec<Value>> =
-        crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
-    CACHE.read(
+    NATIVE_PROBE_CACHE.read(
         path,
         |_, size| size.saturating_mul(5),
         || {

@@ -18,6 +18,7 @@ mod reader;
 #[cfg(test)]
 mod tests;
 pub use mutations::{execute_claude_delete, preview_claude_delete, rename_claude_session};
+pub(crate) use reader::evict_idle_detail_cache;
 
 #[derive(Debug, Clone)]
 pub struct ClaudePaths {

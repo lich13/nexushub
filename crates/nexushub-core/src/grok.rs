@@ -349,6 +349,13 @@ pub fn grok_session_page(
     })
 }
 
+static GROK_DETAIL_CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::GROK_DETAIL_CACHE_BYTES);
+
+pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
+    GROK_DETAIL_CACHE.evict_idle(max_idle);
+}
+
 fn with_session_history<R>(
     directory: &Path,
     project: impl FnOnce(&GrokReader, bool) -> Result<R>,
@@ -363,9 +370,7 @@ fn with_session_history<R>(
     if !path.exists() {
         return project(&GrokReader::default(), false);
     }
-    static CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::GROK_DETAIL_CACHE_BYTES);
-    CACHE.read(
+    GROK_DETAIL_CACHE.read(
         &path,
         |_| Ok(0),
         true,

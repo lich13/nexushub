@@ -65,6 +65,7 @@ struct Entry<T> {
     stamp: Stamp,
     value: Arc<T>,
     bytes: u64,
+    last_accessed: std::time::Instant,
 }
 
 pub(crate) struct ReadCache<T> {
@@ -107,8 +108,9 @@ impl<T: Clone> ReadCache<T> {
         let before = Stamp::read(path, self.hash_edges);
         if let Ok(mut entries) = self.entries.lock() {
             if let Some(index) = entries.iter().position(|entry| entry.path == path) {
-                let entry = entries.remove(index).expect("known cache entry");
+                let mut entry = entries.remove(index).expect("known cache entry");
                 if Some(&entry.stamp) == before.as_ref() {
+                    entry.last_accessed = std::time::Instant::now();
                     let value = entry.value.clone();
                     entries.push_back(entry);
                     drop(entries);
@@ -138,11 +140,19 @@ impl<T: Clone> ReadCache<T> {
                         stamp,
                         value: value.clone(),
                         bytes,
+                        last_accessed: std::time::Instant::now(),
                     });
                 }
             }
         }
         Ok(Arc::unwrap_or_clone(value))
+    }
+
+    pub(crate) fn evict_idle(&self, max_idle: std::time::Duration) {
+        if let Ok(mut entries) = self.entries.lock() {
+            let now = std::time::Instant::now();
+            entries.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
+        }
     }
 }
 
@@ -172,13 +182,19 @@ mod tests {
         assert_eq!(read(), "one");
         assert_eq!(read(), "one");
         assert_eq!(reads.get(), 1);
+        cache.evict_idle(std::time::Duration::from_secs(900));
+        assert_eq!(read(), "one");
+        assert_eq!(reads.get(), 1);
+        cache.evict_idle(std::time::Duration::ZERO);
+        assert_eq!(read(), "one");
+        assert_eq!(reads.get(), 2);
         fs::write(&path, "two").unwrap();
         assert_eq!(read(), "two");
-        assert_eq!(reads.get(), 2);
+        assert_eq!(reads.get(), 3);
         fs::write(&path, "too large").unwrap();
         read();
         read();
-        assert_eq!(reads.get(), 4);
+        assert_eq!(reads.get(), 5);
         fs::remove_file(&path).unwrap();
         assert!(cache
             .read(&path, |_, size| size, || Ok(fs::read_to_string(&path)?))

@@ -15,6 +15,10 @@ fn is_fresh(completed_ms: i64) -> bool {
     (0..=600_000).contains(&age)
 }
 
+pub(super) fn is_enabled(config: &Config) -> bool {
+    enabled(config)
+}
+
 fn enabled(config: &Config) -> bool {
     config.probe.enabled
         && config.probe.notifications.enabled
@@ -119,22 +123,36 @@ pub fn prepare_event(
 }
 
 /// Store fingerprints, not reply bodies, in the existing settings store.
+#[cfg(test)]
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
+    run_with_threads(config, db, None).await
+}
+
+pub async fn run_with_threads(
+    config: &Config,
+    db: &PanelDb,
+    preloaded_sorted: Option<&[codex::ThreadSummary]>,
+) -> Result<()> {
     let Some(since) = db.feedback_notification_baseline(enabled(config))? else {
         return Ok(());
     };
-    let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
     let previous: HashMap<String, (u64, u128)> = db
         .get_setting("probe_feedback_files")?
         .and_then(|value| serde_json::from_str(&value).ok())
         .unwrap_or_default();
     let mut next = HashMap::new();
-    let mut threads = codex::notification_thread_headers(&paths)?;
-    threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    for thread in threads
-        .into_iter()
-        .take(config.probe.recent_limit.clamp(1, 200))
-    {
+    let owned_threads;
+    let threads: &[codex::ThreadSummary] = match preloaded_sorted {
+        Some(slice) => slice,
+        None => {
+            let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
+            let mut loaded = codex::notification_thread_headers(&paths)?;
+            loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            owned_threads = loaded;
+            &owned_threads
+        }
+    };
+    for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {
         let Some(path) = thread.rollout_path.as_ref() else {
             continue;
         };

@@ -11,6 +11,10 @@ use nexushub_core::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+pub(super) fn is_enabled(config: &Config) -> bool {
+    enabled(config)
+}
+
 fn enabled(config: &Config) -> bool {
     config.probe.enabled
         && config.probe.notifications.enabled
@@ -152,18 +156,34 @@ pub fn prepare_event(
     Ok(prepared)
 }
 
+#[cfg(test)]
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
+    run_with_threads(config, db, None).await
+}
+
+pub async fn run_with_threads(
+    config: &Config,
+    db: &PanelDb,
+    preloaded_sorted: Option<&[ThreadSummary]>,
+) -> Result<()> {
     let Some(since) = db.notification_baseline("probe_async_question_baseline", enabled(config))?
     else {
         return Ok(());
     };
-    let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
-    let mut threads = codex::notification_thread_headers(&paths)?;
-    threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    for thread in threads
-        .into_iter()
-        .take(config.probe.recent_limit.clamp(1, 200))
-    {
+    let owned_threads;
+    let threads: &[ThreadSummary] = match preloaded_sorted {
+        Some(slice) => slice,
+        None => {
+            let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
+            let mut loaded = codex::notification_thread_headers(&paths)?;
+            loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            owned_threads = loaded;
+            &owned_threads
+        }
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    const PASSIVE_ASYNC_QUESTION_MAX_AGE_MS: i64 = 6 * 86_400_000;
+    for thread in threads.iter().take(config.probe.recent_limit.clamp(1, 200)) {
         if task_notification_suppression_reason(config, Some(&thread.id)).is_some() {
             continue;
         }
@@ -173,11 +193,13 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
         let Ok(calls) = codex::rollout_async_questions(path) else {
             continue;
         };
-        for call in calls
-            .iter()
-            .filter(|c| c.created_at_ms.is_some_and(|created| created > since))
-        {
-            let Some(event) = event_for(config, &thread, call) else {
+        for call in calls.iter().filter(|c| {
+            c.created_at_ms.is_some_and(|created| {
+                created > since
+                    && now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
+            })
+        }) {
+            let Some(event) = event_for(config, thread, call) else {
                 continue;
             };
             if delivery_key(&event)

@@ -13,8 +13,15 @@ use std::{
 
 const SERVICE: &str = "/exa.language_server_pb.LanguageServerService/";
 const LIMIT: usize = nexushub_core::resource_limits::ANTIGRAVITY_LOCAL_RPC_BYTES;
-static CACHE: tokio::sync::Mutex<VecDeque<(String, String, NativeStreamSnapshot)>> =
-    tokio::sync::Mutex::const_new(VecDeque::new());
+static CACHE: tokio::sync::Mutex<
+    VecDeque<(String, String, NativeStreamSnapshot, std::time::Instant)>,
+> = tokio::sync::Mutex::const_new(VecDeque::new());
+
+pub async fn evict_idle_cache(max_idle: Duration) {
+    let mut cache = CACHE.lock().await;
+    let now = std::time::Instant::now();
+    cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+}
 struct Endpoint {
     pid: u32,
     ports: Vec<u16>,
@@ -614,11 +621,10 @@ async fn scan_at(
         ]))?));
         // Revalidation always obtains fresh native terminal / interaction state.
         let cached = if only.is_none() {
-            CACHE
-                .lock()
-                .await
-                .iter()
-                .find(|(key, sig, s)| {
+            let mut cache = CACHE.lock().await;
+            cache
+                .iter_mut()
+                .find(|(key, sig, s, _)| {
                     key == id
                         && sig == &signature
                         && s.record_count == s.settled_count
@@ -627,7 +633,10 @@ async fn scan_at(
                             .iter()
                             .any(|e| matches!(e.kind.as_str(), "reply_needed" | "authorization"))
                 })
-                .map(|(_, _, s)| s.clone())
+                .map(|(_, _, s, touched)| {
+                    *touched = std::time::Instant::now();
+                    s.clone()
+                })
         } else {
             None
         };
@@ -688,12 +697,17 @@ async fn scan_at(
         match result {
             Ok(snapshot) => {
                 let mut cache = CACHE.lock().await;
-                cache.retain(|(key, _, _)| key != id);
-                cache.push_back((id.clone(), signature, snapshot.clone()));
+                cache.retain(|(key, _, _, _)| key != id);
+                cache.push_back((
+                    id.clone(),
+                    signature,
+                    snapshot.clone(),
+                    std::time::Instant::now(),
+                ));
                 while cache.len() > 64
                     || cache
                         .iter()
-                        .map(|(_, _, s)| {
+                        .map(|(_, _, s, _)| {
                             s.events
                                 .iter()
                                 .map(|e| e.body.len() + e.turn_id.len() + 256)

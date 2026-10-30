@@ -122,10 +122,17 @@ struct Snapshot<S> {
     state: S,
 }
 
+fn monotonic_ms() -> u64 {
+    use std::{sync::OnceLock, time::Instant};
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
 struct Entry<S> {
     path: PathBuf,
     snapshot: Mutex<Option<Snapshot<S>>>,
     weight: std::sync::atomic::AtomicU64,
+    last_accessed_ms: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) struct JsonlCache<S> {
@@ -160,6 +167,7 @@ impl<S: Default> JsonlCache<S> {
         weight: impl FnOnce(&S) -> u64,
     ) -> Result<R> {
         use std::sync::atomic::Ordering;
+        let now_ms = monotonic_ms();
         let entry = {
             let mut entries = self
                 .entries
@@ -174,8 +182,10 @@ impl<S: Default> JsonlCache<S> {
                         path: path.into(),
                         snapshot: Mutex::new(None),
                         weight: 0.into(),
+                        last_accessed_ms: now_ms.into(),
                     })
                 });
+            entry.last_accessed_ms.store(now_ms, Ordering::Relaxed);
             entries.push_back(entry.clone());
             entry
         };
@@ -333,6 +343,20 @@ impl<S: Default> JsonlCache<S> {
             entries.retain(|candidate| !Arc::ptr_eq(candidate, &entry));
         }
         result
+    }
+
+    pub fn evict_idle(&self, max_idle: std::time::Duration) {
+        use std::sync::atomic::Ordering;
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        let now_ms = monotonic_ms();
+        let max_idle_ms = max_idle.as_millis() as u64;
+        entries.retain(|entry| {
+            Arc::strong_count(entry) > 1
+                || now_ms.saturating_sub(entry.last_accessed_ms.load(Ordering::Relaxed))
+                    < max_idle_ms
+        });
     }
 }
 

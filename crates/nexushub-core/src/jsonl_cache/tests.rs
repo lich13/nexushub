@@ -822,6 +822,24 @@ fn oversize_snapshot_is_returned_but_not_retained() {
     assert_eq!(count.load(Ordering::SeqCst), 2);
 }
 
+#[test]
+fn idle_eviction_releases_stale_snapshots_and_retains_recent_entries() {
+    let fixture = Fixture::new();
+    let path = fixture.file("history.jsonl", b"{\"id\":1}\n");
+    let cache = JsonlCache::new(CACHE_BYTES);
+    let count = AtomicUsize::new(0);
+    let first = read_weighted(&cache, &path, &count, false, 64).unwrap();
+    cache.evict_idle(std::time::Duration::from_secs(900));
+    let retained = read_weighted(&cache, &path, &count, false, 64).unwrap();
+    assert_eq!(retained.epoch, first.epoch);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+
+    cache.evict_idle(std::time::Duration::ZERO);
+    let rebuilt = read_weighted(&cache, &path, &count, false, 64).unwrap();
+    assert_ne!(rebuilt.epoch, first.epoch);
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
 fn record(journal: &mut HistoryJournal, epoch: &str, offset: u64, ids: Vec<String>) -> String {
     let info = ReadInfo {
         epoch,

@@ -114,11 +114,16 @@ impl ReaderState {
     }
 }
 
+static DETAIL_CACHE: crate::jsonl_cache::JsonlCache<ReaderState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CLAUDE_DETAIL_CACHE_BYTES)
+        .with_line_limit(crate::resource_limits::CLAUDE_LINE_BYTES);
+
+pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
+    DETAIL_CACHE.evict_idle(max_idle);
+}
+
 pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
-    static CACHE: crate::jsonl_cache::JsonlCache<ReaderState> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CLAUDE_DETAIL_CACHE_BYTES)
-            .with_line_limit(crate::resource_limits::CLAUDE_LINE_BYTES);
-    CACHE.read(
+    DETAIL_CACHE.read(
         path,
         |size| {
             ensure!(size <= MAX_BYTES, "Claude 会话超出 512 MiB 读取上限");

@@ -95,6 +95,7 @@ impl PanelDb {
                 old.map_or(0, |(_, cursor)| cursor)
             };
             if !reset || provider.local_only() {
+                let now = Self::now();
                 for event in &stream.events {
                     if !reset
                         && (event.position <= cursor
@@ -123,7 +124,13 @@ impl PanelDb {
                     } else {
                         "pending"
                     };
-                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),serde_json::to_string(&delivery)?,status,Self::now()])?;
+                    let inserted = tx.execute("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)", params![delivery.event_key,provider.as_str(),serde_json::to_string(&delivery)?,status,now])?;
+                    if inserted == 0 && event.position > stream.settled_count {
+                        tx.execute(
+                            "UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped') AND updated_at<?3",
+                            params![delivery.event_key, now, now - 3600],
+                        )?;
+                    }
                     if status == "pending" {
                         queued += inserted;
                     }
@@ -271,8 +278,14 @@ impl PanelDb {
             return Ok(());
         }
         self.maintain_probe_events(retention_days, 100_000, false)?;
+        let marker_cutoff = now - i64::from(retention_days.clamp(7, 3650)) * 86_400;
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute("DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped') AND updated_at < ?1",[now-i64::from(retention_days.clamp(1,3650))*86400])?;
+        conn.execute(
+            "DELETE FROM native_probe_deliveries WHERE status IN ('sent','failed','skipped') AND updated_at < ?1",
+            [marker_cutoff],
+        )?;
+        let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+        let _ = conn.execute_batch("PRAGMA optimize;");
         drop(conn);
         self.set_setting("probe_event_retention_last_run", "ok")
     }

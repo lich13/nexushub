@@ -1080,7 +1080,38 @@ impl PanelDb {
             )",
             params![Self::now(), limit],
         )?;
-        conn.execute("DELETE FROM settings WHERE key IN (SELECT key FROM settings WHERE key LIKE 'probe_feedback_delivery:%' AND updated_at < ?1 LIMIT ?2)", params![cutoff, limit])?;
+        let marker_cutoff = Self::now() - i64::from(retention_days.clamp(7, 3650)) * 86_400;
+        conn.execute(
+            "DELETE FROM settings WHERE key IN (
+                SELECT key FROM settings
+                WHERE (
+                    key LIKE 'probe_feedback_delivery:%'
+                    OR key LIKE 'probe_passive_sent_marker:%'
+                    OR key LIKE 'probe_async_question_delivery:%'
+                ) AND updated_at < ?1
+                LIMIT ?2
+            )",
+            params![marker_cutoff, limit],
+        )?;
+        conn.execute(
+            "DELETE FROM probe_notification_deliveries WHERE rowid IN (
+                SELECT rowid FROM probe_notification_deliveries
+                WHERE status IN ('sent', 'failed', 'skipped', 'legacy', 'unknown')
+                  AND updated_ms < ?1
+                ORDER BY updated_ms ASC
+                LIMIT ?2
+            )",
+            params![marker_cutoff * 1_000, limit],
+        )?;
+        conn.execute(
+            "DELETE FROM probe_error_incidents WHERE rowid IN (
+                SELECT rowid FROM probe_error_incidents
+                WHERE bark_status != 'pending' AND updated_at < ?1
+                ORDER BY updated_at ASC
+                LIMIT ?2
+            )",
+            params![marker_cutoff, limit],
+        )?;
         Ok((events_deleted, dedupe_deleted))
     }
 }
@@ -1633,6 +1664,95 @@ mod tests {
         assert_eq!(counts.dedupe_count, 1);
         assert_eq!(counts.pending_event_count, 0);
         assert_eq!(counts.pending_dedupe_count, 0);
+    }
+
+    #[test]
+    fn maintain_probe_events_prunes_expired_markers_deliveries_and_incidents_without_touching_pending_or_settings(
+    ) {
+        let db = PanelDb::open(":memory:").unwrap();
+        let now = PanelDb::now();
+        let old_secs = now - 10 * 86_400;
+        let fresh_secs = now - 2 * 86_400;
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            for (k, ts) in [
+                ("probe_passive_sent_marker:old", old_secs),
+                ("probe_passive_sent_marker:fresh", fresh_secs),
+                ("probe_async_question_delivery:old", old_secs),
+                ("probe_async_question_delivery:fresh", fresh_secs),
+                ("probe_feedback_delivery:old", old_secs),
+                ("admin_api_key_sha256", old_secs),
+            ] {
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES(?1, '1', ?2)",
+                    rusqlite::params![k, ts],
+                )
+                .unwrap();
+            }
+            for (ek, status, ms) in [
+                ("term-old", "sent", old_secs * 1_000),
+                ("term-fresh", "sent", fresh_secs * 1_000),
+                ("pending-old", "pending", old_secs * 1_000),
+            ] {
+                conn.execute(
+                    "INSERT INTO probe_notification_deliveries(event_key, channel, status, created_ms, updated_ms)
+                     VALUES(?1, 'bark', ?2, ?3, ?3)",
+                    rusqlite::params![ek, status, ms],
+                )
+                .unwrap();
+            }
+            for (ik, row_id, status, ts) in [
+                ("inc-old-sent", 1_i64, "sent", old_secs),
+                ("inc-fresh-sent", 2_i64, "sent", fresh_secs),
+                ("inc-old-pending", 3_i64, "pending", old_secs),
+            ] {
+                conn.execute(
+                    "INSERT INTO probe_error_incidents(
+                        incident_key, source_ts, source_ts_nanos, source_row_id,
+                        thread_id, turn_id, classification, error_sha256, error_summary,
+                        bark_status, created_at, updated_at
+                    ) VALUES(?1, 1, 0, ?2, 't1', 'u1', 'network', 'sha', 'err', ?3, ?4, ?4)",
+                    rusqlite::params![ik, row_id, status, ts],
+                )
+                .unwrap();
+            }
+        }
+
+        db.maintain_notification_history_if_due(7).unwrap();
+
+        let conn = db.conn.lock().expect("db mutex");
+        let has_setting = |k: &str| -> bool {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)",
+                [k],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(!has_setting("probe_passive_sent_marker:old"));
+        assert!(has_setting("probe_passive_sent_marker:fresh"));
+        assert!(!has_setting("probe_async_question_delivery:old"));
+        assert!(has_setting("probe_async_question_delivery:fresh"));
+        assert!(!has_setting("probe_feedback_delivery:old"));
+        assert!(has_setting("admin_api_key_sha256"));
+
+        let delivery_keys: Vec<String> = conn
+            .prepare("SELECT event_key FROM probe_notification_deliveries ORDER BY event_key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(delivery_keys, vec!["pending-old", "term-fresh"]);
+
+        let incident_keys: Vec<String> = conn
+            .prepare("SELECT incident_key FROM probe_error_incidents ORDER BY incident_key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(incident_keys, vec!["inc-fresh-sent", "inc-old-pending"]);
     }
 }
 

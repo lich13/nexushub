@@ -22,6 +22,14 @@ struct Cached {
     offset: u64,
     anchor: Vec<u8>,
     state: State,
+    last_accessed: std::time::Instant,
+}
+
+pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    if let Ok(mut cache) = CACHE.lock() {
+        let now = std::time::Instant::now();
+        cache.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
+    }
 }
 #[derive(Default)]
 struct State {
@@ -380,7 +388,8 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         .as_ref()
         .is_some_and(|c| c.stamp == before && c.identity == identity)
     {
-        let old = old.unwrap();
+        let mut old = old.unwrap();
+        old.last_accessed = std::time::Instant::now();
         let result = old.state.snapshot(id, key, &identity);
         cache.push_back(old);
         return result;
@@ -401,6 +410,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
             offset: 0,
             anchor: vec![],
             state: State::default(),
+            last_accessed: std::time::Instant::now(),
         }
     };
     file.seek(SeekFrom::Start(current.offset))?;
@@ -459,6 +469,7 @@ fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>
         "DSH source changed during read"
     );
     current.stamp = after;
+    current.last_accessed = std::time::Instant::now();
     let result = current.state.snapshot(id, key, &identity)?;
     cache.push_back(current);
     while cache.len() > crate::resource_limits::SOURCE_CACHE_ENTRIES

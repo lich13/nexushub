@@ -19,6 +19,7 @@ pub(crate) const CLAUDE_SUMMARY_ENTRIES: usize = 2000;
 pub(crate) const GROK_DETAIL_CACHE_BYTES: u64 = 192 * MIB;
 pub(crate) const GROK_ACTIVITY_CACHE_BYTES: u64 = 2 * MIB;
 pub(crate) const NATIVE_PROBE_CACHE_BYTES: u64 = 32 * MIB;
+pub const DETAIL_CACHE_IDLE_TTL: Duration = Duration::from_secs(900);
 pub(crate) const HISTORY_REVISIONS: usize = 64;
 pub(crate) const HISTORY_CHANGED_IDS: usize = 4096;
 pub(crate) const STORAGE_CACHE_ENTRIES: usize = 512;

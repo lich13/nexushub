@@ -13,6 +13,13 @@ struct DetailState {
     timeline: crate::history_navigation::Timeline,
 }
 
+static DETAIL_CACHE: crate::jsonl_cache::JsonlCache<DetailState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_DETAIL_CACHE_BYTES);
+
+pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
+    DETAIL_CACHE.evict_idle(max_idle);
+}
+
 pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
     thread_detail_page_from_summary(summary, true, None, None, None)
 }
@@ -24,8 +31,6 @@ pub fn thread_detail_page_from_summary(
     before: Option<&str>,
     since: Option<&str>,
 ) -> Result<ThreadDetail> {
-    static CACHE: crate::jsonl_cache::JsonlCache<DetailState> =
-        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_DETAIL_CACHE_BYTES);
     let Some(path) = summary.rollout_path.clone() else {
         return Ok(ThreadDetail {
             timeline: Some(Default::default()),
@@ -46,7 +51,7 @@ pub fn thread_detail_page_from_summary(
     if crate::codex::rollout_file::is_compressed(&path) {
         return compressed_thread_detail_page(&path, summary, compact, limit, before);
     }
-    CACHE.read(
+    DETAIL_CACHE.read(
         &path,
         |_| Ok(0),
         true,

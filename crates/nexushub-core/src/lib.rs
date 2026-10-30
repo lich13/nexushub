@@ -34,3 +34,11 @@ pub mod native_probe;
 pub mod provider_sessions;
 
 pub mod user_message;
+
+pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
+    codex::evict_idle_detail_cache(max_idle);
+    claude::evict_idle_detail_cache(max_idle);
+    grok::evict_idle_detail_cache(max_idle);
+    native_probe::evict_idle_cache(max_idle);
+    dsh::notifications::evict_idle_cache(max_idle);
+}

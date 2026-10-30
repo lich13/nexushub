@@ -9,6 +9,9 @@ use nexushub_core::{
 use std::time::Duration;
 
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
+    let idle_ttl = nexushub_core::resource_limits::DETAIL_CACHE_IDLE_TTL;
+    nexushub_core::evict_idle_detail_caches(idle_ttl);
+    super::antigravity::evict_idle_cache(idle_ttl).await;
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     db.recover_interrupted_native_deliveries()?;
 
