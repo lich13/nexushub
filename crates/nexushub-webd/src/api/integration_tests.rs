@@ -1,6 +1,7 @@
 use super::{
-    load_probe_threads, probe_config_path, router, test_support::source_line_count, update_service,
-    UpdateAction,
+    load_probe_threads, probe_config_path, router,
+    test_support::{sandboxed_test_config, source_line_count},
+    update_service, UpdateAction,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -1095,7 +1096,7 @@ async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
     let dir = temp_test_dir("nexushub-probe-settings-invalid-url");
     fs::create_dir_all(&dir).unwrap();
     let config_path = dir.join("config.toml");
-    let mut config = Config::default();
+    let mut config = state.config();
     config.security.secret_key = state.config().security.secret_key.clone();
     config.paths.db_path = state.config().paths.db_path.clone();
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
@@ -2731,10 +2732,11 @@ async fn api_key_request(
 
 #[tokio::test]
 async fn rpc_api_key_rejects_unconfigured_missing_wrong_and_legacy_credentials() {
-    let unconfigured = router(crate::state::AppState::new(
-        Config::default(),
-        PanelDb::open(":memory:").unwrap(),
-    ));
+    let (unconfigured_cfg, sandbox_root) = sandboxed_test_config();
+    let unconfigured = router(
+        crate::state::AppState::new(unconfigured_cfg, PanelDb::open(":memory:").unwrap())
+            .with_test_sandbox(sandbox_root),
+    );
     for headers in [vec![], vec![("x-api-key", "nhk_unconfigured_fixture")]] {
         assert_eq!(
             api_key_request(unconfigured.clone(), &headers, None)
@@ -2808,11 +2810,11 @@ async fn rpc_api_key_rotation_and_revocation_take_effect_on_existing_router() {
 
 #[tokio::test]
 async fn rpc_auth_failure_limit_uses_peer_and_keeps_correct_key_available() {
-    let mut config = Config::default();
+    let (mut config, sandbox_root) = sandboxed_test_config();
     config.security.auth_rate_limit_per_minute = 2;
     let db = PanelDb::open(":memory:").unwrap();
     let key = db.rotate_admin_api_key().unwrap();
-    let app = router(crate::state::AppState::new(config, db));
+    let app = router(crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root));
     let peer = Some("192.0.2.10:43210".parse().unwrap());
     for (forwarded, expected) in [
         ("198.51.100.1", StatusCode::UNAUTHORIZED),
@@ -2893,7 +2895,10 @@ async fn rpc_auth_audit_never_contains_api_key_or_legacy_credentials() {
     let path = directory.join("nexushub.sqlite");
     let db = PanelDb::open(&path).unwrap();
     let first = db.rotate_admin_api_key().unwrap();
-    let app = router(crate::state::AppState::new(Config::default(), db.clone()));
+    let (audit_cfg, sandbox_root) = sandboxed_test_config();
+    let app = router(
+        crate::state::AppState::new(audit_cfg, db.clone()).with_test_sandbox(sandbox_root),
+    );
     let invalid = "nhk_rejected_audit_fixture";
     let legacy = "legacy-cookie-audit-fixture";
     let peer = Some("192.0.2.12:43210".parse().unwrap());
@@ -3344,10 +3349,12 @@ mod maintenance_security {
         let rejected = format!("nhk_{}", "bc".repeat(32));
         let legacy = "fixture-legacy-session-value";
         let bearer = "Bearer fixture-bearer-value";
-        let mut config = Config::default();
+        let (mut config, sandbox_root) = super::sandboxed_test_config();
         config.security.auth_rate_limit_per_minute = 1;
-        let app = router(crate::state::AppState::new(config, db.clone()))
-            .layer(tower_http::trace::TraceLayer::new_for_http());
+        let app = router(
+            crate::state::AppState::new(config, db.clone()).with_test_sandbox(sandbox_root),
+        )
+        .layer(tower_http::trace::TraceLayer::new_for_http());
         let peer = Some("127.0.0.1:43210".parse().unwrap());
         let logs = CapturedLogs::default();
         async {
@@ -3452,7 +3459,7 @@ mod maintenance_security {
             (200, 400, "BadDeviceToken", "apns_permanent_rejection"),
         ] {
             let server = bark_echo_server(status, code, prefix).await;
-            let mut config = Config::default();
+            let (mut config, _sandbox_root) = super::sandboxed_test_config();
             config.probe.notifications.enabled = true;
             config.probe.notifications.server_url = server.base.clone();
             let request = crate::ProbeBarkRequest {

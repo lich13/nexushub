@@ -475,15 +475,15 @@ mod tests {
         body::{to_bytes, Body},
         http::{Request, StatusCode},
     };
-    use nexushub_core::{config::Config, db::PanelDb, services::commands as rpc_commands};
+    use nexushub_core::{db::PanelDb, services::commands as rpc_commands};
     use std::collections::BTreeSet;
     use tower::ServiceExt;
 
     fn authenticated_test_state() -> (AppState, String) {
-        let config = Config::default();
+        let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         let db = PanelDb::open(":memory:").unwrap();
         let api_key = db.rotate_admin_api_key().unwrap();
-        (AppState::new(config, db), api_key)
+        (AppState::new(config, db).with_test_sandbox(sandbox_root), api_key)
     }
 
     async fn request_rpc_status(

@@ -19,6 +19,7 @@ pub struct DeleteOutcome {
     pub residuals: Vec<String>,
     pub error: Option<String>,
     pub deleted_files: u64,
+    pub deleted_bytes: u64,
 }
 
 fn quoted(value: &str) -> String {
@@ -127,16 +128,12 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
             let conn =
                 Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             if crate::archive::table_columns(&conn, "threads")?.contains("rollout_path") {
+                let ids_json = serde_json::to_string(ids)?;
                 let mut stmt = conn.prepare(
-                    "SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL",
+                    "SELECT rollout_path FROM threads WHERE rollout_path IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
                 )?;
-                for row in
-                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                {
-                    let (id, path) = row?;
-                    if ids.contains(&id) {
-                        add(PathBuf::from(path));
-                    }
+                for row in stmt.query_map([&ids_json], |r| r.get::<_, String>(0))? {
+                    add(PathBuf::from(row?));
                 }
             }
             Ok(())
@@ -149,6 +146,9 @@ fn inventory(paths: &CodexPaths, ids: &BTreeSet<String>) -> Inventory {
         for line in BufReader::new(file).lines() {
             match line {
                 Ok(line) => {
+                    if !ids.iter().any(|id| line.contains(id.as_str())) {
+                        continue;
+                    }
                     if let Ok(row) = serde_json::from_str::<Value>(&line) {
                         if row["id"].as_str().is_some_and(|id| ids.contains(id)) {
                             if let Some(path) = row
@@ -465,6 +465,144 @@ pub fn preview(paths: &CodexPaths, id: &str, include_descendants: bool) -> Resul
     })
 }
 
+/// Single-pass batch size estimator for `ids` (avoids `O(K * N)` directory walks during dry-run).
+pub(crate) fn estimate_bytes_batch(paths: &CodexPaths, ids: &[String]) -> BTreeMap<String, u64> {
+    let target_set: BTreeSet<String> = ids
+        .iter()
+        .filter(|id| session_delete::valid_id(id).is_ok())
+        .cloned()
+        .collect();
+    if target_set.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut files_by_id: BTreeMap<String, BTreeSet<PathBuf>> = BTreeMap::new();
+    let roots = [paths.sessions_dir(), paths.home.join("archived_sessions")];
+    let mut add_for_id = |id: &str, path: PathBuf| {
+        if (path.extension().is_some_and(|ext| ext == "jsonl")
+            || rollout_file::is_compressed(&path))
+            && roots.iter().any(|root| session_delete::within(root, &path))
+        {
+            let entry = files_by_id.entry(id.to_owned()).or_default();
+            for sibling in [
+                rollout_file::plain_path(&path),
+                rollout_file::compressed_path(&path),
+            ] {
+                entry.insert(sibling);
+            }
+        }
+    };
+    if paths.state_db().exists() {
+        let _ = (|| -> Result<()> {
+            let conn =
+                Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            if crate::archive::table_columns(&conn, "threads")?.contains("rollout_path") {
+                let ids_json = serde_json::to_string(&target_set)?;
+                let mut stmt = conn.prepare(
+                    "SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
+                )?;
+                for row in stmt.query_map([&ids_json], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })? {
+                    let (id, path) = row?;
+                    add_for_id(&id, PathBuf::from(path));
+                }
+            }
+            Ok(())
+        })();
+    }
+    if let Ok(file) = fs::File::open(paths.session_index()) {
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Ok(row) = serde_json::from_str::<Value>(&line) {
+                if let Some(id) = row["id"].as_str().filter(|id| target_set.contains(*id)) {
+                    if let Some(path) = row
+                        .get("path")
+                        .or_else(|| row.get("rollout_path"))
+                        .and_then(Value::as_str)
+                    {
+                        add_for_id(id, path.into());
+                    }
+                }
+            }
+        }
+    }
+    for root in &roots {
+        if !root.exists() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .follow_root_links(false)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = RolloutName::parse(entry.path()) {
+                if target_set.contains(&name.thread_id) {
+                    files_by_id
+                        .entry(name.thread_id)
+                        .or_default()
+                        .insert(entry.into_path());
+                }
+            }
+        }
+    }
+    for id in &target_set {
+        let lock = paths
+            .home
+            .join("thread-writer-locks")
+            .join(format!("{id}.lock"));
+        if fs::symlink_metadata(&lock).is_ok() {
+            files_by_id.entry(id.clone()).or_default().insert(lock);
+        }
+    }
+    let snapshots = paths.home.join("shell_snapshots");
+    if let Ok(entries) = fs::read_dir(&snapshots) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some((prefix, _)) = name.split_once('.') {
+                    if target_set.contains(prefix) {
+                        files_by_id
+                            .entry(prefix.to_owned())
+                            .or_default()
+                            .insert(entry.path());
+                    }
+                }
+            }
+        }
+    }
+    let visualizations = paths.home.join("visualizations");
+    if visualizations.exists() {
+        let mut entries = walkdir::WalkDir::new(&visualizations)
+            .follow_links(false)
+            .follow_root_links(false)
+            .into_iter();
+        while let Some(Ok(entry)) = entries.next() {
+            if let Some(id) = entry
+                .file_name()
+                .to_str()
+                .filter(|id| target_set.contains(*id))
+            {
+                let id_owned = id.to_owned();
+                files_by_id
+                    .entry(id_owned)
+                    .or_default()
+                    .insert(entry.into_path());
+                entries.skip_current_dir();
+            }
+        }
+    }
+    files_by_id
+        .into_iter()
+        .map(|(id, files)| {
+            let existing: Vec<PathBuf> = files
+                .into_iter()
+                .filter(|p| fs::symlink_metadata(p).is_ok())
+                .collect();
+            let (_, bytes) = session_delete::size(&existing);
+            (id, bytes)
+        })
+        .collect()
+}
+
 fn delete_database(
     path: &Path,
     ids: &BTreeSet<String>,
@@ -645,6 +783,7 @@ pub fn execute_ids(paths: &CodexPaths, selected: &[String]) -> Result<DeleteOutc
         error: (!outcome.residuals.is_empty()).then(|| "部分内容未删除，请查看逐项结果".into()),
         residuals: outcome.residuals,
         deleted_files: outcome.files,
+        deleted_bytes: outcome.bytes,
     })
 }
 

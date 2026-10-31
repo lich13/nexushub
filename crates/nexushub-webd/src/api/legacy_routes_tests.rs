@@ -1,16 +1,20 @@
-use super::router;
+use super::{router, test_support::sandboxed_test_config};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use nexushub_core::{config::Config, db::PanelDb};
+use nexushub_core::db::PanelDb;
 use serde_json::Value;
 use tower::ServiceExt;
 
 fn authenticated_test_state() -> (crate::state::AppState, String) {
+    let (config, sandbox_root) = sandboxed_test_config();
     let db = PanelDb::open(":memory:").unwrap();
     let api_key = db.rotate_admin_api_key().unwrap();
-    (crate::state::AppState::new(Config::default(), db), api_key)
+    (
+        crate::state::AppState::new(config, db).with_test_sandbox(sandbox_root),
+        api_key,
+    )
 }
 
 async fn request_path_status(

@@ -42,10 +42,7 @@ mod tests {
         body::{to_bytes, Body},
         http::{header, Request},
     };
-    use nexushub_core::{
-        config::Config,
-        db::{NewProbeEvent, PanelDb},
-    };
+    use nexushub_core::db::{NewProbeEvent, PanelDb};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -66,7 +63,8 @@ mod tests {
             })
             .unwrap();
         }
-        let app = router(AppState::new(Config::default(), db));
+        let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
+        let app = router(AppState::new(config, db).with_test_sandbox(sandbox_root));
 
         let small = app
             .clone()

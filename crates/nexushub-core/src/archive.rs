@@ -125,15 +125,12 @@ pub fn plan_delete_archived(paths: &CodexPaths) -> Result<ArchiveDeletePlan> {
     })
 }
 
-fn existing_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
-    let db = paths.state_db();
-    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("open {}", db.display()))?;
-    let mut stmt = conn.prepare("SELECT id FROM threads")?;
-    let ids = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    Ok(ids)
+fn thread_row_exists(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ?1)",
+        [id],
+        |row| row.get(0),
+    )?)
 }
 
 pub fn execute_delete_archived(
@@ -141,20 +138,28 @@ pub fn execute_delete_archived(
     candidates: &[HiddenThreadSelection],
 ) -> Result<ArchiveDeleteResult> {
     let before = plan_delete_archived(paths)?;
-    let existing = existing_thread_ids(paths)?;
-    let allowed: HashSet<&str> = before.archived_ids.iter().map(String::as_str).collect();
+    let db = paths.state_db();
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", db.display()))?;
+    let thread_cols = table_columns(&conn, "threads")?;
+    let edge_cols = table_columns(&conn, "thread_spawn_edges")?;
+    let has_spawn_edges =
+        edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
     let (items, deleted_rollout_files) =
         delete_candidates(paths, candidates, |candidate| -> Result<()> {
             crate::session_delete::valid_id(&candidate.id)?;
-            if allowed.contains(candidate.id.as_str()) {
+            if let Some(cur_fp) = verify_archived_target_fingerprint(
+                &conn,
+                &thread_cols,
+                has_spawn_edges,
+                &candidate.id,
+            )? {
                 if let Some(req_fp) = candidate.fingerprint.as_deref().filter(|s| !s.is_empty()) {
-                    if let Some(cur_fp) = codex_thread_fingerprint(paths, &candidate.id)? {
-                        anyhow::ensure!(req_fp == cur_fp, "归档线程指纹已变化，请重新预览");
-                    }
+                    anyhow::ensure!(req_fp == cur_fp, "归档线程指纹已变化，请重新预览");
                 }
                 return Ok(());
             }
-            if !existing.contains(&candidate.id)
+            if !thread_row_exists(&conn, &candidate.id)?
                 && crate::selected_codex::tree::is_recorded_delete_residual(paths, &candidate.id)
                 && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
             {
@@ -240,39 +245,116 @@ pub fn plan_delete_hidden(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> 
     hidden_delete_plan(paths)
 }
 
+fn hidden_summary_counts(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
+    let work = crate::scan_work::ScanWork::default();
+    let conn = crate::selected_codex::open(paths, false)?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    let rows = hidden_visibility_rows(&conn, &work)?;
+    let mut visible_threads = 0;
+    let mut hidden_ids = Vec::new();
+    let mut source_counts = BTreeMap::new();
+    let mut archived_threads = 0;
+    for row in &rows {
+        if row.archived {
+            archived_threads += 1;
+        } else if let Some(category) = &row.hidden_category {
+            hidden_ids.push(row.id.clone());
+            *source_counts.entry(category.clone()).or_insert(0) += 1;
+        } else {
+            visible_threads += 1;
+        }
+    }
+    let hidden_ids = crate::selected_codex::tree::descendants(paths, &hidden_ids)?;
+    Ok(HiddenThreadDeletePlan {
+        scan: None,
+        total_threads: rows.len() as u64,
+        visible_threads,
+        hidden_threads: hidden_ids.len() as u64,
+        archived_threads,
+        session_index_lines: 0,
+        rollout_files: 0,
+        hidden_ids,
+        candidates: Vec::new(),
+        source_counts,
+        integrity: "not_checked".into(),
+    })
+}
+
+pub(crate) fn plan_delete_hidden_candidates(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
+    let work = crate::scan_work::ScanWork::default();
+    let conn = crate::selected_codex::open(paths, false)?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    let rows = hidden_visibility_rows(&conn, &work)?;
+    let mut visible_threads = 0;
+    let mut hidden_ids = Vec::new();
+    let mut source_counts = BTreeMap::new();
+    let mut archived_threads = 0;
+    for row in &rows {
+        if row.archived {
+            archived_threads += 1;
+        } else if let Some(category) = &row.hidden_category {
+            hidden_ids.push(row.id.clone());
+            *source_counts.entry(category.clone()).or_insert(0) += 1;
+        } else {
+            visible_threads += 1;
+        }
+    }
+    let hidden_ids = crate::selected_codex::tree::descendants(paths, &hidden_ids)?;
+    let row_by_id: BTreeMap<&str, &HiddenVisibilityRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    let candidates = hidden_ids
+        .iter()
+        .map(|id| {
+            let row = row_by_id.get(id.as_str()).copied();
+            HiddenThreadCandidate {
+                id: id.clone(),
+                title: row.map_or_else(|| id.clone(), |r| r.title.clone()),
+                fingerprint: row.map(|r| r.fingerprint.clone()),
+                allowed: true,
+                reason: None,
+            }
+        })
+        .collect();
+    Ok(HiddenThreadDeletePlan {
+        scan: None,
+        total_threads: rows.len() as u64,
+        visible_threads,
+        hidden_threads: hidden_ids.len() as u64,
+        archived_threads,
+        session_index_lines: 0,
+        rollout_files: 0,
+        hidden_ids,
+        candidates,
+        source_counts,
+        integrity: "not_checked".into(),
+    })
+}
+
 pub fn execute_delete_hidden(
     paths: &CodexPaths,
     candidates: &[HiddenThreadSelection],
 ) -> Result<HiddenThreadDeleteResult> {
-    let before = plan_delete_hidden(paths)?;
-    let existing = existing_thread_ids(paths)?;
-    let allowed: BTreeMap<&str, &HiddenThreadCandidate> = before
-        .candidates
-        .iter()
-        .map(|c| (c.id.as_str(), c))
-        .collect();
+    let before = hidden_summary_counts(paths)?;
+    let conn = crate::selected_codex::open(paths, false)?;
+    let thread_cols = table_columns(&conn, "threads")?;
+    let edge_cols = table_columns(&conn, "thread_spawn_edges")?;
+    let has_spawn_edges =
+        edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
     let (items, deleted_rollout_files) =
         delete_candidates(paths, candidates, |candidate| -> Result<()> {
             crate::session_delete::valid_id(&candidate.id)?;
-            if let Some(plan_cand) = allowed.get(candidate.id.as_str()) {
-                if !plan_cand.allowed {
-                    anyhow::bail!(
-                        "{}",
-                        plan_cand
-                            .reason
-                            .as_deref()
-                            .unwrap_or("隐藏线程当前不允许清理")
-                    );
-                }
-                if let (Some(req_fp), Some(cur_fp)) = (
-                    candidate.fingerprint.as_deref().filter(|s| !s.is_empty()),
-                    plan_cand.fingerprint.as_deref().filter(|s| !s.is_empty()),
-                ) {
+            if let Some(cur_fp) = verify_hidden_target_fingerprint(
+                &conn,
+                &thread_cols,
+                has_spawn_edges,
+                &candidate.id,
+            )? {
+                if let Some(req_fp) = candidate.fingerprint.as_deref().filter(|s| !s.is_empty()) {
                     anyhow::ensure!(req_fp == cur_fp, "隐藏线程指纹已变化，请重新预览");
                 }
                 return Ok(());
             }
-            if !existing.contains(&candidate.id)
+            if !thread_row_exists(&conn, &candidate.id)?
                 && crate::selected_codex::tree::is_recorded_delete_residual(paths, &candidate.id)
                 && crate::selected_codex::tree::has_orphan_artifacts(paths, &candidate.id)
             {
@@ -280,7 +362,8 @@ pub fn execute_delete_hidden(
             }
             anyhow::bail!("目标不属于隐藏线程允许集合或不存在")
         });
-    let after = plan_delete_hidden(paths).unwrap_or_else(|_| HiddenThreadDeletePlan {
+    drop(conn);
+    let after = hidden_summary_counts(paths).unwrap_or_else(|_| HiddenThreadDeletePlan {
         integrity: "unavailable".into(),
         ..Default::default()
     });
@@ -568,6 +651,18 @@ pub(crate) fn codex_thread_fingerprint(paths: &CodexPaths, id: &str) -> Result<O
     Ok(row.map(|r| r.fingerprint))
 }
 
+/// Targeted `O(depth)` point lookup verifying `id` belongs to the current archived thread closure.
+pub(crate) fn verify_archived_target_fingerprint(
+    conn: &Connection,
+    thread_columns: &HashSet<String>,
+    has_spawn_edges: bool,
+    id: &str,
+) -> Result<Option<String>> {
+    verify_closure_target_fingerprint(conn, thread_columns, has_spawn_edges, id, |row| {
+        row.archived
+    })
+}
+
 /// Targeted `O(depth)` point lookup verifying `id` belongs to the current non-archived hidden
 /// thread closure in `state_5.sqlite` without scanning all threads or rollout files on disk.
 pub(crate) fn verify_hidden_target_fingerprint(
@@ -575,6 +670,18 @@ pub(crate) fn verify_hidden_target_fingerprint(
     thread_columns: &HashSet<String>,
     has_spawn_edges: bool,
     id: &str,
+) -> Result<Option<String>> {
+    verify_closure_target_fingerprint(conn, thread_columns, has_spawn_edges, id, |row| {
+        !row.archived && row.hidden_category.is_some()
+    })
+}
+
+fn verify_closure_target_fingerprint(
+    conn: &Connection,
+    thread_columns: &HashSet<String>,
+    has_spawn_edges: bool,
+    id: &str,
+    matches_root: impl Fn(&HiddenVisibilityRow) -> bool,
 ) -> Result<Option<String>> {
     let spec = build_visibility_select_sql(thread_columns);
     let row_sql = format!("SELECT {} FROM threads WHERE id = ?1", spec.select_cols);
@@ -585,7 +692,7 @@ pub(crate) fn verify_hidden_target_fingerprint(
         return Ok(None);
     };
     let target_fp = target_row.fingerprint.clone();
-    if !target_row.archived && target_row.hidden_category.is_some() {
+    if matches_root(&target_row) {
         return Ok(Some(target_fp));
     }
     let mut queue: VecDeque<String> = target_row.parent_ids.into_iter().collect();
@@ -608,7 +715,7 @@ pub(crate) fn verify_hidden_target_fingerprint(
         else {
             continue;
         };
-        if !anc.archived && anc.hidden_category.is_some() {
+        if matches_root(&anc) {
             return Ok(Some(target_fp));
         }
         for p in anc.parent_ids {
