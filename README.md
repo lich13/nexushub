@@ -1,124 +1,92 @@
-# NexusHub
+# AgentHub
 
-NexusHub 是一个会话阅读与管理工具，用于在 ChatGPT macOS App 风格的桌面界面中查看 Codex、Claude Code、Grok Build、Antigravity 和 DeepSeek Harness（DSH）的本机会话，也可以通过受保护的 API 管理一台远程机器。本机 Codex 主线程支持连接原生桌面继续协作。
+AgentHub（底层包标识 `com.lich13.nexushub`，服务端守护进程 `nexushub-webd`）是一款面向 macOS 的多平台 AI Agent 会话阅读、通知探针与安全清理工作台。它采用纯正 ChatGPT macOS Desktop App 的三层中性表面设计（`--bg-rail` / `--bg-list` / `--bg-stage`），在单一原生界面中统一纳管 **Codex**、**Claude Code**、**Grok Build**、**Antigravity** 与 **DeepSeek Harness（DSH）** 五大 Agent 的本机会话，并支持通过加密 API Key 连接管理多台命名远程 Linux 主机。本机未归档的 Codex 主线程支持连接原生 Codex 桌面端继续协作。
 
-## 主要能力
+## 核心能力
 
-- 按 Provider 搜索会话、搜索当前线程或全部线程，并用时间线定位消息、Plan、附件和工具活动；时间线短线只显示识别到的用户指令。
-- 保留文本与工具的原始顺序；连续工具活动可以展开查看。Claude 同一回合的思考、临时说明和工具活动合并为默认收起的过程折叠，Antigravity 与 DSH 的思考块和连续命令／工具执行同样默认折叠，最终答复单独显示；自动上下文合并为一行默认收起，真实请求与附件正常显示。
-- 复制线程 ID、路径、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
-- 五种 Provider 共用 ⌘ 点击多选、Shift 区间追加和确认后直接删除；双击或 `F2` 可改名。Codex、Antigravity 与 DeepSeek Harness 支持“全部／已归档”筛选、归档、恢复和含已核验子代理后代的永久删除；Antigravity 与 DSH 菜单提供改名、归档／恢复、复制 ID、复制路径与永久删除（不提供复制恢复命令）。
-- 通过 Bark 接收完成、需要回复、需要授权和失败的简洁摘要；本机 Claude hooks 可在设置中明确启用，与轮询共用去重，Codex 保留逐问题提醒。
-- 在本机 Codex 新建或继续主线程，发送消息、排队、补充与停止；选择原生模型、思考强度、默认或 Plan 模式，添加文件、图片、技能、应用和插件引用，并处理受支持的审批与问答。
+- **五平台统一阅读与全局检索**：按工作区切换浏览 Codex、Claude Code、Grok Build、Antigravity 与 DeepSeek Harness 会话；支持 `⌘K` 跨五大 Agent 全局搜索、`⌘F` 当前会话／当前工作区搜索，以及右侧独立 20px 用户指令时间线刻度定位（仅标记真实用户指令，悬停预览、点击跨越未加载分页直达目标）。
+- **无框流式排版与过程折叠**：保持文本与工具调用的原始时序；同一回合内连续的思考、过渡说明与命令／工具执行自动收敛为单行轻量披露块（`<details>`），最终答复独立清晰展示；`AGENTS.md`、环境与自动上下文默认合并为单行“上下文”入口，搜索命中时自动展开对应折叠块并保留用户手动展开状态。
+- **最优交接路径与一键定位**：五大平台统一提供复制线程 ID、复制最优交接文件路径（Codex 明文／归档／`.jsonl.zst` rollout、Claude 主 JSONL、Grok `chat_history.jsonl` 优先、Antigravity 纯文本转录优先、DSH 明文／`.zstd` 日志）、本机 `在 Finder 中显示`（`⌘⇧R`）、复制助手纯净 Markdown 回复，以及 Codex／Grok Plan Markdown 导出。
+- **访达风格多选与底部归档抽屉**：五大平台共用 `⌘` 单击切换、`Shift` 连续区间追加、`⌘A` 全选、`Escape` 清空、`⌘⌫` 批量删除及右键上下文菜单；双击或按 `F2` 行内改名。Codex、Antigravity 与 DSH 在列表底部提供按需加载的可折叠「已归档」抽屉，支持单条或批量归档、恢复与包含已核验子代理闭包的永久删除。
+- **控制台优先 Probe 与五平台 Hooks／Host 矩阵**：进入 Probe 即呈现全局主控开关、Bark 通道配置与测试推送、五大 Agent 平台通知一键开关，以及结构完全一致的五平台 Hooks／Host 管理卡片（Codex `~/.codex/hooks.json`、Claude Code `~/.claude/settings.json`、Grok Build `~/.grok/hooks/nexushub.json`、Antigravity `~/.gemini/config/hooks.json` 一键安装／修复／移除，DSH 原生 `session.lock` + `.zstd` 流直连），实时事件与 15 秒增量轮询共享 SQLite 原子幂等去重。
+- **全平台线程清理与严格执行端防护**：「设置 → 更新与维护 → 全平台线程清理」覆盖五大平台六大清理作用域（Codex 已归档、Codex 隐藏线程、Antigravity 已归档、DSH 已归档、Claude Code 空／闲置会话、Grok 空／闲置会话），支持流式分批扫描、100 条分页候选预览与按分类勾选清理。
+- **多台命名远程机器管理**：「设置 → 远程连接」支持添加、编辑、切换与移除多台自定义名称的远程主机；每台机器的管理员 API Key 按 `machine_id` 独立保存在 macOS Keychain 中，旧版单远程配置首次启动时自动无损迁移，切换机器时自动隔离查询缓存、分页与写操作状态。
 
-对话和工具始终由原生 Codex 桌面执行；NexusHub 不独立运行模型或安装 Provider。远程、归档及子线程，以及 Claude Code、Grok 的对话仍只读。阅读和展示不会改写原生会话；改名、归档、恢复及删除只在用户确认的范围内执行。
+所有模型推理与工具执行始终由各 Agent 原生程序完成；AgentHub 不捆绑模型运行环境，也不改写未知格式的原生会话文件。
 
-## 本机 Codex 协作
+## 本机 Codex 桌面协作
 
-打开本机 Codex 主线程，在协作区选择“在 Codex 中打开”，等待原生桌面打开对应线程并自动连接。“连接”用于连接桌面已打开的线程，本身不会打开目标线程；仅在 NexusHub 中选中历史线程还不满足这个前提。新建时先选择工作目录，空线程打开后也会自动连接；尚未发送消息时没有对话内容。普通浏览线程不会启动协作。需要已安装并运行兼容的 Codex 桌面；以实际协议和线程归属判断兼容，不按 build 号限制发送或显示常驻提示。确实不兼容时保留阅读，并提示在 Codex 中处理；未来破坏性协议变更仍可能需要适配。
+打开本机未归档的 Codex 主线程，在底部悬浮协作区点击「在 Codex 中打开」即可唤起原生 Codex 桌面打开该线程并自动建立连接；也可在「新建线程」中选择工作目录创建空线程并自动连接。普通浏览历史会话保持纯只读，不会后台启动协作连接。兼容性按实际握手协议与线程归属判定，不按固定 build 号拦截；若遇协议不兼容或线程 owner 变更，界面自动回退为只读阅读并提示在 Codex 桌面端处理。
 
-输入后按发送按钮或 ⌘/Ctrl+Enter。运行时“排队”留作下一回合，“补充”发给当前回合，“停止”中断当前回合并暂停本线程待发送队列。待发送消息与引用元数据在本机加密保存，断线或重启后由你确认继续；结果不明的记录需先在 Codex 核对，不会自动重发。队列与原生桌面自己的排队内容分别保留。
+协作输入区支持：
 
-短暂断线会尝试恢复；桌面重启导致线程 owner 改变时只恢复阅读，点击“连接”确认后再继续协作，暂停队列仍需手动继续。提交期间会显示“正在提交到 Codex…”。遇到问题可点击“复制诊断”，即使连接失败也可取得安全错误分类和版本信息；不包含聊天正文、路径或凭据，复制完成会显示“诊断已复制”。
+- **发送、排队、补充与停止**：按 `⌘+Enter` 发送；运行中可将新消息「排队」至下一回合、「补充」注入当前回合，或点击「停止」中断当前回合并暂停本机待发送队列。待发送队列在本机加密持久化，断线或重启后需手动确认继续；投递结果不明的记录需先在 Codex 核对，绝不自动重发。
+- **附件与剪贴板接入**：支持原生文件选择器、拖拽上传、Finder 文件复制粘贴、每行一条绝对路径／`~/` 路径／`file://` URL 自动识别，以及截图（PNG／TIFF／JPEG）直接粘贴。
+- **技能、应用、插件与模型切换**：输入 `$` 检索技能、`@` 检索应用与已启用插件；点击模型摘要可切换原生模型、思考强度与默认／Plan 模式，并实时同步原生 Goal 状态与命令／文件 diff 审批。
 
-文件和图片可以由原生选择器选择，也可拖入协作输入区。从 Finder 复制文件后可直接粘贴；每行一个完整的绝对路径、`~/` 路径或本机文件 URL 也可自动附加，路径允许空格及成对引号。只有整段内容都是有效文件时才附加，普通正文或失效路径保留为文本。截图及 PNG/TIFF/JPEG 图片支持直接粘贴，Finder 文件优先于预览缩略图。粘贴图片保存在仅当前用户可访问的本机私有文件中，供原生桌面读取；交给发送队列后会保留，避免影响历史图片。存储满时可改用文件选择器。
+详细协议边界见[架构说明](docs/ARCHITECTURE.md#本机-codex-桌面协作)。
 
-输入 `$` 搜索技能、`@` 搜索应用和已启用插件；用上下键选择，Enter/Tab 插入，Escape 关闭，也可从输入区“＋”添加菜单选择。所选引用显示可移除标签；插件与应用独立加载，原生应用目录首次读取可能较慢，超时可单独重试，单侧失败仍保留另一侧结果。模型、思考强度和模式以原生目录为准，点击模型摘要可调整模型、思考强度与模式，包括目录提供的 max 等值；设置失败恢复原生选择，应用目录失败不阻断普通发送。
+## 阅读、分页与体积统计
 
-协作区显示空闲、执行、待处理请求和队列状态，并同步原生 Goal 的目标与状态。点击目标旁的打开按钮或“＋ → 目标”到 Codex 中创建、修改、暂停或恢复目标。审批命令用等宽文本显示，文件变化按文件折叠，展开后查看 diff；超出显示范围时回到 Codex 处理。审批需核对显示内容后确认；命令和文件请求在当前连接支持时可选“允许本次会话”，权限请求仍只用于本回合，问答不预选答案；未完整显示或不支持的请求请回到 Codex 处理。隐藏窗口或切换页面会释放界面订阅，已提交的本机队列仍属于原线程。
+- **双向无感分页與锚点保持**：五大 Agent 主会话与 Codex 子智能体详情均支持上滚至距顶部 `200px` 时自动加载较早历史分页，轮询、追加消息与展开工具组时严格保持当前可见消息像素偏移，不跳回底部。
+- **有界内存与增量复用**：服务端对五大平台的列表扫描采用基于 `(mtime, size)` 的有界内存／SQLite 投影缓存（包括 DSH `.zstd` 折叠元数据缓存、Antigravity 本地端点缓存、Claude 活动快照短缓存与 Probe 实时态势缓存）；会话详情缓存空闲 TTL 为 **300 秒（5 分钟）**，超期自动释放并收缩容量。窗口隐藏时前端自动暂停常规轮询，恢复可见时立即刷新。
+- **线程体积分级（K／M／G）**：五大平台会话卡片右侧以等宽数字展示实际字节大小，按统一阈值着色：**`< 100 MiB` 绿色**、**`100 MiB – 300 MiB` 琥珀色**、**`>= 300 MiB` 红色**；未知或后台统计中显示灰色 `—`，部分下限结果标 `≥`。统计仅涵盖已确认归属的 rollout、会话 JSONL、专属子目录与压缩日志，不计入项目代码工作目录，也不跟随符号链接。
 
-验收时在桌面打开同一主线程，连接后分别通过加号、Finder 复制、完整路径文本和截图粘贴添加附件并发送，确认桌面实际可读附件；检查普通文本粘贴、撤销/重做和切换窗口后立即粘贴。加入 $/@ 引用后发送，确认桌面可见执行进度；展开文件审批检查 diff，分别在任一侧完成审批或问答，另一侧待处理项应消失。原生文件引用的显示一致性与真实使用体验仍待用户验收。实现与兼容限制见[桌面协作说明](docs/ARCHITECTURE.md#本机-codex-桌面协作)。
+## 会话删除与全平台清理安全边界
 
-## 阅读与线程大小
+无论是会话列表的单条／批量永久删除，还是「更新与维护 → 全平台线程清理」中的六大分类清理，均严格执行以下安全红线：
 
-Codex、Claude Code、Grok 和 Codex 子智能体上滚到顶部附近时逐页加载较早消息；首次打开定位最新内容，加载和轮询保留阅读位置。父线程没有新消息时，子智能体仍按自身回合刷新状态。搜索命中折叠历史、Claude 过程、工具结果或指令时自动展开目标，保留其他手动折叠选择。搜索、复制、Plan 导出、附件与折叠选择共用稳定消息身份。
+1. **预览指纹绑定与允许集重算**：执行端绝不信任客户端传入的路径或 ID 列表，每次执行前均在服务端重新枚举并计算当前允许清理集合，并与用户预览确认的 `(id, fingerprint)` 严格取交集——预览后新增或发生内容变化的会话一律跳过，不会误删。
+2. **运行态与锁占用强制拦截**：执行前对每个目标（含 Codex／Antigravity／DSH 的全部已核验子代理后代闭包）逐一核查活跃进程、文件锁（如 `session.lock`、`LOCK_SH`）与宿主运行状态（DSH 归档／恢复／删除前须退出正在运行的 DSH 进程）。任一目标处于运行或加锁状态即拒绝删除。
+3. **首错即停与残留如实报告**：批量或统一清理按序逐项执行，遇到非预期的权限、数据库、RPC 或文件系统错误时立即停止后续删除（`stopped_early = true`），并分开报告**已删除数量**、**实际回收字节数**、**跳过项**与**残留项（`residuals`）**。
+4. **专属范围与符号链接隔离**：仅清理确认归属的会话文件、专属旁路（writer lock、shell snapshot、visualization、brain 旁路等）并原子更新共享索引（无命中时不重写共享文件）；目录内遇到符号链接仅删除链接本身，绝不沿符号链接越界删除外部文件。
 
-每条用户消息按“附件 → 上下文 → 请求正文”排列。AGENTS.md、环境与自动文件说明共用一个“上下文”入口，展开可读原文；纯上下文不产生空气泡或时间线刻度。搜索包含真实正文、问题与回答、附件名及 AGENTS.md 指令，排除自动环境字段。代码、引用和不完整包装保留原文。
+## Probe 通知探针与五平台 Hooks
 
-左侧时间线使用完整用户消息索引，缩窄刻度与悬停预览；即使较早正文尚未加载或已折叠，也能定位到对应记录，再向前后分页或返回最新内容。Grok 大历史保留最早记录。旧服务使用逐页加载回退。
+Bark 通知统一采用 `Provider｜状态｜线程标题` 格式（状态涵盖：`完成`、`需要回复`、`需要授权`、`失败`），正文提炼最多 4 个非空行、300 个 Unicode 字符的纯净摘要，剥离 Markdown、代码块、工具输出与内部元数据。
 
-三种 Provider 按实际字节数统一使用绿、琥珀、红三档颜色，具体阈值见[大小统计规则](docs/ARCHITECTURE.md#大小统计与资源预算)。K／M／G 数值格式和卡片布局保持原有规则；未知或统计中为灰色 `—`，部分结果按已确认下限分色并显示 `≥`。悬停或键盘聚焦可查看准确字节和统计范围。
+- **五平台通知一键开关**：在 Probe 首屏即可独立启停 Codex、Claude Code、Grok Build、Antigravity 与 DeepSeek Harness 通知（Antigravity 与 DSH 仅在本机运行时生效）。
+- **四平台实时 Hooks + DSH 原生流**：
+  - **Codex**：管理 `~/.codex/hooks.json` 的 Stop Hook，并保留逐问题识别与去重；
+  - **Claude Code**：管理 `~/.claude/settings.json` 的 `Stop`、`Notification`、`StopFailure` Hooks；
+  - **Grok Build**：管理 `~/.grok/hooks/nexushub.json`，将完成、失败与待回复延迟从 15 秒轮询降至 `<1 秒` 实时回调，同时保留 15 秒轮询兜底；
+  - **Antigravity**：管理 `~/.gemini/config/hooks.json` 中 `"nexushub"` 命名空间的 `Stop` Hook（立即返回 `{"decision":"allow"}` 不阻塞 IDE），实现回合结束瞬间实时推送，并与 15 秒原生 Language Server 轮询共享去重；
+  - **DeepSeek Harness**：直接通过原生 `session.lock` 与 `.zstd`／v4 JSONL 增量流及 `turn/end` 精确结算，无需外部 Hook 文件即可零侵入实时监测。
+- **安全校验与有限重试**：Bark 仅允许 HTTPS 服务或 HTTP 本机回环地址；临时网络故障按既有退避策略有限重试，重启后继续未确认分段，升级或首次启用只建立基线、不补发历史通知。
 
-Codex 统计已验证的明文或 `.jsonl.zst` rollout；Claude 统计主 JSONL 及确认归属的会话目录；Grok 统计专属目录。不计项目工作目录或外部附件，不跟随符号链接。目录在后台有界统计；[资源预算](docs/ARCHITECTURE.md#大小统计与资源预算)说明缓存和刷新边界。
+## 运行与部署
 
-读取缓存合并同源请求，未变化正文复用结果，普通追加只解析新增记录。界面轮询只刷新最新窗口及确有变化的已加载历史；窗口隐藏时暂停界面轮询，后台 monitor 独立运行。
+### 本机 macOS App
 
-## 会话清理
+下载安装 `AgentHub-<版本>-darwin-arm64.dmg`（应用包名 `AgentHub.app`，Bundle ID 保持 `com.lich13.nexushub` 以无缝沿用既有配置、数据库与系统钥匙串）。本机安装脚本会自动退出运行中的旧实例、原地替换 `/Applications/AgentHub.app`（若存在旧版 `/Applications/NexusHub.app` 会一并无损迁移清理）并校验签名与版本号。
 
-⌘ 点击进入多选并切换目标，Shift 按当前可见顺序追加区间；键盘点击按普通选择处理，Ctrl 点击打开右键菜单。选择数量没有上限，归档与恢复自动分批。切换机器、Provider、筛选条件或退出多选会清除选择，轮询不加入新行。
+### 远程 Linux API 服务
 
-单条、批量和“更新与维护”中的归档／隐藏清理都在一次确认后直接删除。空会话、损坏记录、未知版本、活动登记、占用锁或预览后文件变化不阻止执行。确认界面列出目标及 Codex 原生后代；后来出现的其他线程不会被自动加入。
-
-Codex 删除普通和归档 rollout、压缩副本、专属旁路、数据库及索引对应记录。Claude 删除主文件、同名目录、文件历史等专属旁路及共享索引对应记录。Grok 删除各工作区的目标目录和活动登记。目录中的符号链接只删除链接本身；不会沿外部引用删除其他线程。
-
-文件已不存在视为完成；权限、文件系统或数据库错误逐项显示，其他目标继续。删除是一次性操作，原生程序之后重建的数据在刷新后显示。“更新与维护”仍可分批查看及停止隐藏扫描，加载完整候选后再确认。
-
-Claude 命名记录、空文件或仅元数据会话显示“暂无对话”。Grok 在 updates.jsonl 缺失时读取原生 chat_history.jsonl；系统提示、system_reminder 和加密推理不显示为对话。
-
-## 通知与兼容
-
-Bark 新事件统一使用 `Provider｜状态｜线程标题`，缺失标题时回退项目名；正文最多四个非空行、300 个 Unicode 字符，去掉 Markdown、代码、工具输出和内部信息，不附线程或回合 ID。每个新事件生成一条摘要；回复和授权使用时效提醒，其余使用普通提醒，保留声音和合法显式 URL。
-
-在本机 Probe 设置中确认安装 Claude hooks，接收完成、问题、授权和失败事件；安装 App 不会自动启用。Claude hooks 与同机轮询使用核实的 prompt 身份，同回合每类提醒一次，快速开始新回合不会丢弃有效旧完成或已确认的交互提醒。完成后不单独发送空闲通知。Codex 仍逐问题识别和去重；远端 Claude 继续使用轮询。
-
-本机 Probe 设置还可分别开启 Antigravity、DSH 的完成、失败、需要回复和需要授权提醒。Antigravity 依赖正在运行的本机原生服务；DSH 支持标准 v4 JSONL 和多帧 Zstandard 存储。两者按主回合终态提醒，已处理问题／审批及恢复后的旧失败停止重试；首次或重新启用建立基线，不补发历史。新开关默认关闭，仅在本机显示，远端不运行。
-
-Bark 默认关闭，接受 HTTPS 服务和 HTTP 回环服务；危险地址或无效配置会明确失败，不会改用默认服务投递。临时失败采用既有有限重试，次数、间隔和有效期见[通知投递规则](docs/ARCHITECTURE.md#通知与监测)。旧在途消息保留原内容、分段和确认进度；升级不回放历史，不重发成功项。网络结果未知时仍可能重复提醒；“Bark 已受理”只表示服务端确认，设备实收需要单独核对。
-
-API 协议保持 **2**。先升级远程 API，再安装 App；Codex 整树删除在确认时传递已定位的后代集合，不再读取 `codex_delete_tree` 作为删除资格门槛。旧服务缺少大小或子智能体能力时保留阅读和对应未知／升级提示，缺少历史变更信息时沿用兼容刷新方式。缺少分批扫描能力时使用单次扫描，不显示进度或停止按钮。
-
-Pi、Gotify、网页版和自动 Goal 恢复已退役。迁移仅清理 NexusHub 自有的退休配置与记录，保留 Bark、连接、通知基线及原生 Provider 会话；不会自动删除外部服务。
-
-## 运行方式
-
-### 本机 App
-
-下载 macOS ARM64 DMG，安装后即可读取本机数据。App 更新和远程服务更新分开显示。
-
-当前 macOS 发行包使用 ad-hoc 代码签名，没有 Developer ID 签名或 Apple 公证；updater 的 Minisign 签名用于验证更新归档来源，不能替代系统代码签名。覆盖安装后若 macOS 请求重新授权钥匙串访问，请在系统对话框完成验证，无需重建已保存的远程连接。
-
-### 远程 API
-
-Linux `webd` 只提供管理 API 和健康检查，不提供网页、登录页或静态资源。配置只接受回环监听，远程访问通过 HTTPS 反向代理。打开 App 的“设置 → 远程连接”，填写 HTTPS 地址和管理员 API Key。地址保存在本机设置，Key 保存在 macOS Keychain。
-
-使用导航旁的机器按钮可在“本机”和“远程机器”之间切换。查询缓存、分页、展开状态和写操作都按机器隔离；连接失败不会自动切换目标。
-
-## 快速部署
-
-部署客户端和服务器须先安装 Minisign，并同时取得正式归档、SHA-256 文件与分离签名。首次从旧版本升级时由可信客户端验签，具体步骤见[部署手册](docs/cloud-deploy-runbook.md#安装与升级)。部署参数必须从仓库外提供，示例使用保留域名和占位主机：
+Linux `nexushub-webd` 仅提供受管理员 API Key（`x-api-key`）保护的 `/api/rpc/*` 管理接口与 `/healthz` 健康检查，仅绑定回环地址，由前置 HTTPS 反向代理对外提供服务。部署参数须从仓库外提供：
 
 ```bash
 NEXUSHUB_DOMAIN=panel.example.invalid \
   bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
 ```
 
-在服务器生成独立 API Key，并只通过 App 保存：
+在远端服务器生成独立管理员 API Key 并填入桌面端「设置 → 远程连接」：
 
 ```bash
 sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/api-key
 ```
 
-Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤销会立即使旧 Key 失效。详见[部署手册](docs/cloud-deploy-runbook.md)。
-
-## 隐私与安全
-
-- 发布前扫描源码、可达 Git 历史、构建产物和发布资产，检查私人路径、邮箱、服务器地址、会话内容及凭据；公开依赖的版权署名和自检数据按其许可保留。GitHub 可能保留不可达对象，可达历史扫描不代表平台缓存已全部擦除。
-- 远程 API 使用 `x-api-key`，禁止把 Key 放进 URL、日志、浏览器请求或仓库文件。
-- 服务保持 systemd 文件隔离；为 Provider 数据根开放精确写入路径以支持共享索引原子替换，Grok／Claude 的凭据和配置文件保持只读。
-- 文件路径、附件和搜索结果都在当前机器范围内解析，客户端不能提交任意文件路径。
+保存成功后立即删除临时 Key 文件。完整步骤见[云端部署手册](docs/cloud-deploy-runbook.md)。
 
 ## 发布资产
 
-当前源码版本为 1.4.0；[查看正式发布](https://github.com/lich13/nexushub/releases)。正式发布页包含八项资产：
+当前源码版本为 **1.9.0**；[查看 GitHub Releases](https://github.com/lich13/nexushub/releases)。每次正式发布包含八项资产：
 
-- macOS ARM64 DMG 与校验文件；
-- macOS updater 压缩包与签名；
-- 仅包含 `darwin-aarch64` 的 `latest.json`；
-- Linux x86_64 `webd` 服务包、校验文件与分离签名。
+- `AgentHub-<version>-darwin-arm64.dmg` 与 `.dmg.sha256`；
+- `nexushub-darwin-arm64.tar.gz` 与 `.tar.gz.sig`（Tauri updater 归档与 Minisign 签名）；
+- 仅包含 `darwin-aarch64` 平台映射的 `latest.json`；
+- `nexushub-webd-linux-x86_64.tar.gz`、`.tar.gz.sha256` 与 `.tar.gz.sig`。
 
-`darwin-aarch64` 是 updater 使用的平台键，下载文件名中的 `darwin-arm64` 表示同一 macOS ARM64 架构。Linux 服务包不能用于桌面 updater。
-
-## 开发
+## 开发与验证
 
 ```bash
 corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
@@ -148,20 +116,12 @@ python3 scripts/privacy-check.py --git-objects
 git diff --check
 ```
 
-`rust-toolchain.toml` 固定开发与 CI 工具链；Node、pnpm 和构建工具使用仓库锁定版本。`src-tauri` 是独立 Cargo workspace；最低 Rust 策略、缓存和审计门禁见[构建说明](docs/ARCHITECTURE.md#构建ci-与发布)。本机检查需要 Python 3.11+、ShellCheck 和 Minisign，使用虚构 Provider 数据，不删除本机用户会话。
-
-浏览器回归和 macOS 有头性能检查默认交给现有 GitHub Actions，本机无需安装 Chromium 或 WebKit。CI 先生成当前前端构建，再安装锁文件对应的 Playwright Chromium 与 WebKit；Linux 同时安装系统依赖。上面的浏览器守卫单元测试使用模拟启动器，不安装或启动浏览器。
-
-浏览器验收只使用 Playwright 管理的浏览器，不依赖、不启动本机 Google Chrome，可卸载系统 Chrome。内置 Chromium 的窗口可能显示 Google Chrome for Testing；它与系统 Chrome 是独立安装。全局启动守卫禁止渠道、可执行路径和外部连接覆盖，并在启动探针后核对真实可执行文件位于 Playwright 浏览器缓存，符号链接越界立即失败。
-
-交互预算使用生产前端构建，在 macOS 可见窗口中依次运行两种内置浏览器，测量期间关闭 trace 录制，避免无头窗口调度、其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
+所有单元与集成测试均在独立的临时沙箱目录（`TempDir`）中运行，绝不读写或删除宿主机真实用户会话。Playwright 跨引擎（Chromium／WebKit）端到端回归与 macOS 有头交互帧预算检查默认由 GitHub Actions CI 执行。
 
 ## 当前文档
 
-- [AGENTS.md](AGENTS.md)：贡献与交付约束。
-- [DESIGN.md](DESIGN.md)：界面和交互规范。
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界与契约。
-- [docs/cloud-deploy-runbook.md](docs/cloud-deploy-runbook.md)：Linux API 部署和升级。
-- [docs/progress/MASTER.md](docs/progress/MASTER.md)：维护者状态和已验证范围。
-
-仓库只保留这六份当前 Markdown 文档。后续版本使用普通 Git 增量提交，并在 GitHub Release 提供中文发布说明。
+- [AGENTS.md](AGENTS.md)：协作、安全与交付规范。
+- [DESIGN.md](DESIGN.md)：三层表面、组件与交互设计规范。
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、缓存预算与线协议契约。
+- [docs/cloud-deploy-runbook.md](docs/cloud-deploy-runbook.md)：Linux API 服务部署、升级与回滚手册。
+- [docs/progress/MASTER.md](docs/progress/MASTER.md)：维护者版本演进与已验证证据。

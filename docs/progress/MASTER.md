@@ -1,8 +1,8 @@
-# NexusHub 当前状态（维护者）
+# AgentHub（NexusHub）当前状态（维护者）
 
 ## 当前版本
 
-当前维护源码版本为 1.8.0，基线为 `a50f80a / v1.7.0`。本版完成全量 Git 历史对象、51 个历史标签与 5 份历史 GitHub Release 说明的确定性隐私脱敏，并隔离 `nexushub-webd` 测试 `HOME` 环境变量防止本机状态污染；收紧 `cleanup.unifiedExecute` 与预览候选允许集的严格交集校验，将 60s 静默宽限限制在已确认 `epoch` 归属的专属目录内；为 Codex 线程扫描、Claude／Grok 会话索引、Antigravity 摘要与 DSH 目录新增带容量上限的进程内元数据缓存，将会话详情内存缓存空闲 TTL 收敛至 180 秒并主动释放过期分配；修复 Antigravity 完成时间单调回退、长生命周期执行器中间提问去重、无子节点 `TASK_BOUNDARY` 误判与 SQLite 投递去重跨连接并发竞态；新增五大 Agent 通知平台一键开关与 Hooks 卸载清理、Claude／Grok 归档恢复与全平台搜索 5-Agent 对齐；支持多台命名远端机器管理及旧单机 Keychain Token 平滑迁移；提取五大 Agent 官方原生品牌图标资产并深度重写 macOS 原生质感界面（含缓存线程切换 `WeakMap` 派生复用与无变更轮询零重绘优化）。API 协议保持 2；macOS App 仍是唯一界面。
+当前维护源码版本为 1.9.0，基线为 `deb0653 / v1.8.0`。本版完成品牌焕新（正式更名为 `AgentHub`，应用包 `AgentHub.app` 与全新 macOS Sequoia HIG 钛黑五节点星枢图标，底层标识保持 `com.lich13.nexushub` 零迁移成本）；修复 DeepSeek Harness（`DSH`）已打开但已完成线程因 `locked` 冗余分支常亮转圈、Seeded 派生会话事件边界与 `turn/end` 未闭合工具调用状态；为 DSH `.zstd` 折叠元数据、Antigravity 本地进程端口探测、Claude 活动快照与 `probe.status` 跨五平台实时扫描建立有界内存短缓存；重构精简 `execute_unified_with_capability` 统一清理管线（净减约 260 行重复代码），将 Codex 隐藏／归档清理升级为 `O(K)` 定向指纹校验与 `O(N)` 单次子树体积扫描，并实现 `nexushub-webd` 全部测试 100% 临时目录沙箱隔离；将 Probe 重构为「通知配置」首屏控制台，新增 Grok Build（`~/.grok/hooks/nexushub.json`）与 Antigravity（`~/.gemini/config/hooks.json`）受管实时 Hooks 安装／修复／移除及 CLI 实时投递，统一五平台 Hooks／Host 管理卡片并收口前端页面可见性轮询；完整落地 `--bg-rail`、`--bg-list`、`--bg-stage` 三层纯正 ChatGPT macOS App 中性表面体系与工作区共享 Hooks，并彻底重写 `README.md` 与修正 `MASTER.md` 历史记录。API 协议保持 2；macOS App 仍是唯一界面。
 
 历史实现与交付由 Git 和 [Release](https://github.com/lich13/nexushub/releases) 保留。完整回归、跨平台构建和既有性能检查以发布提交对应的 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml) 与自包含 [Release](https://github.com/lich13/nexushub/actions/workflows/release.yml) 为准。
 
@@ -10,10 +10,14 @@
 
 | 工作块 | 当前行为 | 核心提交 |
 |---|---|---|
+| DSH 完成状态修复与五平台热路径缓存 | 移除 `dsh/sessions.rs` 中 `\|\| locked` 误判分支，对齐 Seeded 会话跳过边界与 `turn/end` 工具状态收口；新增 `DSH_FOLD_CACHE`、Antigravity 端点缓存、Claude 活动快照 2s 缓存与 `canonicalize` 外提、`probe.status` 3s 会话快照缓存。 | `62ade32` |
+| 统一清理引擎瘦身、`O(K)` 校验与全测试沙箱化 | 提炼 `execute_verified_scope_items` 与空会话共享清理管线；`execute_delete_hidden` 改用 `O(K)` 定向校验，`dry_run_single_scope` 改用 `estimate_codex_trees_bytes` 单次目录扫描；全部 `Config::default()` 测试入口统一替换为 `TempDir` 沙箱。 | `1ef92f3` |
+| Probe 首屏控制台与五平台统一 Hooks／Host 矩阵 | Probe 默认首屏直接展示主控开关、五大平台通知开关、Bark 配置、五平台统一 Hooks／Host 卡片、实时态势与最近事件；新增 Grok Build 与 Antigravity 受管 Hooks 安装／修复／移除与实时通知接入；统一前端可见性感知轮询。 | `b8f2211` |
+| 三层 ChatGPT macOS 表面重写、工作区 Hooks 收敛与 AgentHub 品牌焕新 | 落地 `--bg-rail`／`--bg-list`／`--bg-stage` 纯正中性灰阶令牌体系与共享 `useProviderWorkspace` Hooks；更名为 `AgentHub`（`AgentHub.app`）并换装全套高清钛黑五节点星枢图标。 | `39a4007` |
 | 全历史隐私脱敏与测试环境隔离 | 重写全量 Git 历史对象与 `v1.0.0`–`v1.7.0` 标签、脱敏历史 Release 说明并移除跟踪缓存索引；`nexushub-webd` 集成测试统一注入独立临时 `HOME`／`XDG_*`。 | `1545b61` |
 | 统一清理允许集交集与孤儿宽限收紧 | `cleanup.unifiedExecute` 强制要求请求项落入最新 `unifiedDryRun` 允许集并与重算候选求交集，越界或运行中目标首错即停；60s 宽限仅对已确认 `epoch` 归属目录生效。 | `3dc983a` |
-| 原生扫描缓存、内存预算收敛与 Antigravity／去重边界修复 | Codex／Claude／Grok／Antigravity／DSH 元数据扫描按 `(mtime, size)` 增量复用，详情缓存 TTL 降至 180s 并 `shrink_to_fit`；修复 Antigravity 完成时间回退、同执行器多次提问去重、空 `TASK_BOUNDARY` 与 SQLite `INSERT OR IGNORE` 原子认领。 | `436ee88` |
-| 平台一键开关、Hooks 卸载与五大 Agent 能力对齐 | Probe 新增五大 Agent 平台级一键启停与 Claude／Codex Hooks 一键移除；补齐 Claude／Grok 归档恢复与五平台统一全文搜索。 | `b9a0812` |
+| 原生扫描缓存、内存预算收敛与 Antigravity／去重边界修复 | Codex／Claude／Grok／Antigravity／DSH 元数据扫描按 `(mtime, size)` 增量复用，详情缓存空闲 TTL 收敛至 300s（5 分钟）并 `shrink_to_fit`；修复 Antigravity 完成时间回退、同执行器多次提问去重、空 `TASK_BOUNDARY` 与 SQLite `INSERT OR IGNORE` 原子认领。 | `436ee88` |
+| 平台一键开关、Hooks 卸载与五大 Agent 能力对齐 | Probe 新增五大 Agent 平台级一键启停与 Claude／Codex Hooks 一键移除；对齐五平台行菜单、本机 Finder 定位、复制答复与 `⌘K` 全平台搜索。 | `b9a0812` |
 | 多远端机器管理与 Keychain 平滑迁移 | 支持保存、切换、编辑与删除多台命名远端机器，每个 `machineId` 独立存储 Keychain Token 并自动迁移旧版单机配置。 | `a3f412c` |
 | 官方原生五品牌图标提取、界面重写与切换帧预算优化 | 提取五大 Agent 官方原生品牌图标与高对比色板，深度重写侧栏、会话列表、Probe 矩阵与远端机器切换器；`Conversation` 派生视图 `WeakMap` 缓存与无变更轮询跳过重绘。 | `58ddf92` |
 | Antigravity 原生执行段核验、子进程活性与中间提问 Bark 推送 | 当前轮增量拉取改调原生 `GetCascadeTrajectoryExecutorMetadatas` 核验真实段尾步下标与终态 `PLANNER_RESPONSE`／`FINISH`；无日志后台任务结合 `language_server` 子进程存活后再走 60s 静默兜底；覆盖 `/plan` `RequestFeedback: true`、纯文本提问、首段 `WAITING`、新增交互变体与时间戳回退的 `reply_needed`／`approval_needed` 推送。 | `f2a9067` |
@@ -45,7 +49,9 @@
 
 ## 必要验证
 
-1.8.0 本机与主／标签 CI 已通过 `nexushub-core`／`nexushub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（覆盖全量 Git 对象与构建产物零隐私命中、测试 `HOME` 隔离、`unifiedExecute` 越界 ID 拒绝与运行态拦截、详情缓存 180s 空闲裁剪、Antigravity 时间单调与同执行器多次提问去重、SQLite 原子认领、五大 Agent 平台开关与 Hooks 卸载、Claude／Grok 归档恢复与五平台搜索、多命名远端机器 CRUD 与 Keychain 迁移）、Rust／TypeScript 线协议契约锁、WebUI 64 文件 836 项 Vitest 与类型检查、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 全绿通过 280 项 Chromium／WebKit 端到端测试及 macOS 有头双引擎交互帧预算检查（`expand`、`scroll`、`switch` `p95 <= 100ms`）。未使用真实用户会话执行写操作或删除测试。
+1.9.0 本机与主／标签 CI 覆盖 `nexushub-core`／`nexushub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（含 DSH 已打开完成线程不误报 `running`、Seeded 会话事件边界与 `turn/end` 工具状态收口、`.zstd` 折叠缓存、Antigravity 端点缓存、Claude 活动快照缓存、`probe.status` 3s 缓存、统一清理管线重算校验与 `O(K)` 隐藏校验及 `O(N)` 单次体积估算、全量测试沙箱隔离、Grok 与 Antigravity 受管 Hooks 安装／修复／移除与 CLI 实时投递、`AgentHub.app` 平台路径断言）、Rust／TypeScript 线协议契约锁、WebUI 64 文件 836 项 Vitest 与类型检查、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 覆盖 280 项 Chromium／WebKit 端到端测试（含浅／深色 `--bg-rail`／`--bg-list`／`--bg-stage` 三层中性表面对比度与零溢出检查）及 macOS 有头双引擎交互帧预算检查。未使用真实用户会话执行写操作或删除测试。
+
+1.8.0 本机与主／标签 CI 已通过 `nexushub-core`／`nexushub-webd`／`src-tauri` 全量测试、格式与两端 Clippy（覆盖全量 Git 对象与构建产物零隐私命中、测试 `HOME` 隔离、`unifiedExecute` 越界 ID 拒绝与运行态拦截、详情缓存 300s 空闲裁剪、Antigravity 时间单调与同执行器多次提问去重、SQLite 原子认领、五大 Agent 平台开关与 Hooks 卸载、五平台行菜单／Finder／全局搜索对齐、多命名远端机器 CRUD 与 Keychain 迁移）、Rust／TypeScript 线协议契约锁、WebUI 64 文件 836 项 Vitest 与类型检查、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 全绿通过 280 项 Chromium／WebKit 端到端测试及 macOS 有头双引擎交互帧预算检查（`expand`、`scroll`、`switch` `p95 <= 100ms`）。未使用真实用户会话执行写操作或删除测试。
 
 1.7.0 本机（含隔离空 `HOME` 全量工作区实测）与主／标签 CI 已通过 `nexushub-core`（629 项）／`nexushub-webd`（206 项及 CLI 集成）／`src-tauri` 全量测试、格式与两端 Clippy（覆盖原生多执行段间隙防抢发、子进程存活越过 60s 静默宽限、中间提问四类路径推送、SQLite 标记裁剪与被动 Checkpoint、详情缓存空闲淘汰、Gzip 压缩协商、Codex／Claude／Grok／统一清理越界 ID 拒绝与运行态拦截及首错即停、无 `state_5.sqlite` 空候选安全空操作）、Rust／TypeScript 线协议契约锁、WebUI 65 文件 837 项 Vitest（含 Claude 合并组展开态保留与全平台清理工作台）与类型检查、`demo` 异步分包构建、安装脚本及发布载荷隐私扫描；GitHub Actions 主 CI 与自包含标签 Release CI 全绿通过七工作区浅／深色 × 八视口官方品牌视觉零溢出与对比度 E2E、全平台线程清理 E2E 及 macOS 有头 WebKit 交互帧预算检查。未使用真实用户会话执行写操作或删除测试。
 
@@ -99,7 +105,9 @@ DSH 使用 workspace 原生归档名单，只纳入可核验的 subagent 后代�
 
 ## 待用户验收
 
-打开新版 `NexusHub.app`（`1.8.0`），在本机与远端切换下依次核验：① 侧栏、会话列表、Probe 与设置面板的五大 Agent 官方原生品牌图标与重写后的 macOS 原生界面；② 顶栏机器切换器与「设置 → 远端机器」中新增、编辑、切换和删除多台命名远端机器（旧版单机配置已自动迁移）；③ 「通知与探针 → 配置」中五大 Agent 平台级一键开关与 Claude／Codex Hooks 一键卸载；④ Claude Code 与 Grok Build 会话归档／恢复，以及 `⌘K` 全局搜索跨五大 Agent 的命中跳转。
+打开新版 `AgentHub.app`（`1.9.0`），在本机与远端切换下依次核验：① 应用名称 `AgentHub.app`、全新钛黑五节点星枢图标以及浅／深色 `--bg-rail`、`--bg-list`、`--bg-stage` 三层 ChatGPT macOS App 视觉表面；② DeepSeek Harness 工作区中已在桌面端打开但已结束的会话不再持续转圈，仅真正运行中的回合显示转圈；③ 打开「Probe」工作区，默认首屏即可直接操作探针与五大 Agent 通知开关、Bark 测试推送，并在「五平台 Hooks 与 Host 统一管理」矩阵中一键安装／修复／移除 Codex、Claude Code、Grok Build、Antigravity 受管 Hooks 及查看 DSH 原生直连状态；④「设置 → 更新与维护 → 全平台线程清理」六大分类预览与清理速度及准确性。
+
+打开新版 `NexusHub.app`（`1.8.0`），在本机与远端切换下依次核验：① 侧栏、会话列表、Probe 与设置面板的五大 Agent 官方原生品牌图标与重写后的 macOS 原生界面；② 顶栏机器切换器与「设置 → 远端机器」中新增、编辑、切换和删除多台命名远端机器（旧版单机配置已自动迁移）；③ 「通知与探针 → 配置」中五大 Agent 平台级一键开关与 Claude／Codex Hooks 一键卸载；④ 五大 Agent 行菜单、本机 Finder 定位与 `⌘K` 全局搜索跨五大 Agent 的命中跳转。
 
 打开新版 `NexusHub.app`（`1.7.0`），在本机与远端切换下依次核验：① 侧栏与各工作区顶栏／空状态的五大 Agent 官方原生品牌 SVG 图标、浅／深色高对比官方品牌色盘与重写后的 macOS 原生质感界面；② 「设置 → 更新与维护 → 全平台线程清理」一键扫描五大平台六大分类预览、隐藏线程深度扫描与二次确认清理流程（空间释放与跳过／残留分开展示）；③ Antigravity 会话中间纯文本提问、`/plan` 待确认或 `ask_question` 时的 Bark「需要回复」推送及两段执行间隙不抢发完成提醒；④ Claude Code 展开某一中间命令组后追加后续工具步骤被合并时仍保持展开状态。
 

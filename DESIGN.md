@@ -1,8 +1,8 @@
-# NexusHub 界面设计规范（维护者文档）
+# AgentHub 界面设计规范（维护者文档）
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: neutral light/dark themes, a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
+AgentHub（底层包标识 `com.lich13.nexushub`）follows a quiet, refined reading workspace styled after the ChatGPT macOS Desktop App: a three-tier neutral light/dark surface hierarchy (`--bg-rail`, `--bg-list`, `--bg-stage`), a clean sidebar task list and one centered readable conversation column. Only local, unarchived Codex main threads have a compact floating collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
 
 ## Layout and interaction
 
@@ -46,9 +46,9 @@ Image attachments sit above the bubble in reserved 96px square thumbnails, with 
 
 ## Visual tokens
 
-Light: canvas `#ffffff`, surface `#f9f9f9`, user bubble `#f4f4f4`, selected `#eaeaea`, text `#0d0d0d`, muted `#595959`, border `#e8e8e8`.
+Light: `--bg-rail: #f9f9f9`, `--bg-list: #f3f3f3`, `--bg-stage: #ffffff`, `--surface-subtle: #f4f4f4`, `--user-bubble: #f4f4f4`, `--selected: #e6e6e6`, `--text: #0d0d0d`, `--muted: #525252`, `--hairline: #e5e5e5`.
 
-Dark: canvas `#202020`, surface `#171717`, user bubble `#2f2f2f`, selected `#2f2f2f`, text `#ececec`, muted `#adadad`, border `#2e2e2e`.
+Dark: `--bg-rail: #171717`, `--bg-list: #1c1c1c`, `--bg-stage: #212121`, `--surface-subtle: #2a2a2a`, `--user-bubble: #2f2f2f`, `--selected: #2f2f2f`, `--text: #ececec`, `--muted: #a8a8a8`, `--hairline: #2e2e2e`.
 
 Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus indicators and essential borders meet 3:1. Long titles and paths wrap; only code and tables scroll horizontally.
 
@@ -114,7 +114,7 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
-Probe 展示 Bark 设置、Provider／事件筛选及本机 Claude hooks 状态。Claude Hook 卡片复用相邻卡片的状态行、间距与标准按钮，只展示安装状态、命令数量及操作，不显示常驻说明段落；远端以“仅限本机”状态显示。安装、修复和移除均需明确确认并保留其他 hooks。App 安装不自动启用 hooks。退休通道不保留卡片或占位。
+Probe 默认以「通知配置」控制台作为首屏，直接呈现探针与错误监控开关、五大 Agent 平台级通知一键开关、Bark 通道配置与测试推送、五平台统一 Hooks／Host 管理矩阵（Codex、Claude Code、Grok Build、Antigravity 受管 Hooks 安装／修复／移除与 DeepSeek Harness 原生 `.lock` + `.zstd` 流直连状态）、五平台实时态势与最近事件流。远端以“仅限本机”或对应远端能力显示。安装、修复和移除均需明确确认并保留用户其他 hooks；App 安装不自动启用 hooks。退休通道不保留卡片或占位。
 
 ## Bark 状态与测试反馈
 

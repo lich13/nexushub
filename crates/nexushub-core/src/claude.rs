@@ -505,7 +505,12 @@ fn attach_storage_size(paths: &ClaudePaths, summary: &mut ClaudeSessionSummary) 
 }
 pub fn claude_session_summary(paths: &ClaudePaths, key: &str) -> Result<ClaudeSessionSummary> {
     let (path, parsed) = resolve(paths, key)?;
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture_readonly(paths))?;
+    let mut summary = summary(
+        paths,
+        &path,
+        &parsed,
+        &activity::Snapshot::capture_readonly(paths),
+    )?;
     attach_storage_size(paths, &mut summary);
     Ok(summary)
 }
@@ -542,7 +547,12 @@ pub fn claude_session_detail(
             user.refresh_files(Some(&parsed.cwd));
         }
     }
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture_readonly(paths))?;
+    let mut summary = summary(
+        paths,
+        &path,
+        &parsed,
+        &activity::Snapshot::capture_readonly(paths),
+    )?;
     attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),

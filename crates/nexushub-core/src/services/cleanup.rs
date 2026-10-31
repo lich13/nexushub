@@ -425,8 +425,10 @@ fn dry_run_single_scope(
     match scope {
         SCOPE_CODEX_ARCHIVED => match archive::plan_delete_archived(&paths.codex) {
             Ok(plan) => {
-                let bytes_map =
-                    crate::selected_codex::tree::estimate_bytes_batch(&paths.codex, &plan.archived_ids);
+                let bytes_map = crate::selected_codex::tree::estimate_bytes_batch(
+                    &paths.codex,
+                    &plan.archived_ids,
+                );
                 for id in plan.archived_ids {
                     let bytes = bytes_map.get(&id).copied().unwrap_or(0);
                     let fingerprint = archive::codex_thread_fingerprint(&paths.codex, &id)
@@ -682,11 +684,9 @@ fn execute_codex_scope(
     stopped_early: &mut bool,
 ) -> Result<()> {
     let db_path = codex.state_db();
-    let conn = rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| anyhow::anyhow!("open {}: {e}", db_path.display()))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| anyhow::anyhow!("open {}: {e}", db_path.display()))?;
     let thread_cols = archive::table_columns(&conn, "threads")?;
     let edge_cols = archive::table_columns(&conn, "thread_spawn_edges")?;
     let has_spawn_edges =
@@ -730,10 +730,9 @@ fn execute_codex_scope(
             None if is_residual => {}
             None => {
                 scope_res.skipped_count += 1;
-                scope_res.issues.push(format!(
-                    "{}: 目标不在当前允许集合中，已跳过",
-                    target.id
-                ));
+                scope_res
+                    .issues
+                    .push(format!("{}: 目标不在当前允许集合中，已跳过", target.id));
                 continue;
             }
         }
@@ -746,8 +745,7 @@ fn execute_codex_scope(
         match crate::selected_codex::tree::execute_ids(codex, std::slice::from_ref(&target.id)) {
             Ok(out) if out.error.is_none() && out.residuals.is_empty() => {
                 scope_res.deleted_count += 1;
-                scope_res.deleted_bytes =
-                    scope_res.deleted_bytes.saturating_add(out.deleted_bytes);
+                scope_res.deleted_bytes = scope_res.deleted_bytes.saturating_add(out.deleted_bytes);
             }
             Ok(out) => {
                 scope_res.failed_count += 1;
@@ -983,7 +981,9 @@ fn execute_empty_inactive_scope(
         let Some(cur_fp) = allowed_map.get(&target.id) else {
             if let Some(block_reason) = check_running_block(&target.id) {
                 scope_res.failed_count += 1;
-                scope_res.issues.push(format!("{}: {block_reason}", target.id));
+                scope_res
+                    .issues
+                    .push(format!("{}: {block_reason}", target.id));
                 *stopped_early = true;
                 break;
             }
@@ -1159,9 +1159,8 @@ pub fn execute_unified_with_capability(
                                         r.contains("正在运行") || r.contains("占用")
                                     }))
                                 .then(|| {
-                                    sum.delete_block_reason.unwrap_or_else(|| {
-                                        "Claude 会话正在运行，无法删除".into()
-                                    })
+                                    sum.delete_block_reason
+                                        .unwrap_or_else(|| "Claude 会话正在运行，无法删除".into())
                                 })
                             })
                     },
@@ -1193,13 +1192,10 @@ pub fn execute_unified_with_capability(
                         crate::grok::grok_session_summary(&paths.grok, id)
                             .ok()
                             .and_then(|sum| {
-                                sum.deletion_eligibility
-                                    .filter(|e| !e.allowed)
-                                    .map(|e| {
-                                        e.reason.unwrap_or_else(|| {
-                                            "Grok 会话正在运行，无法删除".into()
-                                        })
-                                    })
+                                sum.deletion_eligibility.filter(|e| !e.allowed).map(|e| {
+                                    e.reason
+                                        .unwrap_or_else(|| "Grok 会话正在运行，无法删除".into())
+                                })
                             })
                     },
                     |id, fp| {

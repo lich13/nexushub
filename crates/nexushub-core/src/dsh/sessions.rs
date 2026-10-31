@@ -442,7 +442,7 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
     let stamp = file_stamp(&session.log_path).ok();
     if let Some(ref s) = stamp {
         if let Ok(guard) = DSH_FOLD_CACHE.lock() {
-            if let Some( cached) = guard.as_ref().and_then(|m| m.get(&session.log_path)) {
+            if let Some(cached) = guard.as_ref().and_then(|m| m.get(&session.log_path)) {
                 if cached.0 == *s {
                     return Ok(cached.1.clone());
                 }

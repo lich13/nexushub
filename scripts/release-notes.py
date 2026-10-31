@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.9.0": [
+        "品牌正式焕新为 AgentHub（AgentHub.app 与全新钛黑五节点星枢图标），落地 --bg-rail／--bg-list／--bg-stage 三层纯正 ChatGPT macOS 桌面表面，Probe 升级为首屏控制台并新增 Grok Build 与 Antigravity 受管实时 Hooks",
+        "修复 DeepSeek Harness 已打开完成线程常亮转圈与派生会话状态，新增五平台热路径内存缓存与 Codex O(K)／单次扫描清理加速，精简统一清理引擎并实现全部测试 100% 沙箱隔离。",
+    ],
     "1.8.0": [
         "支持保存多台自定义名称远程机器并自动无损迁移钥匙串凭据，Probe 升级为五大平台一键通知开关、统一 Hooks 卸载与五平台状态对齐，全平台清理严格按预览目标指纹取交集",
         "提取本机五大 Agent 官方原生高保真品牌图标并全量重写三层 macOS 桌面界面，同时补齐 Grok／Claude 轻量巡检缓存、详情内存收敛与全仓库隐私边界加固。",
@@ -230,7 +234,43 @@ def highlights(version: str) -> list[str]:
 
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
-        return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+        return f"AgentHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.9.0":
+        sections = {
+            "版本概览": [
+                "品牌正式焕新为 AgentHub（应用包 AgentHub.app 与全新 macOS Sequoia 钛黑五节点星枢图标），修复 DeepSeek Harness 已完成线程转圈误判并落地五平台热路径内存缓存，将 Probe 重构为首屏控制台并新增 Grok Build 与 Antigravity 受管实时 Hooks，瘦身统一清理引擎并实现 Codex 隐藏／归档清理 O(K) 定向校验与 O(N) 单次目录扫描，落地 --bg-rail／--bg-list／--bg-stage 三层纯正 ChatGPT macOS App 表面体系；API 协议保持 2。"
+            ],
+            "功能调整": [
+                "AgentHub 品牌焕新与三层 ChatGPT macOS 界面重写：正式更名为 AgentHub（macOS 应用包 AgentHub.app、安装包 AgentHub-1.9.0-darwin-arm64.dmg，底层标识保持 com.lich13.nexushub 零迁移），重新设计高清深空钛黑五节点星枢图标；完整重写 styles.css 引入 --bg-rail、--bg-list、--bg-stage 三层纯正中性灰阶表面并收敛工作区共享 Hooks。",
+                "Probe 首屏控制台与五平台统一 Hooks／Host 矩阵：进入 Probe 默认首屏直接呈现主控开关、五大 Agent 平台级通知开关、Bark 配置与测试推送、五平台统一 Hooks／Host 管理卡片、实时态势与最近事件；新增 Grok Build（~/.grok/hooks/nexushub.json）与 Antigravity（~/.gemini/config/hooks.json）受管 Hooks 一键安装／修复／移除与毫秒级实时通知接入，与 Codex、Claude Code 及 DSH 原生流形成统一管理体验。",
+                "服务端热路径缓存与清理引擎提速：新增 DSH .zstd 折叠元数据内存缓存、Antigravity 本地进程端口探测缓存、Claude 活动快照 2 秒短缓存与 canonicalize 循环外提、probe.status 3 秒会话快照缓存；精简 execute_unified_with_capability 消除约 260 行重复代码，并将 Codex 清理预览与隐藏删除优化为 O(K) 定向校验与 O(N) 单次子树体积扫描。",
+            ],
+            "问题修复": [
+                "DeepSeek Harness 状态精准识别：移除 dsh/sessions.rs 中 || locked 冗余分支，消除在桌面端保持打开但早已 turn/end 的完成线程持续转圈的问题；对齐 Seeded 派生会话事件边界并在 turn/end 时收口未闭合工具调用状态。",
+                "测试 100% 沙箱隔离与前端后台轮询收口：将 nexushub-webd 全部剩余裸 Config::default() 测试调用统一替换为独立 TempDir 沙箱配置；统一在 shared.ts 收口页面可见性感知轮询，窗口隐藏时自动暂停轮询。",
+                "文档全面重写与校准：从零重写 README.md 修正八处历史失实描述，同步更新 DESIGN.md 与 MASTER.md（修正 DETAIL_CACHE_IDLE_TTL 300 秒与五平台能力对齐记录）。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；底层 Bundle ID（com.lich13.nexushub）、配置文件、SQLite 数据库、macOS Keychain 凭据与远端 nexushub-webd 守护进程名称保持不变，无需手工迁移任何数据。",
+                "本机安装脚本在安装 /Applications/AgentHub.app 时会自动检测并平滑替换旧版 /Applications/NexusHub.app，不保留旧版副本。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：AgentHub DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与分离签名；共八项正式资产。",
+            ],
+            "升级提示": [
+                "先升级远端 API 服务，再原地覆盖安装本机 macOS App（AgentHub.app）；随后核验新品牌图标与三层中性界面、DSH 已完成线程状态、Probe 首屏控制台与 Grok／Antigravity Hooks 一键安装，以及全平台线程清理。",
+                "DSH 归档、恢复与清理前须退出目标机器正在运行的 DSH 进程；真实用户会话清理、Bark 手机实收与日常视觉交互待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# AgentHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.8.0":
         sections = {

@@ -12062,7 +12062,9 @@
       ]
     },
     "webui/src/lib/api/probe.ts": {
-      "types": {},
+      "types": {
+        "HookProviderId": "exporttypeHookProviderId=\"claude\"|\"grok\"|\"antigravity\";"
+      },
       "calls": [
         "callCommand<ProbeStatus|OptionalResult<ProbeStatus>>(\"probe.status\")",
         "callCommand<ProbeSettings|OptionalResult<ProbeSettings>>(\"probe.settings.get\")",
@@ -12072,7 +12074,7 @@
         "startProbeCommand(\"probe.installHooks\",\"probe-hooks-install\")",
         "startProbeCommand(\"probe.removeHooks\",\"probe-hooks-remove\")",
         "callCommand<{job_id?:string|null;jobId?:string|null}>(command,{})",
-        "callCommand(\"claude.hooks\",{request:{action,confirmed}})"
+        "callCommand(\"claude.hooks\",provider===\"claude\"?{request:{action,confirmed}}:{request:{action,confirmed},provider})"
       ]
     },
     "webui/src/lib/api/search.ts": {

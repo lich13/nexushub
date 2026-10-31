@@ -483,7 +483,10 @@ mod tests {
         let (config, sandbox_root) = crate::api::test_support::sandboxed_test_config();
         let db = PanelDb::open(":memory:").unwrap();
         let api_key = db.rotate_admin_api_key().unwrap();
-        (AppState::new(config, db).with_test_sandbox(sandbox_root), api_key)
+        (
+            AppState::new(config, db).with_test_sandbox(sandbox_root),
+            api_key,
+        )
     }
 
     async fn request_rpc_status(

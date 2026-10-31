@@ -164,7 +164,7 @@ impl Snapshot {
     pub(super) fn capture_readonly(paths: &ClaudePaths) -> Self {
         #[cfg(test)]
         {
-            return Self::capture(paths);
+            Self::capture(paths)
         }
         #[cfg(not(test))]
         {

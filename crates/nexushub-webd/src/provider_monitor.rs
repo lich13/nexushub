@@ -47,7 +47,10 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     deliver_pending(config, db, &snapshots).await
 }
 
-pub async fn run_provider_hook(config_path: &std::path::Path, provider: NativeProvider) -> Result<()> {
+pub async fn run_provider_hook(
+    config_path: &std::path::Path,
+    provider: NativeProvider,
+) -> Result<()> {
     let config = Config::load(config_path)?;
     if !provider.enabled(&config) {
         return Ok(());

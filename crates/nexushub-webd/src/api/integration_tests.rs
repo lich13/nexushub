@@ -2896,9 +2896,8 @@ async fn rpc_auth_audit_never_contains_api_key_or_legacy_credentials() {
     let db = PanelDb::open(&path).unwrap();
     let first = db.rotate_admin_api_key().unwrap();
     let (audit_cfg, sandbox_root) = sandboxed_test_config();
-    let app = router(
-        crate::state::AppState::new(audit_cfg, db.clone()).with_test_sandbox(sandbox_root),
-    );
+    let app =
+        router(crate::state::AppState::new(audit_cfg, db.clone()).with_test_sandbox(sandbox_root));
     let invalid = "nhk_rejected_audit_fixture";
     let legacy = "legacy-cookie-audit-fixture";
     let peer = Some("192.0.2.12:43210".parse().unwrap());
@@ -3351,10 +3350,9 @@ mod maintenance_security {
         let bearer = "Bearer fixture-bearer-value";
         let (mut config, sandbox_root) = super::sandboxed_test_config();
         config.security.auth_rate_limit_per_minute = 1;
-        let app = router(
-            crate::state::AppState::new(config, db.clone()).with_test_sandbox(sandbox_root),
-        )
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+        let app =
+            router(crate::state::AppState::new(config, db.clone()).with_test_sandbox(sandbox_root))
+                .layer(tower_http::trace::TraceLayer::new_for_http());
         let peer = Some("127.0.0.1:43210".parse().unwrap());
         let logs = CapturedLogs::default();
         async {
