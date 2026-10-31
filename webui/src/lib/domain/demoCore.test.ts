@@ -22,7 +22,7 @@ describe("machine demo fixtures", () => {
     expect(view.system.host_surface).toBe("desktop_embedded_tauri");
     expect(Object.keys(view.system.capabilities).sort()).toEqual(sharedKeys);
     expect(view.system.capabilities).toMatchObject({ app_updater: true, codex_desktop: true, thread_cleanup: true, thread_archive_actions: true, systemd: false, linux_update_job: false, prune_backups: false });
-    expect(view.platform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
+    expect(view.platform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "AgentHub.app" });
     expect(JSON.stringify(view)).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Linux prune|Linux update/i);
   });
 

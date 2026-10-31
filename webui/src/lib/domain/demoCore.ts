@@ -76,7 +76,7 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
       data_dir: root,
       config_file: `${root}/config.toml`,
       log_dir: desktop ? "~/Library/Logs/NexusHub" : `${root}/logs`,
-      service_name: desktop ? "NexusHub.app" : "nexushub-webd",
+      service_name: desktop ? "AgentHub.app" : "nexushub-webd",
       service_kind: desktop ? "tauri" : "systemd"
     },
     system: {

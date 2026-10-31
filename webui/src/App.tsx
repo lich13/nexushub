@@ -155,7 +155,17 @@ function SideNav({ view, setView, collapsed, capabilities, onCollapse, onConfigu
   return (
     <aside className="side-nav">
       <div className="nav-brand">
-        <strong>NexusHub</strong>
+        <svg className="nav-brand-logo" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="24" height="24" rx="6" fill="#171717" />
+          <path d="M12 5.2L12 12M18.5 9.9L12 12M16 17.5L12 12M8 17.5L12 12M5.5 9.9L12 12" stroke="#d4d4d8" strokeOpacity="0.72" strokeWidth="1.35" strokeLinecap="round" />
+          <circle cx="12" cy="5.2" r="1.65" fill="#10a37f" />
+          <circle cx="18.5" cy="9.9" r="1.65" fill="#d97757" />
+          <circle cx="16" cy="17.5" r="1.65" fill="#f4f4f5" />
+          <circle cx="8" cy="17.5" r="1.65" fill="#60a5fa" />
+          <circle cx="5.5" cy="9.9" r="1.65" fill="#4d6bfe" />
+          <circle cx="12" cy="12" r="2.45" fill="#ffffff" />
+        </svg>
+        <strong>AgentHub</strong>
         <button className="icon-button nav-collapse-button" onClick={onCollapse} title={collapsed ? "展开导航" : "折叠导航"} aria-expanded={!collapsed}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button>
       </div>
       <MachineButton collapsed={collapsed} onConfigure={onConfigure} />
@@ -191,7 +201,7 @@ function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {
         <button className="icon-button" onClick={onOpenThreads} disabled={view !== "codex"} title={view === "codex" ? "打开线程" : "线程列表仅用于 Codex"}>
           <Menu size={20} />
         </button>
-        <span>{current?.label ?? "NexusHub"}</span>
+        <span>{current?.label ?? "AgentHub"}</span>
         <div className="topbar-dot" />
       </div>
       <div className="mobile-tabs">

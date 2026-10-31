@@ -82,7 +82,7 @@ impl PlatformPaths {
                 config_file: home.join("Library/Application Support/NexusHub/config.toml"),
 
                 log_dir: home.join("Library/Logs/NexusHub"),
-                service_name: "NexusHub.app".to_string(),
+                service_name: "AgentHub.app".to_string(),
                 service_kind: "tauri".to_string(),
                 service_file: None,
             },

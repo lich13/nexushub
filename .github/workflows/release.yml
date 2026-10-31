@@ -127,8 +127,8 @@ jobs:
           path: |
             dist/nexushub-darwin-arm64.tar.gz
             dist/nexushub-darwin-arm64.tar.gz.sig
-            dist/NexusHub-*-darwin-arm64.dmg
-            dist/NexusHub-*-darwin-arm64.dmg.sha256
+            dist/AgentHub-*-darwin-arm64.dmg
+            dist/AgentHub-*-darwin-arm64.dmg.sha256
 
   release:
     name: Publish eight assets
@@ -176,8 +176,8 @@ jobs:
         with:
           body_path: ${{ runner.temp }}/release-notes.md
           files: |
-            dist/NexusHub-*-darwin-arm64.dmg
-            dist/NexusHub-*-darwin-arm64.dmg.sha256
+            dist/AgentHub-*-darwin-arm64.dmg
+            dist/AgentHub-*-darwin-arm64.dmg.sha256
             dist/nexushub-darwin-arm64.tar.gz
             dist/nexushub-darwin-arm64.tar.gz.sig
             dist/latest.json

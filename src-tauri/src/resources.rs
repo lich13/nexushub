@@ -181,7 +181,7 @@ fn audited_static_copy(path: &Path) -> std::io::Result<bool> {
     let Ok(text) = std::fs::read_to_string(&index) else {
         return Ok(false);
     };
-    if !text.contains("<title>NexusHub</title>") {
+    if !text.contains("<title>NexusHub</title>") && !text.contains("<title>AgentHub</title>") {
         return Ok(false);
     }
     for entry in std::fs::read_dir(path)? {

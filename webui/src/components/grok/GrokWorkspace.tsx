@@ -31,7 +31,12 @@ import { grokTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow
 import { getGrokSession } from "../../lib/api/grok";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
-import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
+import { useSearchWorkspace } from "../common/SessionSearch";
+import {
+  useNarrowViewport,
+  useProviderSearchLocator,
+  useTimelineNavigator,
+} from "../../lib/useProviderWorkspace";
 
 export function grokHandoffPath(session: Pick<GrokSessionSummary, "handoffPath" | "path">): string {
   return session.handoffPath?.trim() || session.path;
@@ -47,7 +52,7 @@ export function GrokWorkspace({}: {}) {
   const stream = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
+  const narrow = useNarrowViewport();
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<GrokDeletePreview | null>(null);
@@ -122,13 +127,6 @@ export function GrokWorkspace({}: {}) {
       setFeedback(`复制失败：${copyError instanceof Error ? copyError.message : "剪贴板不可用"}`);
     }
   };
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
-    const update = () => setNarrow(media.matches);
-    media.addEventListener("change", update);
-    update();
-    return () => media.removeEventListener("change", update);
-  }, []);
   const oldestPage = detail.data?.pages[detail.data.pages.length - 1];
   const history = useHistoryScroll({
     scopeKey: `${machineScope()}:grok:${selected?.id ?? ""}:${navigation.generation}`,
@@ -148,30 +146,32 @@ export function GrokWorkspace({}: {}) {
       return { cursor: page.beforeCursor, hasMore: Boolean(page.hasMore) };
     }
   });
-  const handleTimelineSelect = useCallback((id: string) => {
-    history.follow.current = false;
-    if (stream.current && locateTimelineTarget(id, stream.current, "auto")) {
-      history.capture();
-      return;
-    }
-    if (resolvedTimeline) navigation.select(id);
-  }, [history, navigation, resolvedTimeline]);
+  const handleTimelineSelect = useTimelineNavigator({
+    streamRef: stream,
+    followRef: history.follow,
+    capture: history.capture,
+    hasResolvedTimeline: Boolean(resolvedTimeline),
+    selectWindowTarget: navigation.select,
+  });
 
-  useEffect(() => {
-    if (!pendingSearch || pendingSearch.sessionKey !== selected?.id || detail.isLoading || detail.isFetching || history.loading) return;
-    if (navigation.active) { navigation.latest(); return; }
-    history.follow.current = false;
-    if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) {
-      history.capture();
-      setFeedback("");
-      setPendingSearch(null);
-    } else if (detail.hasNextPage) {
-      if (!history.error) void history.loadOlder("search");
-    } else {
-      setFeedback("结果所在历史未加载，请刷新后重试");
-      setPendingSearch(null);
-    }
-  }, [navigation.active, navigation.latest, pendingSearch, selected?.id, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
+  useProviderSearchLocator({
+    pendingSearch,
+    selectedSessionKey: selected?.id,
+    isLoading: detail.isLoading,
+    isFetching: detail.isFetching,
+    hasNextPage: Boolean(detail.hasNextPage),
+    navigationActive: navigation.active,
+    navigationLatest: navigation.latest,
+    historyLoading: history.loading,
+    historyError: history.error,
+    historyLoadOlder: history.loadOlder,
+    followRef: history.follow,
+    capture: history.capture,
+    streamRef: stream,
+    setFeedback,
+    setPendingSearch,
+    events,
+  });
 
   return (
     <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>

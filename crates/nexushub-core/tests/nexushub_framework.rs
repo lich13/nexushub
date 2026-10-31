@@ -132,7 +132,7 @@ fn platform_paths_cover_linux_macos_and_windows() {
     );
     assert_eq!(macos.log_dir, mac_home.join("Library/Logs/NexusHub"));
     assert_eq!(macos.service_file, None);
-    assert_eq!(macos.service_name, "NexusHub.app");
+    assert_eq!(macos.service_name, "AgentHub.app");
     assert_eq!(macos.service_kind, "tauri");
     assert_eq!(
         macos.daemon_binary(),

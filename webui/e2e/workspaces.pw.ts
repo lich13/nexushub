@@ -127,7 +127,7 @@ test("theme changes at runtime and 200 percent zoom keeps controls available", a
   const color = () => page.locator("body").evaluate(el => getComputedStyle(el).backgroundColor);
   expect(await color()).toBe("rgb(255, 255, 255)");
   await page.emulateMedia({ colorScheme: "dark" });
-  expect(await color()).toBe("rgb(32, 32, 32)");
+  expect(await color()).toBe("rgb(33, 33, 33)");
   await page.locator(".thread-item").first().click();
   await page.evaluate(() => document.documentElement.style.zoom = "2");
   await assertNoOverflow(page);

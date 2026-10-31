@@ -54,7 +54,12 @@ import {
   SessionBatchControls,
   buildBatchContextMenuActions,
 } from "../common/SessionBatchControls";
-import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
+import { useSearchWorkspace } from "../common/SessionSearch";
+import {
+  useNarrowViewport,
+  useProviderSearchLocator,
+  useTimelineNavigator,
+} from "../../lib/useProviderWorkspace";
 import { SessionSize } from "../common/SessionSize";
 import { TaskMenu, ThreadMenuItems, type ThreadMenuAction } from "../common/TaskMenu";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
@@ -96,9 +101,7 @@ export function ArchivableProviderWorkspace({
   const [query, setQuery] = useState("");
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [narrow, setNarrow] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
-  );
+  const narrow = useNarrowViewport();
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -257,14 +260,6 @@ export function ArchivableProviderWorkspace({
   );
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
-    const update = () => setNarrow(media.matches);
-    media.addEventListener("change", update);
-    update();
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  useEffect(() => {
     if (
       pendingSearch &&
       detail.data?.summary.sessionKey === pendingSearch.sessionKey &&
@@ -294,52 +289,24 @@ export function ArchivableProviderWorkspace({
     },
   });
 
-  useEffect(() => {
-    if (
-      !pendingSearch ||
-      pendingSearch.sessionKey !== selected?.sessionKey ||
-      detail.isLoading ||
-      detail.isFetching ||
-      history.loading
-    ) {
-      return;
-    }
-    if (navigation.active) {
-      navigation.latest();
-      return;
-    }
-    history.follow.current = false;
-    if (
-      locateTimelineTarget(
-        pendingSearch.positionKey,
-        stream.current?.closest(".provider-detail") ?? undefined,
-        "auto",
-      )
-    ) {
-      history.capture();
-      setFeedback("");
-      setPendingSearch(null);
-    } else if (detail.hasNextPage) {
-      if (!history.error) void history.loadOlder("search");
-    } else {
-      setFeedback("结果所在历史未加载，请刷新后重试");
-      setPendingSearch(null);
-    }
-  }, [
-    detail.hasNextPage,
-    detail.isFetching,
-    detail.isLoading,
-    events,
-    history.capture,
-    history.error,
-    history.follow,
-    history.loadOlder,
-    history.loading,
-    navigation.active,
-    navigation.latest,
+  useProviderSearchLocator({
     pendingSearch,
-    selected?.sessionKey,
-  ]);
+    selectedSessionKey: selected?.sessionKey,
+    isLoading: detail.isLoading,
+    isFetching: detail.isFetching,
+    hasNextPage: Boolean(detail.hasNextPage),
+    navigationActive: navigation.active,
+    navigationLatest: navigation.latest,
+    historyLoading: history.loading,
+    historyError: history.error,
+    historyLoadOlder: history.loadOlder,
+    followRef: history.follow,
+    capture: history.capture,
+    streamRef: stream,
+    setFeedback,
+    setPendingSearch,
+    events,
+  });
 
   const copy = async (value: string, successText = "已复制") => {
     try {
@@ -443,19 +410,13 @@ export function ArchivableProviderWorkspace({
     [archivedBatch],
   );
 
-  const handleTimelineSelect = useCallback(
-    (id: string) => {
-      history.follow.current = false;
-      if (stream.current && locateTimelineTarget(id, stream.current, "auto")) {
-        history.capture();
-        return;
-      }
-      if (detail.data?.timeline) {
-        navigation.select(id);
-      }
-    },
-    [detail.data?.timeline, history, navigation],
-  );
+  const handleTimelineSelect = useTimelineNavigator({
+    streamRef: stream,
+    followRef: history.follow,
+    capture: history.capture,
+    hasResolvedTimeline: Boolean(detail.data?.timeline),
+    selectWindowTarget: navigation.select,
+  });
 
   const renderSessionRow = (
     item: ProviderSessionSummary,

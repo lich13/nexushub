@@ -399,7 +399,7 @@ describe("archive delete API compatibility", () => {
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
-      data: { flavor: "builtin", service_kind: "tauri", service_name: "NexusHub.app" }
+      data: { flavor: "builtin", service_kind: "tauri", service_name: "AgentHub.app" }
     });
   });
 
@@ -412,14 +412,14 @@ describe("archive delete API compatibility", () => {
     await expect(getPlatformOverview()).resolves.toMatchObject({
       kind: "macos",
       service_kind: "tauri",
-      service_name: "NexusHub.app"
+      service_name: "AgentHub.app"
     });
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
       data: {
         platform: "macos",
         service_kind: "tauri",
-        service_name: "NexusHub.app"
+        service_name: "AgentHub.app"
       }
     });
   });
@@ -516,7 +516,7 @@ describe("archive delete API compatibility", () => {
       available: true,
       platform: "macos",
       service_kind: "tauri",
-      service_name: "NexusHub.app",
+      service_name: "AgentHub.app",
       flavor: "builtin",
       hook_status: "managed",
       bark_status: "configured",
@@ -556,7 +556,7 @@ describe("archive delete API compatibility", () => {
       data: {
         available: true,
         service_kind: "tauri",
-        service_name: "NexusHub.app"
+        service_name: "AgentHub.app"
       }
     });
     await expect(getProbeEvents(10)).resolves.toMatchObject({

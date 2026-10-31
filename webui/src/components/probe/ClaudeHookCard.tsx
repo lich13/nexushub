@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { HookProviderId } from "../../lib/api";
-import { useClaudeHooks } from "../../lib/query/probe";
+import { useClaudeHooks, type HookProviderId } from "../../lib/query/probe";
 import { AgentBrandIcon, type AgentBrandId } from "../common/AgentBrandIcon";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import type { ClaudeHooksAction } from "../../types";

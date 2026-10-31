@@ -99,13 +99,13 @@ assert_app_only_archive() {
   local root="$1"
   local entries=()
 
-  [[ -d "${root}/NexusHub.app" ]] || die "archive root must contain NexusHub.app"
+  [[ -d "${root}/AgentHub.app" ]] || die "archive root must contain AgentHub.app"
   while IFS= read -r entry; do
     entries+=("${entry}")
   done < <(find "${root}" -mindepth 1 -maxdepth 1 -print | sort)
 
-  if [[ "${#entries[@]}" -ne 1 || "${entries[0]}" != "${root}/NexusHub.app" ]]; then
-    die "archive root must contain only NexusHub.app"
+  if [[ "${#entries[@]}" -ne 1 || "${entries[0]}" != "${root}/AgentHub.app" ]]; then
+    die "archive root must contain only AgentHub.app"
   fi
 }
 
@@ -139,7 +139,7 @@ cleanup_stale_launchservices_dmg_registrations() {
   [[ -x "${lsregister}" ]] || return 0
 
   "${lsregister}" -dump 2>/dev/null |
-    awk '/path: *\/Volumes\/dmg\..*\/NexusHub\.app/ {print $2}' |
+    awk '/path: *\/Volumes\/dmg\..*\/(AgentHub|NexusHub)\.app/ {print $2}' |
     sort -u |
     while IFS= read -r stale_app; do
       [[ -n "${stale_app}" ]] || continue
@@ -161,7 +161,7 @@ fi
 VERSION="${VERSION:-$(cargo_package_version)}"
 TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
 SIGNATURE_ASSET="nexushub-darwin-arm64.tar.gz.sig"
-DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
+DMG_ASSET="AgentHub-${VERSION}-darwin-arm64.dmg"
 SIGNED_RELEASE_CONTEXT=0
 if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
   SIGNED_RELEASE_CONTEXT=1
@@ -207,7 +207,7 @@ if [[ "${SKIP_TAURI_BUILD:-0}" != "1" ]]; then
   "${TAURI_CLI}" build --config "${TAURI_BUILD_CONFIG}" --bundles app,dmg -- --locked
 fi
 
-APP_BUNDLE="$(find_tauri_artifact "NexusHub.app")"
+APP_BUNDLE="$(find_tauri_artifact "AgentHub.app")"
 TAURI_DMG="$(find_tauri_artifact "*.dmg")"
 TAURI_UPDATER_ARCHIVE="$(find_optional_tauri_artifact "*.app.tar.gz")"
 TAURI_UPDATER_SIGNATURE="$(find_tauri_signature_artifact "${TAURI_UPDATER_ARCHIVE}" 2>/dev/null || true)"
@@ -223,15 +223,15 @@ TMP="$(mktemp -d)"
 
 APP_ARCHIVE_ROOT="${TMP}/app-archive"
 mkdir -p "${APP_ARCHIVE_ROOT}"
-cp -a "${APP_BUNDLE}" "${APP_ARCHIVE_ROOT}/NexusHub.app"
-assert_app_bundle_resources "${APP_ARCHIVE_ROOT}/NexusHub.app"
+cp -a "${APP_BUNDLE}" "${APP_ARCHIVE_ROOT}/AgentHub.app"
+assert_app_bundle_resources "${APP_ARCHIVE_ROOT}/AgentHub.app"
 
 assert_app_only_archive "${APP_ARCHIVE_ROOT}"
 if [[ -n "${TAURI_UPDATER_ARCHIVE}" && -n "${TAURI_UPDATER_SIGNATURE}" ]]; then
   cp "${TAURI_UPDATER_ARCHIVE}" "${DIST}/${TARBALL_ASSET}"
   cp "${TAURI_UPDATER_SIGNATURE}" "${DIST}/${SIGNATURE_ASSET}"
 else
-  tar -C "${APP_ARCHIVE_ROOT}" -czf "${DIST}/${TARBALL_ASSET}" NexusHub.app
+  tar -C "${APP_ARCHIVE_ROOT}" -czf "${DIST}/${TARBALL_ASSET}" AgentHub.app
 fi
 
 cp "${TAURI_DMG}" "${DIST}/${DMG_ASSET}"

@@ -18,6 +18,8 @@ import type { ProbeSectionId } from "../probeUi";
 import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
+export type { HookProviderId };
+
 export const probeQueryKeys = {
   status: ["probe-status"] as const,
   settings: ["probe-settings"] as const,
