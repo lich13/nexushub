@@ -8,8 +8,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ClaudeHookCard } from "./ClaudeHookCard";
-import { AgentBrandIcon } from "../common/AgentBrandIcon";
+import { ClaudeHookCard, DshHostCard } from "./ClaudeHookCard";
 import { Panel } from "../common/Panel";
 import { JobList } from "../jobs/JobList";
 import {
@@ -40,7 +39,7 @@ import {
 } from "./ProbeCards";
 
 export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
-  const [activeSection, setActiveSection] = useState<ProbeSectionId>("events");
+  const [activeSection, setActiveSection] = useState<ProbeSectionId>("settings");
   const [historyOpen, setHistoryOpen] = useState(false);
   const { status, settings, events, jobs } = useProbeQueries({ section: activeSection, historyOpen });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
@@ -129,6 +128,37 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
     setDraft(buildProbeSettingsDraft(currentSettings));
   }, [currentSettings, draft]);
 
+  const hooksHostMatrix = (
+    <div className="probe-hooks-grid">
+      <Panel title="Codex Host" icon={<GitFork size={18} />}>
+        <ProbeHookCard
+          status={data}
+          draft={draft}
+          setDraft={setDraft}
+          busy={jobBusy}
+          onInstall={() => probeJobMutation.mutate("hooks-install")}
+          onRemove={() => probeJobMutation.mutate("hooks-remove")}
+        />
+      </Panel>
+      <Panel title="Claude Code Host" icon={<GitFork size={18} />}>
+        <ClaudeHookCard provider="claude" />
+      </Panel>
+      <Panel title="Grok Build Host" icon={<GitFork size={18} />}>
+        <ClaudeHookCard provider="grok" />
+      </Panel>
+      {capabilities.antigravityNotifications && (
+        <Panel title="Antigravity Host" icon={<GitFork size={18} />}>
+          <ClaudeHookCard provider="antigravity" />
+        </Panel>
+      )}
+      {capabilities.dshNotifications && (
+        <Panel title="DeepSeek Harness Host" icon={<GitFork size={18} />}>
+          <DshHostCard />
+        </Panel>
+      )}
+    </div>
+  );
+
   const activeSectionContent = (() => {
     switch (activeSection) {
       case "events":
@@ -154,7 +184,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
       case "settings":
         return (
           <>
-            <Panel title="通知配置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
+            <Panel title="通知配置与快捷开关" icon={<SlidersHorizontal size={18} />} className="wide-panel">
               {settings.error && <div role="alert" className="form-error">{settings.error.message}</div>}
               {actionStatus && (
                 <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>
@@ -204,6 +234,22 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
                 />
               )}
             </Panel>
+            {hooksHostMatrix}
+            <Panel title="实时态势" icon={<Activity size={18} />} className="wide-panel">
+              <ProbeLiveOverviewCard
+                status={data}
+                currentSettings={currentSettings}
+                serviceText={probeView.serviceText}
+              />
+            </Panel>
+            <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+              {events.error && <div role="alert" className="form-error">{events.error.message}</div>}
+              <ProbeEventsCard
+                events={recentEvents}
+                available={events.data?.available ?? false}
+                loading={events.isLoading}
+              />
+            </Panel>
             <details
               className="execution-history"
               open={historyOpen}
@@ -228,56 +274,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
                 {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
               </Panel>
             )}
-            <div className="probe-hooks-grid">
-              <Panel title="Codex Hook" icon={<GitFork size={18} />}>
-                <ProbeHookCard
-                  status={data}
-                  draft={draft}
-                  setDraft={setDraft}
-                  busy={jobBusy}
-                  onInstall={() => probeJobMutation.mutate("hooks-install")}
-                  onRemove={() => probeJobMutation.mutate("hooks-remove")}
-                />
-              </Panel>
-              <Panel title="Claude Code Hooks" icon={<GitFork size={18} />}>
-                <ClaudeHookCard />
-              </Panel>
-            </div>
-            <Panel title="零侵入原生观测平台" icon={<Activity size={18} />} className="wide-panel">
-              <div className="probe-native-polling-list">
-                <div className="probe-native-polling-item">
-                  <span className="agent-brand-badge" data-agent="grok" aria-hidden="true">
-                    <AgentBrandIcon agent="grok" size={16} />
-                  </span>
-                  <div>
-                    <strong>Grok Build</strong>
-                    <span>直接增量观测原生会话目录，无需安装外部 Hook</span>
-                  </div>
-                </div>
-                {capabilities.antigravityNotifications && (
-                  <div className="probe-native-polling-item">
-                    <span className="agent-brand-badge" data-agent="antigravity" aria-hidden="true">
-                      <AgentBrandIcon agent="antigravity" size={16} />
-                    </span>
-                    <div>
-                      <strong>Antigravity</strong>
-                      <span>直接连接本机 Language Server 与会话索引，无需安装外部 Hook</span>
-                    </div>
-                  </div>
-                )}
-                {capabilities.dshNotifications && (
-                  <div className="probe-native-polling-item">
-                    <span className="agent-brand-badge" data-agent="dsh" aria-hidden="true">
-                      <AgentBrandIcon agent="dsh" size={16} />
-                    </span>
-                    <div>
-                      <strong>DeepSeek Harness</strong>
-                      <span>直接增量读取本机会话存储，无需安装外部 Hook</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Panel>
+            {hooksHostMatrix}
           </>
         );
       default:

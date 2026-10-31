@@ -47,6 +47,21 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     deliver_pending(config, db, &snapshots).await
 }
 
+pub async fn run_provider_hook(config_path: &std::path::Path, provider: NativeProvider) -> Result<()> {
+    let config = Config::load(config_path)?;
+    if !provider.enabled(&config) {
+        return Ok(());
+    }
+    let db = super::open_panel_db(&config)?;
+    db.recover_interrupted_native_deliveries()?;
+    let scan = scan(provider).await.unwrap_or(NativeScan {
+        streams: vec![],
+        errors: 1,
+    });
+    db.stage_native_notifications_with_hooks(provider, &scan, &config, false)?;
+    deliver_pending(&config, &db, &scan.streams).await
+}
+
 async fn deliver_pending(
     config: &Config,
     db: &PanelDb,

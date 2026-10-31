@@ -112,16 +112,18 @@ pub async fn startHiddenThreadDelete(
 pub async fn claudeHooks(
     state: tauri::State<'_, DesktopState>,
     request: nexushub_core::claude::hooks::ClaudeHooksRequest,
+    provider: Option<nexushub_core::claude::hooks::HookProvider>,
 ) -> Result<nexushub_core::claude::hooks::ClaudeHooksStatus, String> {
     let state = state.inner().clone();
+    let provider = provider.unwrap_or_default();
     nexushub_core::read_tasks::spawn_blocking(move || {
         let config = state.config();
         nexushub_core::services::use_cases::NexusHubUseCases::with_config(&config, state.platform())
             .probe()?
-            .claude_hooks(request)
+            .provider_hooks(provider, request)
     })
     .await
-    .map_err(|_| "Claude 设置任务未完成".to_string())?
+    .map_err(|_| "Hooks 设置任务未完成".to_string())?
     .map_err(|error| error.to_string())
 }
 

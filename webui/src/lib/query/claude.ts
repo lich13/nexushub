@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanst
 import { deleteClaudeSession, getClaudeOwnershipDiagnostics, getClaudeSession, listClaudeSessions, previewClaudeSessionDelete, renameClaudeSession } from "../api/claude";
 import type { ClaudeDeleteRequest, ClaudeSessionDetail, ClaudeSessionSummary } from "../../types";
 import { claudeHistoryAdapter } from "./historyWindows";
+import { visiblePollInterval } from "./shared";
 import { usePagedHistory } from "./usePagedHistory";
 
 export function useClaudeSessions(q: string) {
-  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: async () => (await listClaudeSessions({ q, limit: 100 })).slice().sort(compareSessionMessageTime), refetchInterval: 5000 });
+  return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: async () => (await listClaudeSessions({ q, limit: 100 })).slice().sort(compareSessionMessageTime), refetchInterval: visiblePollInterval(5000) });
 }
 export function useClaudeDetail(sessionKey?: string) {
   return usePagedHistory({

@@ -265,6 +265,27 @@ export function ProbeRuntimeSettingsCard({
         />
       </div>
 
+      <div className="probe-toggle-grid">
+        <label className="toggle-row">
+          <span>启用 Probe</span>
+          <input
+            type="checkbox"
+            checked={draft.probe.enabled}
+            onChange={event => setProbe({ enabled: event.target.checked })}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>终止错误监控</span>
+          <input
+            type="checkbox"
+            checked={draft.probe.error_monitor.enabled}
+            onChange={event =>
+              setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })
+            }
+          />
+        </label>
+      </div>
+
       <div className="probe-platform-switch-section">
         <div className="probe-platform-switch-header">
           <strong>平台通知一键开关</strong>
@@ -307,112 +328,94 @@ export function ProbeRuntimeSettingsCard({
         </div>
       </div>
 
-      <div className="probe-toggle-grid">
-        <label className="toggle-row">
-          <span>启用 Probe</span>
-          <input
-            type="checkbox"
-            checked={draft.probe.enabled}
-            onChange={event => setProbe({ enabled: event.target.checked })}
-          />
-        </label>
-        <label className="toggle-row">
-          <span>终止错误监控</span>
-          <input
-            type="checkbox"
-            checked={draft.probe.error_monitor.enabled}
-            onChange={event =>
-              setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })
-            }
-          />
-        </label>
-      </div>
-
-      <div className="form-grid compact-three">
-        {capabilities.codexStatePaths && (
+      <details className="probe-advanced-settings" open>
+        <summary>高级轮询与保留参数</summary>
+        <div className="form-grid compact-three">
+          {capabilities.codexStatePaths && (
+            <label className="field-label">
+              Codex Home
+              <input
+                value={draft.codex.home}
+                placeholder="auto"
+                onChange={event => setCodex({ home: event.target.value })}
+              />
+            </label>
+          )}
           <label className="field-label">
-            Codex Home
+            主机标签
             <input
-              value={draft.codex.home}
-              placeholder="auto"
-              onChange={event => setCodex({ home: event.target.value })}
+              value={draft.codex.host_label}
+              onChange={event => setCodex({ host_label: event.target.value })}
             />
           </label>
-        )}
-        <label className="field-label">
-          主机标签
-          <input
-            value={draft.codex.host_label}
-            onChange={event => setCodex({ host_label: event.target.value })}
-          />
-        </label>
-        <label className="field-label">
-          轮询秒数
-          <input
-            type="number"
-            min={5}
-            max={3600}
-            value={draft.probe.poll_seconds}
-            onChange={event => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })}
-          />
-        </label>
-        <label className="field-label">
-          最近事件数
-          <input
-            type="number"
-            min={1}
-            max={500}
-            value={draft.probe.recent_limit}
-            onChange={event => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })}
-          />
-        </label>
-        <label className="field-label">
-          通知事件保留天数
-          <input
-            type="number"
-            min={1}
-            max={3650}
-            value={draft.observability.event_retention_days}
-            onChange={event =>
-              setObservability({ event_retention_days: probeNumberInputDraftValue(event.target.value) })
-            }
-          />
-        </label>
-        <label className="field-label">
-          Hook 事件行数
-          <input
-            type="number"
-            min={1}
-            max={5000}
-            value={draft.observability.hook_event_max_lines}
-            onChange={event =>
-              setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })
-            }
-          />
-        </label>
-        <label className="field-label">
-          冷却行数
-          <input
-            type="number"
-            min={1}
-            max={5000}
-            value={draft.observability.hook_cooldown_max_lines}
-            onChange={event =>
-              setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })
-            }
-          />
-        </label>
-        <label className="field-label">
-          日志上限 MB
-          <input
-            type="number"
-            min={1}
-            max={10}
-            value={logBytesDraftToMb(draft.observability.log_max_bytes)}
-            onChange={event => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })}
-          />
-        </label>
-      </div>
+          <label className="field-label">
+            轮询秒数
+            <input
+              type="number"
+              min={5}
+              max={3600}
+              value={draft.probe.poll_seconds}
+              onChange={event => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })}
+            />
+          </label>
+          <label className="field-label">
+            最近事件数
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={draft.probe.recent_limit}
+              onChange={event => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })}
+            />
+          </label>
+          <label className="field-label">
+            通知事件保留天数
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              value={draft.observability.event_retention_days}
+              onChange={event =>
+                setObservability({ event_retention_days: probeNumberInputDraftValue(event.target.value) })
+              }
+            />
+          </label>
+          <label className="field-label">
+            Hook 事件行数
+            <input
+              type="number"
+              min={1}
+              max={5000}
+              value={draft.observability.hook_event_max_lines}
+              onChange={event =>
+                setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })
+              }
+            />
+          </label>
+          <label className="field-label">
+            冷却行数
+            <input
+              type="number"
+              min={1}
+              max={5000}
+              value={draft.observability.hook_cooldown_max_lines}
+              onChange={event =>
+                setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })
+              }
+            />
+          </label>
+          <label className="field-label">
+            日志上限 MB
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={logBytesDraftToMb(draft.observability.log_max_bytes)}
+              onChange={event => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })}
+            />
+          </label>
+        </div>
+      </details>
 
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
       {saveStatus && (
@@ -456,10 +459,22 @@ export function ProbeHookCard({
 
   return (
     <>
-      <div className="probe-card-stack">
-        <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
-        <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
-        <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} />
+      <div className="probe-card-stack probe-host-card">
+        <div className="probe-host-card-head">
+          <span className="agent-brand-badge" data-agent="codex" aria-hidden="true">
+            <AgentBrandIcon agent="codex" size={16} />
+          </span>
+          <div className="probe-host-card-copy">
+            <strong>Codex</strong>
+            <span>Stop · request_user_input 双通道通知 Hook 托管</span>
+          </div>
+          <code className="probe-host-path">~/.codex/config.toml</code>
+        </div>
+        <div className="settings-meta-grid">
+          <Metric label="Codex Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
+          <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
+          <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} wide />
+        </div>
         {draft && setDraft && (
           <label className="toggle-row">
             <span>管理 Codex Hook</span>

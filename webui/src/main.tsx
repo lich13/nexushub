@@ -18,7 +18,7 @@ declare global {
 function MachineWorkspace() {
   const connection = useConnection();
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: {
-    queries: { refetchIntervalInBackground: false, retry: 1 }, mutations: { retry: false }
+    queries: { retry: 1 }, mutations: { retry: false }
   } }), [connection.revision]);
   useEffect(() => { void initializeConnection(); }, []);
   useEffect(() => () => { void queryClient.cancelQueries(); queryClient.clear(); clearAttachmentCache(); }, [queryClient]);

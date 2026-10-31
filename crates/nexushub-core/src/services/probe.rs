@@ -48,12 +48,21 @@ impl<'a> ProbeUseCases<'a> {
         self,
         request: crate::claude::hooks::ClaudeHooksRequest,
     ) -> Result<crate::claude::hooks::ClaudeHooksStatus> {
+        self.provider_hooks(crate::claude::hooks::HookProvider::Claude, request)
+    }
+
+    pub fn provider_hooks(
+        self,
+        provider: crate::claude::hooks::HookProvider,
+        request: crate::claude::hooks::ClaudeHooksRequest,
+    ) -> Result<crate::claude::hooks::ClaudeHooksStatus> {
         anyhow::ensure!(
             self.platform.kind == crate::platform::PlatformKind::Macos,
-            "Claude hooks 仅支持本机 macOS 设置"
+            "{} hooks 仅支持本机 macOS 设置",
+            provider.label()
         );
-        crate::claude::hooks::manage(
-            &crate::claude::ClaudePaths::default_for_user(),
+        crate::claude::hooks::manage_provider(
+            provider,
             &self.platform.daemon_binary(),
             &self.platform.config_file,
             request,

@@ -6,6 +6,8 @@ use std::sync::Mutex;
 
 static SETTINGS: Mutex<()> = Mutex::new(());
 pub const HANDLER: &str = "claude-hook";
+pub const GROK_HANDLER: &str = "grok-hook";
+pub const ANTIGRAVITY_HANDLER: &str = "antigravity-hook";
 const EVENTS: [(&str, &str); 3] = [
     ("Stop", ""),
     (
@@ -14,6 +16,50 @@ const EVENTS: [(&str, &str); 3] = [
     ),
     ("StopFailure", ""),
 ];
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum HookProvider {
+    #[default]
+    Claude,
+    Grok,
+    Antigravity,
+}
+
+impl HookProvider {
+    pub fn handler(self) -> &'static str {
+        match self {
+            Self::Claude => HANDLER,
+            Self::Grok => GROK_HANDLER,
+            Self::Antigravity => ANTIGRAVITY_HANDLER,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Grok => "Grok",
+            Self::Antigravity => "Antigravity",
+        }
+    }
+
+    pub fn default_settings_path(self) -> PathBuf {
+        match self {
+            Self::Claude => ClaudePaths::default_for_user().config.join("settings.json"),
+            Self::Grok => crate::grok::GrokPaths::default_for_user()
+                .home
+                .join("hooks/nexushub.json"),
+            Self::Antigravity => {
+                let antigravity_home =
+                    crate::antigravity::sessions::AntigravityPaths::default_for_user().home;
+                let gemini_root = antigravity_home
+                    .parent()
+                    .unwrap_or(antigravity_home.as_path());
+                gemini_root.join("config/hooks.json")
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -39,15 +85,15 @@ pub struct ClaudeHooksStatus {
     pub changed: bool,
 }
 
-fn managed(value: &Value, binary: &Path) -> bool {
+fn managed_for_handler(value: &Value, binary: &Path, handler: &str) -> bool {
     value["type"] == "command"
         && value["command"].as_str() == binary.to_str()
         && value["args"].as_array().is_some_and(|args| {
-            args.len() == 3 && args[0] == "--config" && args[1].is_string() && args[2] == HANDLER
+            args.len() == 3 && args[0] == "--config" && args[1].is_string() && args[2] == handler
         })
 }
-fn expected(binary: &Path, config: &Path) -> Value {
-    json!({"type":"command", "command":binary, "args":["--config", config, HANDLER], "async":true})
+fn expected_for_handler(binary: &Path, config: &Path, handler: &str) -> Value {
+    json!({"type":"command", "command":binary, "args":["--config", config, handler], "async":true})
 }
 fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::symlink_metadata(path) {
@@ -97,23 +143,28 @@ fn checked(bytes: Option<&[u8]>) -> Result<Value> {
     }
     Ok(root)
 }
-fn status(root: &Value, binary: &Path, config: &Path) -> ClaudeHooksStatus {
+fn status_for_handler(
+    root: &Value,
+    binary: &Path,
+    config: &Path,
+    handler: &str,
+) -> ClaudeHooksStatus {
     let count = root["hooks"]
         .as_object()
         .into_iter()
         .flat_map(|o| o.values())
         .flat_map(|v| v.as_array().into_iter().flatten())
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-        .filter(|h| managed(h, binary))
+        .filter(|h| managed_for_handler(h, binary, handler))
         .count();
     let installed = count == EVENTS.len()
         && EVENTS.iter().all(|(event, matcher)| {
             root["hooks"][event].as_array().is_some_and(|groups| {
                 groups.iter().any(|g| {
                     g["matcher"] == *matcher
-                        && g["hooks"]
-                            .as_array()
-                            .is_some_and(|hs| hs.contains(&expected(binary, config)))
+                        && g["hooks"].as_array().is_some_and(|hs| {
+                            hs.contains(&expected_for_handler(binary, config, handler))
+                        })
                 })
             })
         });
@@ -126,13 +177,25 @@ fn status(root: &Value, binary: &Path, config: &Path) -> ClaudeHooksStatus {
 pub fn installed(paths: &ClaudePaths, binary: &Path, config: &Path) -> bool {
     read(&paths.config.join("settings.json"))
         .and_then(|bytes| checked(bytes.as_deref()))
-        .is_ok_and(|root| status(&root, binary, config).installed)
+        .is_ok_and(|root| status_for_handler(&root, binary, config, HANDLER).installed)
 }
 
 /// The monitor runs the same fixed executable as the hook, including when a
 /// user selected a non-default NexusHub config file.
 pub fn configured(paths: &ClaudePaths, binary: &Path) -> bool {
-    read(&paths.config.join("settings.json"))
+    configured_path(&paths.config.join("settings.json"), binary, HANDLER)
+}
+
+pub fn provider_configured(provider: HookProvider, binary: &Path) -> bool {
+    configured_path(
+        &provider.default_settings_path(),
+        binary,
+        provider.handler(),
+    )
+}
+
+pub fn configured_path(settings_path: &Path, binary: &Path, handler: &str) -> bool {
+    read(settings_path)
         .and_then(|bytes| checked(bytes.as_deref()))
         .is_ok_and(|root| {
             let config = root["hooks"]["Stop"]
@@ -140,32 +203,68 @@ pub fn configured(paths: &ClaudePaths, binary: &Path) -> bool {
                 .into_iter()
                 .flatten()
                 .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-                .find(|h| managed(h, binary))
+                .find(|h| managed_for_handler(h, binary, handler))
                 .and_then(|h| h["args"][1].as_str());
-            config.is_some_and(|config| status(&root, binary, Path::new(config)).installed)
+            config.is_some_and(|config| {
+                status_for_handler(&root, binary, Path::new(config), handler).installed
+            })
         })
 }
+
 pub fn manage(
     paths: &ClaudePaths,
     binary: &Path,
     config: &Path,
     request: ClaudeHooksRequest,
 ) -> Result<ClaudeHooksStatus> {
+    manage_file(
+        &paths.config.join("settings.json"),
+        HANDLER,
+        "Claude",
+        binary,
+        config,
+        request,
+    )
+}
+
+pub fn manage_provider(
+    provider: HookProvider,
+    binary: &Path,
+    config: &Path,
+    request: ClaudeHooksRequest,
+) -> Result<ClaudeHooksStatus> {
+    manage_file(
+        &provider.default_settings_path(),
+        provider.handler(),
+        provider.label(),
+        binary,
+        config,
+        request,
+    )
+}
+
+pub fn manage_file(
+    path: &Path,
+    handler: &str,
+    label: &str,
+    binary: &Path,
+    config: &Path,
+    request: ClaudeHooksRequest,
+) -> Result<ClaudeHooksStatus> {
     let _lock = SETTINGS
         .lock()
-        .map_err(|_| anyhow::anyhow!("Claude 设置管理锁不可用"))?;
-    let path = paths.config.join("settings.json");
-    let before = read(&path)?;
+        .map_err(|_| anyhow::anyhow!("{label} 设置管理锁不可用"))?;
+    let before = read(path)?;
     let before_stamp = before
         .as_ref()
-        .map(|_| super::reader::stamp(&path))
+        .map(|_| super::reader::stamp(path))
         .transpose()?;
     let mut root = checked(before.as_deref())?;
-    let prior = status(&root, binary, config);
+    let prior = status_for_handler(&root, binary, config, handler);
     if request.action == ClaudeHooksAction::Status {
         return Ok(prior);
     }
-    ensure!(request.confirmed, "Claude hooks 安装或移除需要明确确认");
+    ensure!(request.confirmed, "{label} hooks 安装或移除需要明确确认");
     if (request.action == ClaudeHooksAction::Install && prior.installed)
         || (request.action == ClaudeHooksAction::Remove && prior.managed_count == 0)
     {
@@ -189,7 +288,7 @@ pub fn manage(
         groups.retain_mut(|group| {
             let handlers = group["hooks"].as_array_mut().unwrap();
             let before = handlers.len();
-            handlers.retain(|h| !managed(h, binary));
+            handlers.retain(|h| !managed_for_handler(h, binary, handler));
             // Preserve pre-existing empty groups and any user/plugin handlers.
             before == handlers.len() || !handlers.is_empty()
         });
@@ -201,14 +300,13 @@ pub fn manage(
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"matcher":matcher,"hooks":[expected(binary,config)]}));
+                .push(json!({"matcher":matcher,"hooks":[expected_for_handler(binary,config,handler)]}));
         }
     }
     let bytes = serde_json::to_vec_pretty(&root)?;
-    fs::create_dir_all(&paths.config)?;
-    let temporary = paths
-        .config
-        .join(format!(".nexushub-hooks-{}.tmp", uuid::Uuid::new_v4()));
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent_dir)?;
+    let temporary = parent_dir.join(format!(".nexushub-hooks-{}.tmp", uuid::Uuid::new_v4()));
     let write = (|| -> Result<()> {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -223,23 +321,23 @@ pub fn manage(
         #[cfg(test)]
         SETTINGS_CHECKPOINT.with(|slot| {
             if let Some(hook) = slot.borrow_mut().as_mut() {
-                hook(&path);
+                hook(path);
             }
         });
         ensure!(
-            read(&path)? == before
+            read(path)? == before
                 && before_stamp
                     == if path.exists() {
-                        Some(super::reader::stamp(&path)?)
+                        Some(super::reader::stamp(path)?)
                     } else {
                         None
                     },
-            "Claude 设置已被其他程序修改，请刷新后重试"
+            "{label} 设置已被其他程序修改，请刷新后重试"
         );
-        fs::rename(&temporary, &path)?;
+        fs::rename(&temporary, path)?;
         ensure!(
-            read(&path)?.as_deref() == Some(bytes.as_slice()),
-            "Claude 设置读回发生变化，请刷新后检查"
+            read(path)?.as_deref() == Some(bytes.as_slice()),
+            "{label} 设置读回发生变化，请刷新后检查"
         );
         Ok(())
     })();
@@ -247,7 +345,7 @@ pub fn manage(
     write?;
     Ok(ClaudeHooksStatus {
         changed: true,
-        ..status(&root, binary, config)
+        ..status_for_handler(&root, binary, config, handler)
     })
 }
 
@@ -309,6 +407,41 @@ mod tests {
             fs::write(&path, broken).unwrap();
             assert!(run(ClaudeHooksAction::Install).is_err());
             assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+        }
+        for (provider, rel_path) in [
+            (HookProvider::Grok, "grok/hooks/nexushub.json"),
+            (HookProvider::Antigravity, "gemini/config/hooks.json"),
+        ] {
+            let provider_path = directory.join(rel_path);
+            let installed = manage_file(
+                &provider_path,
+                provider.handler(),
+                provider.label(),
+                &binary,
+                &config,
+                ClaudeHooksRequest {
+                    action: ClaudeHooksAction::Install,
+                    confirmed: true,
+                },
+            )
+            .unwrap();
+            assert!(installed.installed);
+            assert_eq!(installed.managed_count, 3);
+            assert!(configured_path(&provider_path, &binary, provider.handler()));
+            let removed = manage_file(
+                &provider_path,
+                provider.handler(),
+                provider.label(),
+                &binary,
+                &config,
+                ClaudeHooksRequest {
+                    action: ClaudeHooksAction::Remove,
+                    confirmed: true,
+                },
+            )
+            .unwrap();
+            assert!(!removed.installed);
+            assert_eq!(removed.managed_count, 0);
         }
         fs::remove_dir_all(directory).unwrap();
     }

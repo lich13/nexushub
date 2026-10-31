@@ -20,6 +20,7 @@ import type {
 import { backgroundJobKey } from "./jobs";
 import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
 import { HiddenScanRunner } from "./hiddenScan";
+import { visiblePollInterval } from "./shared";
 
 export const opsQueryKeys = {
   updateStatus: ["update-status"] as const,
@@ -38,7 +39,7 @@ export function useOpsQueries({ historyOpen }: { historyOpen: boolean }) {
       queryKey: [...opsQueryKeys.jobs, machineScope()] as const,
       queryFn: listJobs,
       enabled: historyOpen,
-      refetchInterval: 5000
+      refetchInterval: visiblePollInterval(5000)
     })
   };
 }

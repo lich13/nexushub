@@ -19,6 +19,10 @@ pub(super) struct Cli {
 pub(super) enum Command {
     #[command(hide = true)]
     ClaudeHook,
+    #[command(hide = true)]
+    GrokHook,
+    #[command(hide = true)]
+    AntigravityHook,
     Serve {
         #[arg(long, default_value_t = HostSurface::LinuxServerApi)]
         surface: HostSurface,

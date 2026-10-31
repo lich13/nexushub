@@ -79,19 +79,50 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if matches!(cli.command, Command::ClaudeHook) {
-        // A hook never blocks Claude, emits decisions, or leaks payloads to logs.
+    if matches!(
+        cli.command,
+        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook
+    ) {
+        // A hook never blocks the host Agent, emits decisions, or leaks payloads to logs.
         // Force exit also bounds any filesystem/stdin work in blocking tasks.
         std::thread::spawn(|| {
             std::thread::sleep(Duration::from_secs(5));
             std::process::exit(0);
         });
-        let _ =
-            tokio::time::timeout(Duration::from_millis(4800), claude_hook::run(&cli.config)).await;
+        match cli.command {
+            Command::ClaudeHook => {
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(4800),
+                    claude_hook::run(&cli.config),
+                )
+                .await;
+            }
+            Command::GrokHook => {
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(4800),
+                    provider_monitor::run_provider_hook(
+                        &cli.config,
+                        nexushub_core::native_probe::NativeProvider::Grok,
+                    ),
+                )
+                .await;
+            }
+            Command::AntigravityHook => {
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(4800),
+                    provider_monitor::run_provider_hook(
+                        &cli.config,
+                        nexushub_core::native_probe::NativeProvider::Antigravity,
+                    ),
+                )
+                .await;
+            }
+            _ => unreachable!(),
+        }
         std::process::exit(0);
     }
     match cli.command {
-        Command::ClaudeHook => unreachable!(),
+        Command::ClaudeHook | Command::GrokHook | Command::AntigravityHook => unreachable!(),
         Command::InitConfig => {
             Config::write_default(&cli.config)?;
             println!("wrote {}", cli.config.display());

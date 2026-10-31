@@ -9,12 +9,13 @@ import {
   runProbeHooksInstall,
   runProbeHooksRemove,
   manageClaudeHooks,
+  type HookProviderId,
 } from "../api";
 import { useConnection } from "./connection";
 import type { ClaudeHooksAction, ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
 import type { ProbeSectionId } from "../probeUi";
-import { preservePreviousQueryData } from "./shared";
+import { preservePreviousQueryData, visiblePollInterval } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
 export const probeQueryKeys = {
@@ -30,22 +31,22 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
     status: useQuery({
       queryKey: probeQueryKeys.status,
       queryFn: getProbeStatus,
-      refetchInterval: 15000,
+      refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
     settings: useQuery({
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
-      enabled: needsSettings,
+      enabled: true,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
     }),
     events: useQuery({
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
-      enabled: section === "events",
-      refetchInterval: 15000,
+      enabled: section === "events" || section === "settings",
+      refetchInterval: visiblePollInterval(15000),
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
     }),
@@ -53,7 +54,7 @@ export function useProbeQueries({ section, historyOpen }: { section: ProbeSectio
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
       enabled: needsSettings && historyOpen,
-      refetchInterval: 5000,
+      refetchInterval: visiblePollInterval(5000),
       placeholderData: preservePreviousQueryData
     })
   };
@@ -109,11 +110,21 @@ export function useProbeActions(input: {
   };
 }
 
-export function useClaudeHooks(onSuccess: () => void) {
+export function useClaudeHooks(onSuccess: () => void, provider: HookProviderId = "claude") {
   const connection = useConnection();
   const local = connection.target === "local";
   const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["claude-hooks", connection.revision], queryFn: () => manageClaudeHooks("status"), enabled: local });
-  const mutation = useMutation({ mutationFn: (action: ClaudeHooksAction) => manageClaudeHooks(action, true), onSuccess: async () => { onSuccess(); await queryClient.invalidateQueries({ queryKey: ["claude-hooks"] }); } });
+  const status = useQuery({
+    queryKey: ["claude-hooks", provider, connection.revision],
+    queryFn: () => manageClaudeHooks("status", false, provider),
+    enabled: local
+  });
+  const mutation = useMutation({
+    mutationFn: (action: ClaudeHooksAction) => manageClaudeHooks(action, true, provider),
+    onSuccess: async () => {
+      onSuccess();
+      await queryClient.invalidateQueries({ queryKey: ["claude-hooks", provider] });
+    }
+  });
   return { local, revision: connection.revision, status, mutation };
 }
