@@ -337,6 +337,11 @@ fn native_stream_live_bucket(
     }
 }
 
+#[cfg(not(test))]
+static LIVE_PROVIDER_SESSIONS_CACHE: std::sync::Mutex<
+    Option<(usize, Vec<probe_core::ProbeLiveSession>, std::time::Instant)>,
+> = std::sync::Mutex::new(None);
+
 fn aggregate_active_sessions(
     config: &Config,
     limit: usize,
@@ -370,6 +375,22 @@ fn aggregate_active_sessions(
     }
 
     let sandbox_root = resolve_provider_sandbox_root(config);
+    #[cfg(not(test))]
+    if sandbox_root.is_none() {
+        if let Ok(guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+            if let Some((cached_limit, ref cached_items, ts)) = *guard {
+                if cached_limit == per_bucket_limit
+                    && ts.elapsed() < std::time::Duration::from_secs(3)
+                {
+                    sessions.extend(cached_items.iter().cloned());
+                    return sessions;
+                }
+            }
+        }
+    }
+
+    #[cfg(not(test))]
+    let codex_len = sessions.len();
     let now_ms = Utc::now().timestamp_millis();
 
     let claude_paths = match &sandbox_root {
@@ -567,16 +588,64 @@ fn aggregate_active_sessions(
         }
     }
 
+    #[cfg(not(test))]
+    if sandbox_root.is_none() {
+        if let Ok(mut guard) = LIVE_PROVIDER_SESSIONS_CACHE.lock() {
+            *guard = Some((
+                per_bucket_limit,
+                sessions[codex_len..].to_vec(),
+                std::time::Instant::now(),
+            ));
+        }
+    }
+
     sessions
+}
+
+fn probe_codex_buckets(
+    config: &Config,
+    limit: usize,
+) -> (Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>) {
+    let limit = limit.clamp(1, 200);
+    let resolved = codex::resolve_codex_paths(&config.codex.home);
+    let paths = resolved.codex_paths();
+    let Ok(raw_threads) = codex::list_threads(&paths, false, None, usize::MAX) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
+    let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_default();
+    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_default();
+    let running_jobs = running_thread_jobs(&config.paths.db_path).unwrap_or_default();
+    let mut threads = threads::apply_thread_list_runtime_state(
+        raw_threads,
+        ThreadListRuntimeState {
+            running_jobs: &running_jobs,
+            hidden_thread_ids: &hidden_thread_ids,
+            archived_thread_ids: &archived_thread_ids,
+        },
+    );
+    ThreadSummary::sort_by_message_time(&mut threads);
+    let mut running = Vec::new();
+    let mut reply_needed = Vec::new();
+    let mut recoverable = Vec::new();
+    for row in threads {
+        match row.status {
+            ThreadStatus::Running if running.len() < limit => running.push(row),
+            ThreadStatus::ReplyNeeded
+                if reply_needed.len() < limit && probe_reply_needed_thread_is_fresh(&row) =>
+            {
+                reply_needed.push(row);
+            }
+            ThreadStatus::Recoverable if recoverable.len() < limit => recoverable.push(row),
+            _ => {}
+        }
+    }
+    (running, reply_needed, recoverable)
 }
 
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
     let limit = config.probe.recent_limit.clamp(1, 200);
-    let running_threads = probe_threads_for_status(config, "running", limit).unwrap_or_default();
-    let reply_needed_threads =
-        probe_threads_for_status(config, "reply-needed", limit).unwrap_or_default();
-    let recoverable_threads =
-        probe_threads_for_status(config, "recoverable", limit).unwrap_or_default();
+    let (running_threads, reply_needed_threads, recoverable_threads) =
+        probe_codex_buckets(config, limit);
     let active_sessions = aggregate_active_sessions(
         config,
         limit,

@@ -61,11 +61,15 @@ pub async fn evict_idle_cache(max_idle: Duration) {
         meta_cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
     }
 }
+#[derive(Clone)]
 struct Endpoint {
     pid: u32,
     ports: Vec<u16>,
     token: String,
 }
+
+static CACHED_ENDPOINT: std::sync::Mutex<Option<(Option<Endpoint>, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 fn discover() -> Result<Endpoint> {
@@ -221,8 +225,42 @@ async fn query(
     serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid Antigravity response"))
 }
 async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
-    let endpoint = tokio::task::spawn_blocking(discover).await??;
     let client = client()?;
+    let cached = CACHED_ENDPOINT.lock().ok().and_then(|g| g.clone());
+    if let Some((entry, ts)) = cached {
+        match entry {
+            Some(endpoint) => {
+                for &port in &endpoint.ports {
+                    if let Ok(value) = query(
+                        &client,
+                        port,
+                        &endpoint.token,
+                        "GetAllCascadeTrajectories",
+                        json!({"excludeSubtrajectories":false}),
+                    )
+                    .await
+                    {
+                        if value["trajectorySummaries"].is_object() {
+                            return Ok((endpoint, client, port, value));
+                        }
+                    }
+                }
+            }
+            None if ts.elapsed() < Duration::from_secs(5) => {
+                anyhow::bail!("Antigravity native API unavailable");
+            }
+            None => {}
+        }
+    }
+    let endpoint = match tokio::task::spawn_blocking(discover).await? {
+        Ok(ep) => ep,
+        Err(err) => {
+            if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
+                *guard = Some((None, std::time::Instant::now()));
+            }
+            return Err(err);
+        }
+    };
     for &port in &endpoint.ports {
         if let Ok(value) = query(
             &client,
@@ -234,9 +272,20 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
         .await
         {
             if value["trajectorySummaries"].is_object() {
+                let narrowed = Endpoint {
+                    pid: endpoint.pid,
+                    ports: vec![port],
+                    token: endpoint.token.clone(),
+                };
+                if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
+                    *guard = Some((Some(narrowed), std::time::Instant::now()));
+                }
                 return Ok((endpoint, client, port, value));
             }
         }
+    }
+    if let Ok(mut guard) = CACHED_ENDPOINT.lock() {
+        *guard = Some((None, std::time::Instant::now()));
     }
     anyhow::bail!("Antigravity native API unavailable")
 }

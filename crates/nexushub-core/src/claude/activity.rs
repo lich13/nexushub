@@ -156,7 +156,39 @@ fn started_ms(value: &str) -> Option<i64> {
     .map(|d| d.and_utc().timestamp_millis())
 }
 
+#[cfg(not(test))]
+static READONLY_SNAPSHOT_CACHE: std::sync::Mutex<Option<(PathBuf, Snapshot, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
 impl Snapshot {
+    pub(super) fn capture_readonly(paths: &ClaudePaths) -> Self {
+        #[cfg(test)]
+        {
+            return Self::capture(paths);
+        }
+        #[cfg(not(test))]
+        {
+            if let Ok(guard) = READONLY_SNAPSHOT_CACHE.lock() {
+                if let Some((ref cached_cfg, ref snap, ts)) = *guard {
+                    if *cached_cfg == paths.config
+                        && ts.elapsed() < std::time::Duration::from_secs(2)
+                    {
+                        return snap.clone();
+                    }
+                }
+            }
+            let snap = Self::capture(paths);
+            if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
+                *guard = Some((
+                    paths.config.clone(),
+                    snap.clone(),
+                    std::time::Instant::now(),
+                ));
+            }
+            snap
+        }
+    }
+
     pub(super) fn capture(paths: &ClaudePaths) -> Self {
         #[cfg(test)]
         if let Some(snapshot) = TEST_SNAPSHOT.with(|slot| slot.borrow().clone()) {

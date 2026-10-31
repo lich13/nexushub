@@ -368,6 +368,15 @@ fn summary(
     parsed: &Parsed,
     snapshot: &activity::Snapshot,
 ) -> Result<ClaudeSessionSummary> {
+    let canonical_projects = paths.projects.canonicalize()?;
+    summary_with_root(&canonical_projects, path, parsed, snapshot)
+}
+fn summary_with_root(
+    canonical_projects: &Path,
+    path: &Path,
+    parsed: &Parsed,
+    snapshot: &activity::Snapshot,
+) -> Result<ClaudeSessionSummary> {
     let assessment = snapshot.assess(parsed, path);
     let owner = assessment.ownership;
     let fatal_reason = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
@@ -400,14 +409,14 @@ fn summary(
                 .then(|| "缺少改名所需的工作目录或版本".into())
         })
         .or_else(|| {
-            mutations::check_rename_path(paths, path)
+            mutations::check_rename_path_with_root(canonical_projects, path)
                 .err()
                 .map(|e| e.to_string())
         });
     Ok(ClaudeSessionSummary {
         storage_size: None,
         id: parsed.id.clone(),
-        session_key: key_for(&paths.projects.canonicalize()?, path, &parsed.id),
+        session_key: key_for(canonical_projects, path, &parsed.id),
         title: parsed.title.clone(),
         cwd: parsed.cwd.clone(),
         path: path.to_owned(),
@@ -429,12 +438,17 @@ pub fn list_claude_sessions(
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<ClaudeSessionSummary>> {
-    let snapshot = activity::Snapshot::capture(paths);
+    let snapshot = activity::Snapshot::capture_readonly(paths);
     let needle = query.unwrap_or("").trim().to_lowercase();
+    let files = files(paths)?;
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let canonical_projects = paths.projects.canonicalize()?;
     let mut result = Vec::new();
-    for path in files(paths)? {
+    for path in files {
         let parsed = read_or_warning(&path, true);
-        let s = summary(paths, &path, &parsed, &snapshot)?;
+        let s = summary_with_root(&canonical_projects, &path, &parsed, &snapshot)?;
         if [&s.title, &s.id, &s.cwd]
             .iter()
             .any(|v| v.to_lowercase().contains(&needle))
@@ -491,7 +505,7 @@ fn attach_storage_size(paths: &ClaudePaths, summary: &mut ClaudeSessionSummary) 
 }
 pub fn claude_session_summary(paths: &ClaudePaths, key: &str) -> Result<ClaudeSessionSummary> {
     let (path, parsed) = resolve(paths, key)?;
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture(paths))?;
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture_readonly(paths))?;
     attach_storage_size(paths, &mut summary);
     Ok(summary)
 }
@@ -528,7 +542,7 @@ pub fn claude_session_detail(
             user.refresh_files(Some(&parsed.cwd));
         }
     }
-    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture(paths))?;
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture_readonly(paths))?;
     attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),

@@ -343,7 +343,7 @@ fn value_timestamp_rfc3339(val: &Value) -> Option<String> {
     None
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct FoldedMetadata {
     title: Option<String>,
     first_prompt: Option<String>,
@@ -354,6 +354,11 @@ struct FoldedMetadata {
     open_turn: bool,
     last_seq: Option<u64>,
 }
+
+const DSH_FOLD_CACHE_MAX_ENTRIES: usize = 256;
+static DSH_FOLD_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, (super::FileStamp, FoldedMetadata)>>,
+> = std::sync::Mutex::new(None);
 
 fn extract_content_plain_text(content: &Value) -> String {
     if let Some(s) = content.as_str() {
@@ -434,6 +439,21 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
 }
 
 fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
+    let stamp = file_stamp(&session.log_path).ok();
+    if let Some(ref s) = stamp {
+        if let Ok(guard) = DSH_FOLD_CACHE.lock() {
+            if let Some( cached) = guard.as_ref().and_then(|m| m.get(&session.log_path)) {
+                if cached.0 == *s {
+                    return Ok(cached.1.clone());
+                }
+            }
+        }
+    }
+    let inherited_count = if session.header["isSeeded"] == true {
+        session.header["inheritedEventCount"].as_u64().unwrap_or(0)
+    } else {
+        0
+    };
     let mut meta = FoldedMetadata {
         cwd: session.header["cwd"].as_str().map(str::to_owned),
         updated_at_ms: session.header["createdAt"].as_i64(),
@@ -449,9 +469,11 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
         let Ok(row) = serde_json::from_slice::<Value>(line) else {
             return Ok(());
         };
-        if let Some(seq) = row["seq"].as_u64() {
+        let seq = row["seq"].as_u64();
+        if let Some(seq) = seq {
             meta.last_seq = Some(seq);
         }
+        let is_inherited = seq.is_some_and(|s| s < inherited_count);
         if let Some(ts) = row["time"].as_i64() {
             meta.updated_at_ms = Some(meta.updated_at_ms.map_or(ts, |prev| prev.max(ts)));
         }
@@ -472,10 +494,13 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
                     meta.cwd = Some(c.to_owned());
                 }
             }
-            "turn/start" => {
+            "session/end-seed" => {
+                meta.open_turn = false;
+            }
+            "turn/start" if !is_inherited => {
                 meta.open_turn = true;
             }
-            "turn/end" => {
+            "turn/end" if !is_inherited => {
                 meta.open_turn = false;
             }
             "user/message" => {
@@ -504,6 +529,15 @@ fn fold_log_metadata(session: &DiscoveredSession) -> Result<FoldedMetadata> {
         }
         Ok(())
     })?;
+    if let Some(s) = stamp {
+        if let Ok(mut guard) = DSH_FOLD_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= DSH_FOLD_CACHE_MAX_ENTRIES && !map.contains_key(&session.log_path) {
+                map.clear();
+            }
+            map.insert(session.log_path.clone(), (s, meta.clone()));
+        }
+    }
     Ok(meta)
 }
 
@@ -548,7 +582,7 @@ fn build_summary(
         });
     let status = if archived {
         "archived"
-    } else if running || locked {
+    } else if running {
         "running"
     } else {
         "idle"
@@ -688,7 +722,7 @@ fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
 
 pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
     let session = find_root_session(paths, id)?;
-    let mut events = Vec::new();
+    let mut events: Vec<ProviderHistoryEvent> = Vec::new();
     let mut line_index = 0usize;
     let mut current_turn: Option<String> = None;
 
@@ -714,6 +748,19 @@ pub fn load_all_events(paths: &DshPaths, id: &str) -> Result<Vec<ProviderHistory
             "turn/start" => {
                 if let Some(t) = data["turn"].as_u64() {
                     current_turn = Some(format!("turn-{t}"));
+                }
+            }
+            "turn/end" | "session/end-seed" => {
+                let reason = data["reason"]["kind"].as_str().unwrap_or("completed");
+                let settled = if kind == "session/end-seed" || reason == "completed" {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                for ev in &mut events {
+                    if ev.kind == "tool_call" && ev.status.as_deref() == Some("running") {
+                        ev.status = Some(settled.into());
+                    }
                 }
             }
             "user/message" => {
@@ -2044,5 +2091,130 @@ mod tests {
         assert_eq!(picked_plain, (4, false, plain_v4));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn locked_completed_and_seeded_sessions_report_idle_and_settle_unclosed_tool_calls() {
+        let home = std::env::temp_dir().join(format!("nexushub-dsh-lock-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/--workspace-demo--");
+        let completed_id = "session-completed-locked";
+        let active_id = "session-active-locked";
+        let seeded_id = "session-seeded-locked";
+        for id in [completed_id, active_id, seeded_id] {
+            fs::create_dir_all(proj.join(id)).unwrap();
+        }
+        fs::create_dir_all(home.join("storages/session_projcache/sessions")).unwrap();
+        fs::write(
+            home.join("storages/workspace.json"),
+            serde_json::to_vec(&json!({
+                "unit": { "name": "workspace", "version": 2 },
+                "global": {
+                    "initialized": true,
+                    "workspaceIds": ["ws-1"],
+                    "defaultWorkspaceId": "ws-1",
+                    "archivedSessionIds": [],
+                    "pinnedSessionIds": []
+                },
+                "tables": {
+                    "workspaces": {
+                        "ws-1": {
+                            "path": "/workspace/demo",
+                            "title": "Demo",
+                            "sessionIds": [completed_id, active_id, seeded_id]
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        write_zstd_frames(
+            &proj.join(completed_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":completed_id,"createdAt":10,"cwd":"/workspace/demo","isSeeded":false}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":12,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"分析对话目录文件结构"}]}}),
+                json!({"type":"tool/call","seq":2,"time":13,"data":{"turn":1,"callId":"call-orphan","name":"bash","arguments":{"command":"ls"}}}),
+                json!({"type":"turn/end","seq":3,"time":14,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        write_zstd_frames(
+            &proj.join(active_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":active_id,"createdAt":20,"cwd":"/workspace/demo","isSeeded":false}),
+                json!({"type":"turn/start","seq":0,"time":21,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":22,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"仍在执行中"}]}}),
+            ],
+        );
+        write_zstd_frames(
+            &proj.join(seeded_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":seeded_id,"createdAt":30,"cwd":"/workspace/demo","isSeeded":true,"inheritedEventCount":2}),
+                json!({"type":"turn/start","seq":0,"time":31,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":32,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"继承自父会话的未闭合轮次"}]}}),
+            ],
+        );
+
+        let paths = DshPaths { home: home.clone() };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let mut locks = Vec::new();
+            for id in [completed_id, active_id, seeded_id] {
+                let f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(proj.join(id).join("session.lock"))
+                    .unwrap();
+                assert_eq!(
+                    unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                    0
+                );
+                locks.push(f);
+            }
+
+            let list = list_sessions(
+                &paths,
+                &ProviderListRequest {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let completed = list.iter().find(|s| s.id == completed_id).unwrap();
+            assert_eq!(completed.status, "idle");
+            assert!(!completed.can_rename);
+            assert!(!completed.can_delete);
+
+            let active = list.iter().find(|s| s.id == active_id).unwrap();
+            assert_eq!(active.status, "running");
+
+            let seeded = list.iter().find(|s| s.id == seeded_id).unwrap();
+            assert_eq!(seeded.status, "idle");
+
+            let detail = session_detail(
+                &paths,
+                &ProviderDetailRequest {
+                    session_key: completed_id.into(),
+                    limit: None,
+                    before: None,
+                },
+            )
+            .unwrap();
+            let tool_ev = detail
+                .events
+                .iter()
+                .find(|e| e.kind == "tool_call")
+                .unwrap();
+            assert_eq!(tool_ev.status.as_deref(), Some("completed"));
+
+            drop(locks);
+        }
+
+        fs::remove_dir_all(home).unwrap();
     }
 }

@@ -21,9 +21,12 @@ fn open_regular(path: &Path) -> Result<fs::File> {
 }
 fn checked_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
     let root = paths.projects.canonicalize()?;
-    ensure!(path.starts_with(&root), "Claude 会话路径越界");
-    let mut current = root.clone();
-    for part in path.strip_prefix(&root)?.components() {
+    checked_path_with_root(&root, path)
+}
+fn checked_path_with_root(root: &Path, path: &Path) -> Result<()> {
+    ensure!(path.starts_with(root), "Claude 会话路径越界");
+    let mut current = root.to_path_buf();
+    for part in path.strip_prefix(root)?.components() {
         current.push(part);
         ensure!(
             !fs::symlink_metadata(&current)?.file_type().is_symlink(),
@@ -43,7 +46,11 @@ fn checked_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
     Ok(())
 }
 pub(super) fn check_rename_path(paths: &ClaudePaths, path: &Path) -> Result<()> {
-    checked_path(paths, path)?;
+    let root = paths.projects.canonicalize()?;
+    check_rename_path_with_root(&root, path)
+}
+pub(super) fn check_rename_path_with_root(root: &Path, path: &Path) -> Result<()> {
+    checked_path_with_root(root, path)?;
     ensure!(
         !fs::metadata(path)?.permissions().readonly(),
         "Claude 会话只读，无法追加名称"

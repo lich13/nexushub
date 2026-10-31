@@ -361,6 +361,9 @@ fn read_chunked_body<R: BufRead>(reader: &mut R, limit: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
+static CACHED_LIVE_RPC: std::sync::Mutex<Option<(Option<LiveRpc>, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
 fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
     match &paths.rpc_mode {
         RpcMode::OfflineOnly => None,
@@ -381,6 +384,27 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
             ))
         }
         RpcMode::AutoDiscover => {
+            let cached = CACHED_LIVE_RPC.lock().ok().and_then(|g| g.clone());
+            if let Some((entry, ts)) = cached {
+                match entry {
+                    Some(rpc) => {
+                        if let Ok(value) = connect_rpc_post(
+                            rpc.port,
+                            &rpc.token,
+                            "GetAllCascadeTrajectories",
+                            &json!({"excludeSubtrajectories": false}),
+                        ) {
+                            if value["trajectorySummaries"].is_object() {
+                                return Some((rpc, value));
+                            }
+                        }
+                    }
+                    None if ts.elapsed() < Duration::from_secs(5) => {
+                        return None;
+                    }
+                    None => {}
+                }
+            }
             for (ports, token) in discover_host_endpoints() {
                 for port in ports {
                     if let Ok(value) = connect_rpc_post(
@@ -390,10 +414,17 @@ fn connect_endpoint(paths: &AntigravityPaths) -> Option<(LiveRpc, Value)> {
                         &json!({"excludeSubtrajectories": false}),
                     ) {
                         if value["trajectorySummaries"].is_object() {
-                            return Some((LiveRpc { port, token }, value));
+                            let live = LiveRpc { port, token };
+                            if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+                                *guard = Some((Some(live.clone()), std::time::Instant::now()));
+                            }
+                            return Some((live, value));
                         }
                     }
                 }
+            }
+            if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+                *guard = Some((None, std::time::Instant::now()));
             }
             None
         }
